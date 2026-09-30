@@ -22367,7 +22367,7 @@ dispositioned, not silently carried:
   1.203, 1.186, 1.241, 1.234, 1.203, 1.193, 1.108, and 1.248; the
   two round-36 runs; and the later restage rebinds — round-89 1.247,
   round-92 1.050, round-94 1.170, round-96 1.305, round-98 1.188,
-  round-100 1.172, round-102 1.192, round-105 1.262, round-107 1.225, round-109 1.324, round-111 1.167, round-119 1.211) span
+  round-100 1.172, round-102 1.192, round-105 1.262, round-107 1.225, round-109 1.324, round-111 1.167, round-119 1.225) span
   elapsed
   **0.916–1.586** — wall-clock noise that crosses both 1.0 and the
   1.3x bound: the round-7 session measured 1.586 on an idle machine
