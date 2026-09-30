@@ -22360,14 +22360,14 @@ dispositioned, not silently carried:
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Thirty-seven recorded
+- **Elapsed-ratio cross-session spread.** Thirty-eight recorded
   ceiling sessions at byte-identical binaries (r2 1.159 — elapsed
   and RSS only, no CPU recorded; r4 1.244; each of rounds 5 through
   19; the round-32 through round-46 rebinds at 1.184, 1.193, 1.266,
   1.203, 1.186, 1.241, 1.234, 1.203, 1.193, 1.108, and 1.248; the
   two round-36 runs; and the later restage rebinds — round-89 1.247,
   round-92 1.050, round-94 1.170, round-96 1.305, round-98 1.188,
-  round-100 1.172, round-102 1.192) span
+  round-100 1.172, round-102 1.192, round-105 1.262) span
   elapsed
   **0.916–1.586** — wall-clock noise that crosses both 1.0 and the
   1.3x bound: the round-7 session measured 1.586 on an idle machine
@@ -22378,7 +22378,7 @@ dispositioned, not silently carried:
   (61.1–75.6 s, one round ~21% over its median; observed values
   preserved at `evidence/m5-ceiling/superseded-round36-run1.md`);
   it was immediately re-run. The CPU ratio over every session that
-  recorded CPU spans 1.873–2.001 (the round-96 restage measured
+  recorded CPU spans 1.869–2.001 (the round-96 restage measured
   2.001, the current maximum) — tight while elapsed swings by
   more than 70% relative. The verdict owner (SOW-0030) must treat
   elapsed wall-clock as run-condition-dominated: no session's
