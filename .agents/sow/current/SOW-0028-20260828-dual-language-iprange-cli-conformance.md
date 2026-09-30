@@ -22513,8 +22513,21 @@ attempt was reverted in round 107 (fork-inheritance: a forked child's
 ru_maxrss floors at the parent python's RSS — the limitation is
 documented at the code site), the read leg alternates with the write
 leg, and l10's entry selection now distinguishes extension-agnostic
-loading with a valid extensionless ipset fixture. The ceiling census count is the kit census row's (the kit census row is authoritative). The seven-role re-review of the latest wave and the astra
-re-review are the pending gates.
+loading with a valid extensionless ipset fixture. The ceiling census count is the kit census row's (the kit census row is authoritative).
+
+**Astra milestone gate, turn 3 (2026-09-30, same session
+`ca3adec1808d4ffa87380361edc214c9`).** Verdict: **NEEDS CHANGES** —
+eight in-scope P2s and one P3. All fixed across the rounds-131-135
+waves (`189e3d605431`, `0f6ca5faadf7`, `e46ddad52440`): the stale
+kit binaries replaced; the capability probe closes once per path; the
+C corpus compares reader cursor boundaries with the manifest in both
+directions (extension and under-yield); the cancelled publish refuses
+commit-phase outcomes; l11 exercises the IPv6 binary v2 write; the
+buffered drain is bounded with an explicit missing-EOF report; the
+perf sweep driver enforces its gate contract with a private scratch
+directory; the SOW's binary-continuity wording corrected (two
+populations). The seven-role re-review and astra turn 4 are the
+pending gates.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
