@@ -1040,3 +1040,17 @@ class CliResidueDrainBoundTest(unittest.TestCase):
         source = inspect.getsource(_bench.run_cli)
         self.assertIn("while time.monotonic() <= deadline", source,
                       "run_cli's residue drain must be deadline-bounded")
+
+
+class EngineOrderAlternationTest(unittest.TestCase):
+    """r107: both timed legs alternate the engine order per round —
+    a run-order-correlated drift cannot bias every timed pair the same
+    direction (pinned at source, HarnessMainWiringTest pattern)."""
+
+    def test_both_legs_alternate_by_round_index(self):
+        import inspect
+        source = inspect.getsource(_bench.run_perf)
+        self.assertIn("round_index % 2", source,
+                      "run_perf must alternate engine order by round")
+        self.assertEqual(source.count("round_index % 2"), 2,
+                         "both the write leg and the read leg must alternate")
