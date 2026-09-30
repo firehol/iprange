@@ -22513,7 +22513,7 @@ attempt was reverted in round 107 (fork-inheritance: a forked child's
 ru_maxrss floors at the parent python's RSS — the limitation is
 documented at the code site), the read leg alternates with the write
 leg, and l10's entry selection now distinguishes extension-agnostic
-loading with a valid extensionless ipset fixture. The ceiling census count is the kit census row's (forty sessions as of the round-109 rebind). The seven-role re-review of the latest wave and the astra
+loading with a valid extensionless ipset fixture. The ceiling census count is the kit census row's (the kit census row is authoritative). The seven-role re-review of the latest wave and the astra
 re-review are the pending gates.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
