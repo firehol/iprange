@@ -1,0 +1,47 @@
+{
+ "schema": "iprange-bench-scenario-v1",
+ "name": "l11-ipv6-binary-write-v2",
+ "purpose": "Legacy binary v2 write (astra turn-3): -6 selects the IPv6 binary format (header 'binary format v2.0 ipv6'); discriminating address bytes (2001:db8::1 and 2001:db8::8000:0:0:0:1) survive the round-trip exactly, and both engines write identical v2 bytes (hashed across engines).",
+ "fixtures": [
+  {
+   "path": "v6.txt",
+   "text": "2001:db8::1\n2001:db8::8000:0:0:0:1\n"
+  }
+ ],
+ "cli": [
+  {
+   "cli": {
+    "args": [
+     "-6",
+     "--print-binary",
+     "v6.txt"
+    ],
+    "redirect_stdout": "out.v2.bin"
+   },
+   "compare": [
+    "exit"
+   ],
+   "expect": {
+    "exit": 0
+   },
+   "expect_same_bytes": "out.v2.bin"
+  },
+  {
+   "cli": {
+    "args": [
+     "-6",
+     "--print-ranges",
+     "out.v2.bin"
+    ]
+   },
+   "compare": [
+    "exit",
+    "stdout"
+   ],
+   "expect": {
+    "exit": 0,
+    "stdout": "2001:db8::1-2001:db8::1\n2001:db8:0:8000::1-2001:db8:0:8000::1\n"
+   }
+  }
+ ]
+}

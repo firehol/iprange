@@ -73,10 +73,17 @@ def cancelled_result(response, destination_exists):
     if outcome == "published" and not destination_exists:
         return ("cancelled outcome claims the publication landed, but "
                 f"the destination is absent: {data!r}")
-    if outcome in ("not_started", "not_committed", "not_published") \
+    if outcome in ("not_started", "not_published") \
             and destination_exists:
         return (f"cancelled outcome {outcome!r} claims no publication, "
                 f"but the destination exists: {data!r}")
+    if outcome in ("committed", "not_committed"):
+        # Those are CommitResult outcomes (a commit-phase operation);
+        # current.publish is a publication operation whose factual
+        # outcomes are not_published / published (astra turn-3: a
+        # cancelled publish never answers with a commit outcome).
+        return (f"cancelled publish claimed {outcome!r} — a commit "
+                f"outcome, not a publication outcome: {data!r}")
     if outcome == "read_only_failure":
         # The spec maps read_only_failure only from a read-only
         # operation; this proof cancels a publish — an operation the

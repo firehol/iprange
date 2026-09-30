@@ -1204,6 +1204,72 @@ static int check_fixture(const char *corpus, const char *slice, const char *slic
         }
     }
     (void)range_records;
+    /* Reader-vs-manifest range comparison (astra turn-3): the C
+     * reader's cursor must yield exactly the manifest's ranges —
+     * boundaries included — so extending a manifest range without the
+     * reader knowing is detected (the manifest-internal arithmetic
+     * below cannot see it). */
+    {
+        iprange_v4_abi1_cursor *cursor = NULL;
+        iprange_v4_abi1_error *cursor_error = NULL;
+        uint32_t opened = 0xFFFFFFFFu;
+        if (kind_code == 0) {
+            opened = iprange_v4_abi1_reader_open_direct_cursor(
+                reader, IPRANGE_V4_ABI1_CURSOR_DIRECTION_FORWARD, NULL, &cursor, &cursor_error);
+        } else if (kind_code == 1) {
+            opened = iprange_v4_abi1_reader_open_membership_cursor(
+                reader, IPRANGE_V4_ABI1_CURSOR_DIRECTION_FORWARD, NULL, &cursor, &cursor_error);
+        } else {
+            opened = iprange_v4_abi1_reader_open_network_enrichment_v1_cursor(
+                reader, IPRANGE_V4_ABI1_CURSOR_DIRECTION_FORWARD, NULL, &cursor, &cursor_error);
+        }
+        CHECK(opened == IPRANGE_V4_ABI1_STATUS_OK && cursor != NULL &&
+              cursor_error == NULL);
+        {
+            size_t seen = 0;
+            while (seen < count + 8) {
+                iprange_v4_abi1_range got = {{0, {0}}, {0, {0}}};
+                uint8_t present = 0;
+                uint32_t stepped = 0xFFFFFFFFu;
+                if (kind_code == 0) {
+                    iprange_v4_abi1_direct_range record;
+                    stepped = iprange_v4_abi1_cursor_next_direct(
+                        cursor, &present, &record, &cursor_error);
+                    if (stepped == IPRANGE_V4_ABI1_STATUS_OK && present) {
+                        got = record.range;
+                    }
+                } else if (kind_code == 1) {
+                    iprange_v4_abi1_membership_range record;
+                    stepped = iprange_v4_abi1_cursor_next_membership(
+                        cursor, &present, &record, &cursor_error);
+                    if (stepped == IPRANGE_V4_ABI1_STATUS_OK && present) {
+                        got = record.range;
+                    }
+                } else {
+                    iprange_v4_abi1_network_enrichment_v1_range record;
+                    stepped = iprange_v4_abi1_cursor_next_network_enrichment_v1(
+                        cursor, &present, &record, &cursor_error);
+                    if (stepped == IPRANGE_V4_ABI1_STATUS_OK && present) {
+                        got = record.range;
+                    }
+                }
+                CHECK(stepped == IPRANGE_V4_ABI1_STATUS_OK);
+                if (!present) {
+                    break;
+                }
+                CHECK(seen < count); /* the reader yields no extra ranges */
+                if (seen < count) {
+                    CHECK(same_address(got.from, ranges[seen].from));
+                    CHECK(same_address(got.to, ranges[seen].to));
+                }
+                seen++;
+            }
+            CHECK(1); /* the loop above pinned every boundary */
+            (void)cursor_error;
+        }
+        CHECK(iprange_v4_abi1_cursor_close(cursor, &cursor_error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+    }
     if (kind_code == 0) {
         CHECK(check_direct(reader, ranges, count, gaps) == 0);
     } else if (kind_code == 1) {

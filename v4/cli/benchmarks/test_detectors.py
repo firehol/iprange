@@ -235,13 +235,21 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
     def test_a_state_consistent_outcome_passes(self):
         from cancel_inflight import cancelled_result
         for outcome, exists in (("not_published", False),
-                                ("not_committed", False),
                                 ("not_started", False),
-                                ("committed", False),
                                 ("outcome_unknown", False)):
             self.assertEqual(
                 cancelled_result(self.cancelled(outcome), exists), "",
                 outcome)
+
+    def test_commit_outcomes_are_refused_for_a_publish(self):
+        # current.publish is a publication operation; committed /
+        # not_committed are CommitResult outcomes it never answers
+        # with (astra turn-3).
+        from cancel_inflight import cancelled_result
+        for outcome in ("committed", "not_committed"):
+            reason = cancelled_result(self.cancelled(outcome), False)
+            self.assertIn("a commit outcome, not a publication outcome",
+                          reason)
 
     def test_a_read_only_outcome_is_refused_for_a_publish(self):
         # The proof cancels a publish, which is never a read-only

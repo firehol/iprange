@@ -2104,20 +2104,35 @@ class JsonRpcService:
             return b"".join(parts)
         stream = self.proc.stdout
         if stream is not None and not stream.closed:
-            try:
-                buffered = stream.peek()
-            except (ValueError, OSError):
-                buffered = b""
-            if buffered:
-                parts.append(stream.read(len(buffered)))
-            total = len(buffered)
-            ceiling = frame.OUTPUT_FRAME_LIMIT * 2
-            while total <= ceiling:
-                chunk = stream.read1(65536)
-                if not chunk:
-                    break
-                total += len(chunk)
-                parts.append(chunk)
+            # Bounded buffered drain (astra turn-3): a peer that
+            # exited while a descendant holds the write end never
+            # delivers EOF, so the blocking peek/read1 path is
+            # time-bounded by a watcher thread and reports a missing
+            # EOF explicitly instead of hanging the close.
+            import threading
+            result = {}
+            def _buffered_drain():
+                parts.append(stream.peek())
+                total = 0
+                ceiling = frame.OUTPUT_FRAME_LIMIT * 2
+                while total <= ceiling:
+                    chunk = stream.read1(65536)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    parts.append(chunk)
+                result["eof"] = True
+            watcher = threading.Thread(target=_buffered_drain, daemon=True)
+            watcher.start()
+            watcher.join(timeout=5.0)
+            if watcher.is_alive():
+                # The drain did not reach EOF within the bound: a
+                # descendant holds the pipe. Report it (the trailing-
+                # bytes check below will fail on whatever arrived).
+                parts.append(b"[drain bound exceeded: no EOF within 5s - "
+                             b"a descendant holds the pipe]")
+            # The buffered stream may still be locked by the watcher
+            # thread; the close below is best-effort.
         return b"".join(parts)
 
 
@@ -2971,8 +2986,20 @@ def describe_capabilities(binary):
                 except Exception:
                     pass
                 raise
-            finally:
+            # Close exactly once per path (astra turn-3: the previous
+            # double close — broken_exchange close then the finally's
+            # ordinary close — raised ValueError on the already-closed
+            # raw fd, aborting the legacy-only fallback).
+            try:
                 service.close()
+            except (AssertionError, OSError, ValueError) as close_exc:
+                if "force-terminated" in str(close_exc):
+                    raise
+                # A peer that answered and then died uncleanly is a
+                # handshake failure, not a capability verdict.
+                raise AssertionError(
+                    f"capability probe close failed: {close_exc}"
+                ) from close_exc
             if "result" in response:
                 results.validate_result(
                     "iprange.v1.system.describe", response["result"])
