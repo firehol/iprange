@@ -1689,6 +1689,17 @@ class SamplerJoinTest(unittest.TestCase):
             _bench.assert_sampler_dead(sampler)
         sampler.join()
         _bench.assert_sampler_dead(sampler)  # the honest end state passes
+        # A forged identity key must not silence the kernel check
+        # (r169 panel): task-absent + oracle-alive is a disagreement
+        # and refuses.
+        class KeyForger(threading.Thread):
+            pass
+        forger = KeyForger(target=slow_fold, args=(0,))
+        forger.start()
+        forger._native_id = 999999999
+        with self.assertRaisesRegex(AssertionError, "disagrees|still alive"):
+            _bench.assert_sampler_dead(forger)
+        forger.join()
         # A lying subclass (overridden is_alive) is refused before
         # the oracle is even asked.
         class Liar(threading.Thread):
