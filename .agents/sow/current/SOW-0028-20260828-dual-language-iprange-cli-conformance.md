@@ -22568,9 +22568,10 @@ milestone run is autonomous: restage → r137 panel → sol gate → full
 battery → close, push pre-authorized by REVIEWS.md. Cost names (measured baseline at
 the b24c73c2 restage; the earlier ~35-40 wall-minute names were
 wrong by 1.4-45x and are corrected here): the 13-log restage bundle
-~10 wall-minutes (sweep ~20 s; ceiling ~8.3 min — its ~6-minute
-timed part plus corpus generation, consistent with the validation
-plan's own name; the remaining logs ~1.5 min). A loaded host
+measured ~8.1-8.4 wall-minutes at the round-147/149 restages
+(per-stage instrument `restage_timing.log`: ceiling 391-410 s,
+sweep 17 s, the remaining logs ~1.5 min; the earlier ~10-minute
+name was a loaded-host figure). A loaded host
 inflates wall time (the r137-era restages ran long under load
 15+ — observed in lead session wall time, not attested by a staged
 artifact; the restage driver now emits timing so future names are
