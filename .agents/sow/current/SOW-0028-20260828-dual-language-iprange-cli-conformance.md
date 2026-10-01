@@ -24,7 +24,7 @@ Review-wave items closed after this ledger was written:
 3. `parity_rust_public.tsv` method regeneration is still open. The drift test covers `lib.rs` exports only.
 
 Milestone 5 product proofs are in the section at the end of this file.
-The role round and astra review are still the close gate. Do not treat
+The role round and the external-control (sol) gate are still the close gate. Do not treat
 the list above as the work queue.
 
 Not in this serial pass:
@@ -52,7 +52,7 @@ fit-for-purpose` (the internal `glm` and `closure` roles are retired);
 roles are spawned once and continued, never restarted; roles review the
 lead's staged evidence instead of rerunning suites (targeted probes in
 their own `.local/<role>/` sandbox only); roles review chunks smaller than
-a milestone; the external control is the persistent astra session per lead
+a milestone; the external control is the persistent sol session per lead
 session and per SOW, invoked by the lead itself.
 
 Historical wave records above this line that reference `.local/*/ROLE.md`,
@@ -22532,11 +22532,29 @@ wording corrected (two populations). The turn-3 finding texts are
 staged at `.local/shared/evidence/m5-astra/turn-3-review.txt` (nine
 in-scope slugs; the tenth — the export-writer creation-time mode — is
 SOW-0034's, excluded from this verdict). The seven-role re-review and
-astra turn 4 are the pending gates.
+the sol external gate are the pending gates (user decision 2026-10-01;
+see the external-control change record below).
+
+**External-control change and milestone-5 runbook (user decisions
+2026-10-01).** The milestone's final external gate reviewer is **sol**
+(gpt-6.1-sol, xhigh reasoning) via the `external-reviewers` runner,
+replacing astra (prior session `ca3adec1808d4ffa87380361edc214c9`,
+last verdict turn-3 NEEDS CHANGES — all nine findings fixed in rounds
+131-135; turn texts staged at `.local/shared/evidence/m5-astra/`, with
+turn-1/turn-2 raws salvaged from the runner session dir into the same
+gate directory). The interim seven-role panels are internal subagents
+on the lead's own model; durable records must not name the lead's
+model, so leads stay switchable on demand. A disk-cleanup flow is
+binding: dead reviewer sandboxes and /tmp task scratch are removed
+after salvage via the REVIEWS.md three-check procedure (ownership,
+inactivity, preservation), at each restage and gate close — first pass
+2026-10-01 removed the accumulated pi-era scratch (~22 GB). The
+milestone run is autonomous: restage → r137 panel → sol gate → full
+battery → close, push pre-authorized by REVIEWS.md.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
 milestone stays open until the seven-role round approves the exact
-revision, astra returns `PRODUCTION GRADE`, and the gate battery is
+revision, the external control (sol) returns `PRODUCTION GRADE`, and the gate battery is
 recorded at the final revision. Any of those can still fail and send
 the milestone back to implementation.

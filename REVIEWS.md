@@ -13,11 +13,11 @@ the repository.
 
 1. **Every reviewer runs in strong adversarial mode with the
    `project-final-review` skill** — the lead, all seven internal roles, and
-   the external astra control. No reviewer is a second pair of eyes; each
+   the external control. No reviewer is a second pair of eyes; each
    tries to prove the work wrong within its role.
 2. **Reviewers are not for discovery.** The lead audits its own work first
    (see Implementation step 3). A defect found first by a reviewer or by
-   astra that the lead's self-review should have caught is a process
+   the external control that the lead's self-review should have caught is a process
    failure — fix the self-review, not just the defect.
 3. **Evidence-first: the lead runs the tests, the log is the evidence.** The
    lead runs every required test for the chunk and writes the complete,
@@ -50,10 +50,10 @@ the repository.
 6. **Chunked review beats big-bang.** Internal roles review **smaller
    chunks than a milestone** — one implementation step, or a batch of
    closely related small steps at the lead's judgment. The lead cannot
-   match astra's depth on a whole milestone; it matches it on small scope.
+   match the external control's depth on a whole milestone; it matches it on small scope.
    Deferring role review to milestone level just hands all findings to
-   astra; that is prohibited.
-7. **astra runs rarely** — plan gate (future SOWs) and milestone gates
+   the external control; that is prohibited.
+7. **the external control runs rarely** — plan gate (future SOWs) and milestone gates
    only. Never per step, never per fix round.
 8. All builds, tests, probes, and reviewer commands run under `nice`
    (workstation policy, `AGENTS.md`). Every reviewer step and probe is
@@ -76,7 +76,7 @@ committed); shared reviewer ground rules in `.agents/review-roles/README.md`:
 
 The older `glm` role and `closure` role from SOW-0028's wave rounds are
 retired; their duties belong to fit-for-purpose (whole-SOW truth and
-completeness) and to the external astra control.
+completeness) and to the external control.
 
 Internal roles and implementer workers use the lead assistant's own model
 (standing user instruction 2026-09-14). Parallelize with as many own-model
@@ -85,8 +85,10 @@ stop running workers — spawn in parallel instead. When the user asks to use
 the swarm, read and follow the user's swarm rules file
 (`~/.codex/SWARM.md`) in whole.
 
-External control: **astra** (gpt-6-astra) via the `external-reviewers`
-runner, static read-only review.
+External control: **sol** (gpt-6.1-sol, xhigh reasoning) via the `external-reviewers`
+runner, static read-only review. (User decision 2026-10-01: sol replaces
+   astra as the milestone gate reviewer; prior astra sessions and verdicts
+   are recorded in the active SOWs.)
 
 ## Review kit (`.local/`, gitignored)
 
@@ -217,14 +219,14 @@ at this HEAD.
    SOW with **milestones and ordered steps per milestone**. Each step is
    reasonable work — not too small, not too big (rough guide: one step ≈
    one reviewable chunk for the 7 roles).
-2. **astra reviews the plan**: it reads the SOW, verifies the lead's
+2. **the external control reviews the plan**: it reads the SOW, verifies the lead's
    analysis, evaluates milestones and steps, and returns feedback.
-3. The lead revises and re-runs astra on the delta until astra returns
+3. The lead revises and re-runs the external control on the delta until it returns
    **GOOD TO IMPLEMENT**. Implementation may not start before that.
-4. The user resolves scope/product/risk forks; astra does not override user
+4. The user resolves scope/product/risk forks; the external control does not override user
    decisions.
 
-Exception: a SOW whose milestones astra already approved (e.g. SOW-0028)
+Exception: a SOW whose milestones the external control already approved (e.g. SOW-0028)
 skips this gate.
 
 ## Implementation loop (per step)
@@ -256,9 +258,9 @@ skips this gate.
 ## Milestone gate
 
 1. All steps of the milestone are through the loop above, committed locally.
-2. **astra delta review**: lead continues its astra session (see astra
-   identity below) with the delta: commit list, kit pointers (head,
-   status.md, evidence/). astra reviews the whole milestone with the
+2. **external-control delta review**: lead continues its external-control session (see the external-control
+   identity section below) with the delta: commit list, kit pointers (head,
+   status.md, evidence/). the external control reviews the whole milestone with the
    final-review skill in strong adversarial mode, and receives explicit
    standing instructions to:
    - enforce the SOW's scope — flag any drift, unapproved addition, or
@@ -267,12 +269,12 @@ skips this gate.
    - judge evidence suitability without rerunning suites (targeted probes
      in its own session workspace only).
    Verdicts: `PRODUCTION GRADE` passes; `NEEDS CHANGES` with any verified
-   in-scope P0/P1/P2 blocks: fix ⇒ roles re-review affected code ⇒ astra
-   re-review, repeat. **Astra has no inconclusive verdict**: it must decide
+   in-scope P0/P1/P2 blocks: fix ⇒ roles re-review affected code ⇒ external-control
+   re-review, repeat. **The external control has no inconclusive verdict**: it must decide
    every item it examines — the role-side `INCONCLUSIVE AND POTENTIALLY
    WRONG` state (§ Reviewer work rules) is deliberately withheld from the
    gate reviewer, whose job is to adjudicate the milestone, not to park
-   doubts. False positives are rebutted to astra in-session with
+   doubts. False positives are rebutted to the external control in-session with
    evidence and the exchange is preserved; unresolved P0-P2 findings are
    never waived by the lead alone.
 3. **Full battery** runs once at the milestone boundary (not per step).
@@ -284,20 +286,20 @@ skips this gate.
 5. Move to the next milestone. Record the gate (verdicts, HEAD, battery
    result) in the SOW.
 
-## astra identity and continuity
+## External-control identity and continuity
 
-- **One astra session per lead assistant session, per SOW.** While the same
-  lead session works the same SOW, it keeps and resumes the same astra
+- **One external-control session per lead assistant session, per SOW.** While the same
+  lead session works the same SOW, it keeps and resumes the same external-control
   session (by exact session ID; never `-c`/`--last`). The session ID is
   recorded in the active SOW at first use.
 - When the user stops the lead and starts a new lead session, the new lead
-  starts a **new astra session** for continued work on the SOW, and notes
-  the handoff (prior astra session ID + last verdict) in the SOW.
-- Astra is prompted neutrally: factual scope, delta facts, pointers — never
+  starts a **new external-control session** for continued work on the SOW, and notes
+  the handoff (prior external-control session ID + last verdict) in the SOW.
+- The external control is prompted neutrally: factual scope, delta facts, pointers — never
   the lead's analysis, opinions, or steering; the exact prompt is shown to
   the user before each invocation but requires no renewed approval under
   this standing protocol.
-- Astra runs the reviewer client's read-only mode; it does not modify the
+- The external control runs the reviewer client's read-only mode; it does not modify the
   tree and does not run the project's test suites.
 
 ## Test execution policy (what the lead runs, and when)
@@ -380,7 +382,7 @@ Binding details recorded from user decisions 2026-09-16:
   findings only: an inconclusive item never makes a round FAIL. Written to
   `.local/<role>/report.md`; compact copy returned in the session reply.
 - **This verdict state belongs to roles only.** The milestone gate reviewer
-  (astra) does not get it: it must decide every item it examines, either as
+  (the external control) does not get it: it must decide every item it examines, either as
   a verified finding with the scenario or as `PRODUCTION GRADE`. See
   § Milestone gate.
 - Roles stay open across rounds; later messages are delta re-reviews.
