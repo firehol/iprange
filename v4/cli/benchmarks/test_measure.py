@@ -1391,6 +1391,57 @@ class SamplerJoinTest(unittest.TestCase):
                               (measure_module, "run_once")):
             source = inspect.getsource(getattr(module, fname))
             tree = ast.parse(source)
+            # Indirect callees hide the join target entirely.
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and not isinstance(
+                        node.func, (ast.Name, ast.Attribute)):
+                    self.fail(f"{fname}: indirect callee could hide "
+                              f"a timed join")
+            # The reflection names may appear only as the sanctioned
+            # call's callee — any other reference (aliases, imports,
+            # string exec) is the forgery seam.
+            banned = ("getattr", "setattr", "delattr", "vars",
+                      "__import__", "eval", "exec", "compile",
+                      "getattribute", "__getattribute__", "__getattr__",
+                      "__setattr__")
+
+            def is_sanctioned_call(call):
+                default_ok = (
+                    len(call.args) == 2
+                    or (len(call.args) == 3
+                        and isinstance(call.args[2], ast.Constant)
+                        and call.args[2].value is None))
+                return (isinstance(call.func, ast.Name)
+                        and call.func.id == "getattr" and call.args
+                        and isinstance(call.args[0], ast.Name)
+                        and call.args[0].id == "service"
+                        and default_ok
+                        and isinstance(call.args[1], ast.Constant)
+                        and call.args[1].value == "_raw_stdin")
+
+            sanctioned_callees = {id(call.func) for call in ast.walk(tree)
+                                  if isinstance(call, ast.Call)
+                                  and is_sanctioned_call(call)}
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Name) and node.id in banned
+                        and id(node) not in sanctioned_callees):
+                    self.fail(f"{fname}: reference to {node.id} could "
+                              f"hide a timed join")
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    for alias in node.names:
+                        bound = alias.asname or alias.name
+                        if bound in banned or bound == "threading":
+                            self.fail(f"{fname}: import binding {bound} "
+                                      f"hides calls")
+                if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                      ast.ClassDef))
+                        and node.name in banned + ("threading",)):
+                    self.fail(f"{fname}: definition binding {node.name} "
+                              f"hides calls")
+                if (isinstance(node, ast.Attribute)
+                        and isinstance(node.ctx, ast.Store)):
+                    self.fail(f"{fname}: attribute store (e.g. "
+                              f"threading.Thread = ...) hides calls")
             joins = []
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Attribute) or node.attr != "join":
@@ -1413,6 +1464,9 @@ class SamplerJoinTest(unittest.TestCase):
                     if isinstance(node, ast.Call) and node.func is joins[0]]
             self.assertEqual(len(call), 1,
                              f"{fname}: the join reference must be the call")
+            self.assertTrue(isinstance(joins[0].value, ast.Name)
+                            and joins[0].value.id == "sampler",
+                            f"{fname}: the join must be called on sampler")
             self.assertEqual(call[0].args, [],
                              f"{fname}: the join must take no argument")
             self.assertEqual(call[0].keywords, [],
@@ -1452,7 +1506,9 @@ class SamplerJoinTest(unittest.TestCase):
                         and isinstance(node.ctx, ast.Store)):
                     self.fail(f"{fname}: rebinding {node.id} hides calls")
             def store_names(target):
-                if isinstance(target, ast.Name):
+                if isinstance(target, str):
+                    yield target
+                elif isinstance(target, ast.Name):
                     yield target.id
                 elif isinstance(target, (ast.Tuple, ast.List)):
                     for element in target.elts:

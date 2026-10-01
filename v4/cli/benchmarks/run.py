@@ -517,10 +517,14 @@ def prepare_engine_dirs(*engine_works, may_wipe=frozenset()):
         if os.path.exists(engine_work):
             shutil.rmtree(engine_work)
         if os.path.exists(engine_work):
-            # Postcondition: the wipe contract is self-enforcing.
-            # Any swallow (ignore_errors, a quiet handler, an outer
-            # except) leaves the path behind and fails here loudly
-            # instead of resurrecting the dirty-directory defect.
+            # Postcondition: the wipe contract is self-enforcing
+            # against swallows INSIDE this function (ignore_errors,
+            # a quiet handler) — those leave the path behind and
+            # fail here loudly instead of resurrecting the
+            # dirty-directory defect. A caller wrapping the call
+            # site in its own blanket except can still swallow the
+            # failure; that is outside this function's control and
+            # is the named residual (operations-r155 F2).
             raise AssertionError(
                 f"wipe did not remove {engine_work}: refusing to "
                 f"continue with state this run did not create clean")
