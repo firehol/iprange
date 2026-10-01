@@ -572,8 +572,11 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
     exit_gate(name, service.proc.returncode if service is not None else 0)
     if sampler is not None:
         # The round's peak flags are read after this call returns:
-        # join the sampler so no late fold can race those reads.
-        sampler.join(timeout=2)
+        # join the sampler so no late fold can race those reads. The
+        # join is unconditional — the loop provably exits when the
+        # child is reaped, so a timed join would only reopen the
+        # race silently (r141 panel).
+        sampler.join()
     return result
 
 
@@ -800,6 +803,12 @@ def main():
     try:
         rust_work = os.path.join(work, "rust")
         go_work = os.path.join(work, "go")
+        # Clean restart for a reused work dir (portability-r141 F1):
+        # a second run over the same --work-dir must not see the
+        # first run's engine artifacts — the same misattribution the
+        # perf path's retry fix closes.
+        for engine_work in (rust_work, go_work):
+            shutil.rmtree(engine_work, ignore_errors=True)
         write_calls = scenario.get("write", scenario.get("calls", []))
         write_calls = write_calls + scenario.get("cli", [])
         read_calls = scenario.get("read", [])

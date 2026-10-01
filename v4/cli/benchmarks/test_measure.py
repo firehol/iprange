@@ -1320,3 +1320,96 @@ class WorkDirCorrectnessModeTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertTrue(os.path.isabs(captured["work"]))
         self.assertEqual(captured["work"], os.path.join(cwd, "relwork"))
+
+
+class SamplerJoinTest(unittest.TestCase):
+    """r141 panel (five lanes): the sampler join must be pinned — a
+    late-folding sampler is the exact TOCTOU signature the join
+    closes, and the join-deleted mutant must die here."""
+
+    def _stub(self, work):
+        stub = os.path.join(_HERE, "stub_engine.py")
+        wrapper = os.path.join(work, "join_stub")
+        with open(wrapper, "w", encoding="utf-8") as stream:
+            stream.write(
+                "#!/usr/bin/env python3\n"
+                "import os, sys\n"
+                "os.environ['STUB_EXIT'] = '0'\n"
+                f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+        os.chmod(wrapper, 0o755)
+        return wrapper
+
+    def test_a_late_sampler_fold_causes_no_spurious_retry(self):
+        import contextlib
+        import io
+        import time
+
+        def slow_fold(pid):
+            # The fold lands well after the stub run completes:
+            # without the join the round sees no sample and
+            # misclassifies the miss as a spawn race.
+            time.sleep(0.75)
+            return 4096
+
+        scenario = {
+            "name": "join-detect",
+            "write": [{"method": "iprange.v1.system.describe",
+                       "params": {},
+                       "compare": ["method"],
+                       "expect": {"method": "iprange.v1.system.describe"}}],
+        }
+        captured = io.StringIO()
+        with tempfile.TemporaryDirectory() as work:
+            stub = self._stub(work)
+            with mock.patch.object(_bench, "child_hwm_kib", slow_fold), \
+                    contextlib.redirect_stderr(captured):
+                report = _bench.run_perf(scenario, stub, stub, 1, work)
+        self.assertNotIn("re-measured once", captured.getvalue(),
+                         "a late fold must not be misclassified as a spawn race")
+        self.assertEqual(report["rust"]["child_max_rss_kib"]["median"], 4096)
+        self.assertEqual(report["go"]["child_max_rss_kib"]["median"], 4096)
+
+    def test_measure_run_once_joins_its_sampler_before_reading(self):
+        import inspect
+        import measure as measure_module
+        source = inspect.getsource(measure_module.run_once)
+        self.assertIn(".join(", source,
+                      "run_once must join its sampler before reading samples")
+
+
+class CorrectnessWorkDirStateTest(unittest.TestCase):
+    """portability-r141 F1: a reused --work-dir restarts clean in
+    correctness mode too (the same-failure search over the perf
+    path's retry fix)."""
+
+    def test_a_reused_work_dir_restarts_clean_in_correctness_mode(self):
+        import contextlib
+        import io
+        calls = []
+
+        def fake_run_engine(binary, name, scenario, work, calls_arg, peer=None,
+                            engine_work=None, peak=None, prepare=True,
+                            deferred=None):
+            target = engine_work or os.path.join(work, name)
+            marker = os.path.join(target, "artifact")
+            if os.path.exists(marker):
+                raise AssertionError(
+                    f"{name}: engine state survived into a later run")
+            os.makedirs(target, exist_ok=True)
+            with open(marker, "w", encoding="utf-8") as stream:
+                stream.write("engine artifact")
+            calls.append(name)
+            return []
+
+        with tempfile.TemporaryDirectory() as work:
+            argv = ["run.py", "--rust", "/bin/true", "--go", "/bin/true",
+                    "--scenario", "s.json", "--work-dir", work]
+            for _ in range(2):  # the same work dir, two runs
+                with mock.patch.object(sys, "argv", argv), \
+                        mock.patch.object(_bench, "run_engine",
+                                          fake_run_engine), \
+                        mock.patch.object(_bench, "load_scenario",
+                                          lambda path: {"name": "s"}), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(_bench.main(), 0)
+        self.assertEqual(len(calls), 4, "two runs, two engine legs each")
