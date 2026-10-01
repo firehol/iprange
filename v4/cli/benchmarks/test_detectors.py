@@ -847,8 +847,9 @@ class CancelDrainBoundsTest(unittest.TestCase):
 class AstraTurn3DetectorTest(unittest.TestCase):
     """Pins for the three astra turn-3 fixes that shipped without
     detecting tests: the capability probe's close-once, the buffered
-    drain bound, and the C cursor extension class (source pins in the
-    established pattern)."""
+    drain bound, and the C cursor comparison pinning both directions —
+    the extension (no extra ranges) and the under-yield (no short
+    yield) class (source pins in the established pattern)."""
 
     def test_capability_probe_closes_exactly_once(self):
         import inspect
