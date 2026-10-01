@@ -1697,7 +1697,8 @@ class SamplerJoinTest(unittest.TestCase):
         forger = KeyForger(target=slow_fold, args=(0,))
         forger.start()
         forger._native_id = 999999999
-        with self.assertRaisesRegex(AssertionError, "disagrees|still alive"):
+        with self.assertRaisesRegex(AssertionError,
+                                    "not an exact threading.Thread"):
             _bench.assert_sampler_dead(forger)
         forger.join()
         # A lying subclass (overridden is_alive) is refused before
@@ -1707,7 +1708,8 @@ class SamplerJoinTest(unittest.TestCase):
                 return False
         liar = Liar(target=slow_fold, args=(0,))
         liar.start()
-        with self.assertRaisesRegex(AssertionError, "not a plain"):
+        with self.assertRaisesRegex(AssertionError,
+                                    "not an exact threading.Thread"):
             _bench.assert_sampler_dead(liar)
         liar.join()
 

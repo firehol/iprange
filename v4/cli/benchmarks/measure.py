@@ -35,44 +35,41 @@ def assert_sampler_dead(sampler):
     verdict). A forged or expiring timed join fails loudly; a join
     that waited long enough delivers the correct semantics. The
     source pin is a regression detector, not the boundary."""
+    # Exact-class + two-sided disagreement rule (r169/r171 panels):
+    # only a plain, unmodified threading.Thread is trusted at all
+    # (every subclass can forge its own state); then the task list
+    # (kernel truth) and the oracle must agree, with a bounded grace
+    # for the two honest races: the task-exit window after join, and
+    # TID reuse (a dead thread's TID recycled by a later thread —
+    # observed as a false positive on s5-exclude).
     import threading as _threading
-    if (not isinstance(sampler, _threading.Thread)
-            or type(sampler).is_alive is not _threading.Thread.is_alive):
+    if type(sampler) is not _threading.Thread:
         raise AssertionError(
-            "sampler is not a plain threading.Thread: its liveness "
-            "cannot be verified by the foreign oracle")
-    # Dual-oracle disagreement rule (r169 panel): the task list is
-    # kernel truth but its KEY (native_id) is object-owned, so a
-    # forged key must not be trusted alone. Rule: task present ->
-    # alive; task absent while the foreign oracle says alive ->
-    # disagreement = forgery (or the honest exit race) -> bounded
-    # grace re-poll, then REFUSE; both agree gone -> dead. The
-    # ident fallback is dropped (Python 3.14's ident is a logical
-    # id, wrong namespace for task keys).
+            "sampler is not an exact threading.Thread: subclass "
+            "state cannot be verified")
     native_id = getattr(sampler, "_native_id", None)
     if native_id is not None:
         try:
-            tasks = _REAL_LISTDIR("/proc/self/task")
-            if str(native_id) in tasks:
-                raise AssertionError(
-                    "sampler thread still alive after join: the join "
-                    "must outlive the sampler")
-            for _ in range(3):  # grace: the honest exit window (~ms)
+            key = str(native_id)
+            for _ in range(3):
+                in_tasks = key in _REAL_LISTDIR("/proc/self/task")
+                alive = _REAL_THREAD_IS_ALIVE(sampler)
+                if not in_tasks and not alive:
+                    return  # both agree: dead
+                if in_tasks and alive:
+                    raise AssertionError(
+                        "sampler thread still alive after join: the "
+                        "join must outlive the sampler")
                 time.sleep(0.01)
-                if str(native_id) not in _REAL_LISTDIR("/proc/self/task"):
-                    break
-            else:
-                pass
-            if str(native_id) in _REAL_LISTDIR("/proc/self/task"):
-                raise AssertionError(
-                    "sampler thread still alive after join: the join "
-                    "must outlive the sampler")
-            if _REAL_THREAD_IS_ALIVE(sampler):
-                raise AssertionError(
-                    "sampler liveness disagrees with the task list "
-                    "(forged identity or racing exit): refusing to "
-                    "trust the sampler's own bookkeeping")
-            return
+            # Persisting single-sided disagreement:
+            in_tasks = key in _REAL_LISTDIR("/proc/self/task")
+            alive = _REAL_THREAD_IS_ALIVE(sampler)
+            if in_tasks and not alive:
+                return  # TID reuse: the thread object says dead
+            raise AssertionError(
+                "sampler liveness disagrees with the task list "
+                "(forged identity or racing exit): refusing to "
+                "trust the sampler's own bookkeeping")
         except OSError:
             pass  # no /proc: the disagreement rule cannot run
     if _REAL_THREAD_IS_ALIVE(sampler):
