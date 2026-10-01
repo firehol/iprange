@@ -23,6 +23,49 @@ import time
 # to it.
 _REAL_THREAD_IS_ALIVE = threading.Thread.is_alive
 
+def assert_sampler_dead(sampler):
+    """Runtime postcondition for the join contract (r161/r163
+    panels): the sampler thread must be dead when the join returns.
+    The verdict comes from the FOREIGN oracle — the real
+    threading.Thread.is_alive captured at module import and called
+    unbound — so a forged object cannot lie about its own liveness
+    (an impostor that is not a real Thread raises here loudly; a
+    Thread subclass with an overridden is_alive gets the REAL
+    verdict). A forged or expiring timed join fails loudly; a join
+    that waited long enough delivers the correct semantics. The
+    source pin is a regression detector, not the boundary."""
+    import threading as _threading
+    if (not isinstance(sampler, _threading.Thread)
+            or type(sampler).is_alive is not _threading.Thread.is_alive):
+        raise AssertionError(
+            "sampler is not a plain threading.Thread: its liveness "
+            "cannot be verified by the foreign oracle")
+    # Kernel truth (r167 panel): the task list cannot be forged.
+    # Bookkeeping forgery (_started/_os_thread_handle swaps) fools
+    # is_alive but cannot remove the thread's OS task while its fold
+    # runs. The named floor is exactly the fork-shaped channel: the
+    # sampler thread is genuinely dead (its task is gone) while the
+    # fold runs in some other task.
+    # native_id is the kernel TID (Python 3.14's Thread.ident is a
+    # logical id, not the task's); the task list is keyed by TID.
+    ident = getattr(sampler, "native_id", None) or sampler.ident
+    if ident is not None:
+        try:
+            if str(ident) in os.listdir("/proc/self/task"):
+                raise AssertionError(
+                    "sampler thread still alive after join: the join "
+                    "must outlive the sampler")
+            return
+        except OSError:
+            pass  # no /proc: fall through to the thread's own view
+    if _REAL_THREAD_IS_ALIVE(sampler):
+        raise AssertionError(
+            "sampler thread still alive after join: the join must "
+            "outlive the sampler (a timed or forged join races the "
+            "sample reads)")
+
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from run import JsonRpcService  # noqa: E402
 
@@ -188,15 +231,7 @@ def run_once(argv, stdin_bytes=None, cwd=None):
         # indirection class: any join returning while the sampler
         # still runs fails loudly.
         sampler.join()
-        if (not isinstance(sampler, threading.Thread)
-                or type(sampler).is_alive is not threading.Thread.is_alive):
-            raise AssertionError(
-                "sampler is not a plain threading.Thread: its "
-                "liveness cannot be verified by the foreign oracle")
-        if _REAL_THREAD_IS_ALIVE(sampler):
-            raise AssertionError(
-                "sampler thread still alive after join: the join "
-                "must outlive the sampler")
+        assert_sampler_dead(sampler)
     elapsed = time.perf_counter() - started
     if service.proc.returncode != 0:
         raise AssertionError(f"child exited {service.proc.returncode}: {argv[0]}")

@@ -1578,18 +1578,15 @@ class SamplerJoinTest(unittest.TestCase):
                     f"{fname}: sampler may only bind None or a literal "
                     f"threading.Thread (a wrapper could hide a timed join)")
             self.assertGreaterEqual(seen, 1, f"{fname}: sampler binds")
-            if fname == "run_engine":
-                post_calls = [node for node in ast.walk(tree)
-                              if isinstance(node, ast.Call)
-                              and isinstance(node.func, ast.Name)
-                              and node.func.id == "assert_sampler_dead"]
-                self.assertEqual(len(post_calls), 1,
-                                 "run_engine: the postcondition must be "
-                                 "CALLED exactly once at the join site "
-                                 "(a comment decoy is not a call)")
-            self.assertIn(
-                "assert_sampler_dead(sampler)" if fname == "run_engine"
-                else "_REAL_THREAD_IS_ALIVE(sampler)", source,
+            post_calls = [node for node in ast.walk(tree)
+                          if isinstance(node, ast.Call)
+                          and isinstance(node.func, ast.Name)
+                          and node.func.id == "assert_sampler_dead"]
+            self.assertEqual(len(post_calls), 1,
+                             f"{fname}: the shared postcondition must be "
+                             f"called exactly once at the join site "
+                             f"(a comment decoy is not a call)")
+            self.assertIn("assert_sampler_dead(sampler)", source,
                 f"{fname}: the join's runtime postcondition must be "
                 f"called at the join site")
 

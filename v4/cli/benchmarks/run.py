@@ -23,7 +23,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from run import JsonRpcService  # noqa: E402
 
-from measure import child_hwm_kib, median, ratio  # noqa: E402
+from measure import assert_sampler_dead, child_hwm_kib, median, ratio  # noqa: E402
 
 SCHEMA = "iprange-bench-scenario-v1"
 
@@ -490,30 +490,6 @@ def exit_gate(name, status):
 
 
 _REAL_THREAD_IS_ALIVE = __import__("threading").Thread.is_alive
-
-
-def assert_sampler_dead(sampler):
-    """Runtime postcondition for the join contract (r161/r163
-    panels): the sampler thread must be dead when the join returns.
-    The verdict comes from the FOREIGN oracle — the real
-    threading.Thread.is_alive captured at module import and called
-    unbound — so a forged object cannot lie about its own liveness
-    (an impostor that is not a real Thread raises here loudly; a
-    Thread subclass with an overridden is_alive gets the REAL
-    verdict). A forged or expiring timed join fails loudly; a join
-    that waited long enough delivers the correct semantics. The
-    source pin is a regression detector, not the boundary."""
-    import threading as _threading
-    if (not isinstance(sampler, _threading.Thread)
-            or type(sampler).is_alive is not _threading.Thread.is_alive):
-        raise AssertionError(
-            "sampler is not a plain threading.Thread: its liveness "
-            "cannot be verified by the foreign oracle")
-    if _REAL_THREAD_IS_ALIVE(sampler):
-        raise AssertionError(
-            "sampler thread still alive after join: the join must "
-            "outlive the sampler (a timed or forged join races the "
-            "sample reads)")
 
 
 def prepare_engine_dirs(*engine_works, may_wipe=frozenset()):
