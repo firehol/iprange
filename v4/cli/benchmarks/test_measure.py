@@ -1374,58 +1374,81 @@ class SamplerJoinTest(unittest.TestCase):
         import ast
         import inspect
         import measure as measure_module
-        # AST pins (r147/r149 panels): comments cannot forge a call
-        # node, any argument form fails, and the deliberate
-        # indirection residuals — aliasing, getattr, rebinding the
-        # sampler — are closed by counting every `sampler.join`
-        # reference, every binding of `sampler`, and the absence of
-        # getattr on it.
+        # AST pins with a NAMED residual floor (r151 panel; the
+        # SOW decoy-floor convention): the demonstrated forgery
+        # lanes die — receiver aliases, unbound calls, dead twins,
+        # getattr/dunder/setattr indirection, wrapper bindings,
+        # typed rebindings, argument forms of every spelling. The
+        # declared floor is deliberate multi-part deception
+        # (e.g. operator.methodcaller) which no source pin can
+        # universally exclude; the behavioral late-fold detector is
+        # the semantic backstop (its 0.75 s margin is disclosed).
         for module, fname in ((_bench, "run_engine"),
                               (measure_module, "run_once")):
             source = inspect.getsource(getattr(module, fname))
             tree = ast.parse(source)
-            refs = [node for node in ast.walk(tree)
-                    if isinstance(node, ast.Attribute)
-                    and node.attr == "join"
-                    and isinstance(node.value, ast.Name)
-                    and node.value.id == "sampler"]
+            joins = []
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Attribute) or node.attr != "join":
+                    continue
+                receiver = node.value
+                if (isinstance(receiver, ast.Attribute)
+                        and receiver.attr == "path"):
+                    continue  # os.path.join is unrelated
+                if isinstance(receiver, ast.Constant):
+                    continue  # str.join is unrelated
+                joins.append(node)
             self.assertEqual(
-                len(refs), 1,
-                f"{fname}: exactly one sampler.join reference "
-                f"(aliasing and dead-code twins add references)")
-            calls = [node for node in ast.walk(tree)
-                     if isinstance(node, ast.Call) and node.func is refs[0]]
-            self.assertEqual(len(calls), 1,
+                len(joins), 1,
+                "exactly one join reference outside os.path/str "
+                "(receiver aliases, unbound calls, and dead twins "
+                "all add references)")
+            call = [node for node in ast.walk(tree)
+                    if isinstance(node, ast.Call) and node.func is joins[0]]
+            self.assertEqual(len(call), 1,
                              f"{fname}: the join reference must be the call")
-            self.assertEqual(calls[0].args, [],
+            self.assertEqual(call[0].args, [],
                              f"{fname}: the join must take no argument")
-            self.assertEqual(calls[0].keywords, [],
+            self.assertEqual(call[0].keywords, [],
                              f"{fname}: the join must take no keyword")
-            assigns = [node for node in ast.walk(tree)
-                       if isinstance(node, ast.Assign)
-                       and any(isinstance(t, ast.Name) and t.id == "sampler"
-                               for t in node.targets)]
-            for assign in assigns:
-                value = assign.value
+            for kind in ("getattr", "setattr", "delattr"):
+                for node in ast.walk(tree):
+                    if (isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Name)
+                            and node.func.id == kind and node.args
+                            and isinstance(node.args[0], ast.Name)
+                            and node.args[0].id == "sampler"):
+                        self.fail(f"{fname}: {kind}(sampler, ...) could "
+                                  f"hide a timed join")
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Attribute)
+                        and isinstance(node.value, ast.Name)
+                        and node.value.id == "sampler"
+                        and node.attr.startswith("__")):
+                    self.fail(f"{fname}: sampler.__dunder__ indirection "
+                              f"could hide a timed join")
+            for node in ast.walk(tree):
+                if isinstance(node, ast.AnnAssign):
+                    targets = [node.target]
+                elif isinstance(node, ast.Assign):
+                    targets = list(node.targets)
+                else:
+                    continue
+                if not any(isinstance(t, ast.Name) and t.id == "sampler"
+                           for t in targets):
+                    continue
+                value = node.value
                 is_thread = (isinstance(value, ast.Call)
                              and isinstance(value.func, ast.Attribute)
-                             and value.func.attr == "Thread")
+                             and value.func.attr == "Thread"
+                             and isinstance(value.func.value, ast.Name)
+                             and value.func.value.id == "threading")
                 is_none = (isinstance(value, ast.Constant)
                            and value.value is None)
                 self.assertTrue(
                     is_thread or is_none,
-                    f"{fname}: sampler may only be None or a Thread "
-                    f"(a wrapper object could hide a timed join)")
-            getters = [node for node in ast.walk(tree)
-                       if isinstance(node, ast.Call)
-                       and isinstance(node.func, ast.Name)
-                       and node.func.id == "getattr"
-                       and node.args
-                       and isinstance(node.args[0], ast.Name)
-                       and node.args[0].id == "sampler"]
-            self.assertEqual(getters, [],
-                             f"{fname}: getattr(sampler, ...) could hide "
-                             f"a timed join")
+                    f"{fname}: sampler may only bind None or a literal "
+                    f"threading.Thread (a wrapper could hide a timed join)")
 
     def test_run_once_joins_before_reading_its_samples(self):
         import contextlib
@@ -1615,20 +1638,22 @@ class WorkDirForeignContentTest(unittest.TestCase):
 
         def flaky_rmtree(path, ignore_errors=False, onerror=None,
                          onexc=None, **kwargs):
-            # Emulates every swallow idiom the delete failure can be
-            # hidden behind: ignore_errors, a quiet onerror/onexc
-            # handler, or an outer try/except (which the raised
-            # exception defeats on its own).
+            # Emulates every demonstrated swallow idiom: the
+            # ignore_errors spelling, a quiet onerror/onexc handler,
+            # and outer except handlers of selective classes (a
+            # plain OSError defeats handlers that re-raise only
+            # PermissionError). The declared residual is a deliberate
+            # handler catching exactly this class — named floor.
             if ignore_errors:
                 return real_rmtree(path, **kwargs)
             if onerror is not None or onexc is not None:
                 return real_rmtree(path, **kwargs)
-            raise PermissionError("simulated wipe denial")
+            raise OSError("simulated wipe denial")
 
         with tempfile.TemporaryDirectory() as work:
             target = os.path.join(work, "perf-rust-0")
             _bench.prepare_engine_dirs(target)
             with mock.patch.object(_bench.shutil, "rmtree", flaky_rmtree):
-                with self.assertRaisesRegex(PermissionError,
+                with self.assertRaisesRegex(OSError,
                                             "simulated wipe denial"):
                     _bench.prepare_engine_dirs(target, may_wipe={target})
