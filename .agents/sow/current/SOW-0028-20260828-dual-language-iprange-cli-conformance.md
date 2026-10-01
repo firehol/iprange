@@ -22373,14 +22373,14 @@ dispositioned, not silently carried:
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Fifty-seven recorded
+- **Elapsed-ratio cross-session spread.** Fifty-eight recorded
   ceiling sessions (the first thirty at the pre-rebuild binaries, the rest at the rebuilt pair — each population byte-identical within itself; r2 1.159 — elapsed
   and RSS only, no CPU recorded; r4 1.244; each of rounds 5 through
   19; the round-32 through round-46 rebinds at 1.184, 1.193, 1.266,
   1.203, 1.186, 1.241, 1.234, 1.203, 1.193, 1.108, and 1.248; the
   two round-36 runs; and the later restage rebinds — round-89 1.247,
   round-92 1.050, round-94 1.170, round-96 1.305, round-98 1.188,
-  round-100 1.172, round-102 1.192, round-105 1.262, round-107 1.225, round-109 1.324, round-111 1.167, round-119 1.225, round-131 1.160, round-137 1.239, round-139 1.385, round-141 1.223, round-143 1.142, round-145 1.333, round-147 1.271, round-149 1.218, round-151 1.199, round-153 1.148, round-155 1.176, round-157 1.231, round-159 1.214, round-161 1.202, round-163 1.104) span
+  round-100 1.172, round-102 1.192, round-105 1.262, round-107 1.225, round-109 1.324, round-111 1.167, round-119 1.225, round-131 1.160, round-137 1.239, round-139 1.385, round-141 1.223, round-143 1.142, round-145 1.333, round-147 1.271, round-149 1.218, round-151 1.199, round-153 1.148, round-155 1.176, round-157 1.231, round-159 1.214, round-161 1.202, round-163 1.104, round-165 1.140) span
   elapsed
   **0.916–1.586** — wall-clock noise that crosses both 1.0 and the
   1.3x bound: the round-7 session measured 1.586 on an idle machine
@@ -22391,7 +22391,7 @@ dispositioned, not silently carried:
   (61.1–75.6 s, one round ~21% over its median; observed values
   preserved at `evidence/m5-ceiling/superseded-round36-run1.md`);
   it was immediately re-run. The CPU ratio over every session that
-  recorded CPU spans 1.869–2.276 (the round-137 restage measured
+  recorded CPU spans 1.820–2.276 (the round-137 restage measured
   2.276, the current maximum; the round-96 2.001 was the previous
   maximum) — a narrower span than elapsed, which swings by
   more than 70% relative. The verdict owner (SOW-0030) must treat
