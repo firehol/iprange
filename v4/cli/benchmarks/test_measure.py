@@ -1149,10 +1149,171 @@ class WorkDirNormalizationTest(unittest.TestCase):
                 argv = ["run.py", "--rust", "/bin/true", "--go", "/bin/true",
                         "--scenario", "s.json", "--mode", "perf",
                         "--rounds", "1", "--work-dir", "relwork"]
+                import contextlib
+                import io
                 with mock.patch.object(sys, "argv", argv), \
                         mock.patch.object(_bench, "run_perf", fake_run_perf), \
                         mock.patch.object(_bench, "load_scenario",
-                                          lambda path: {"name": "s"}):
+                                          lambda path: {"name": "s"}), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    rc = _bench.main()
+            finally:
+                os.chdir(previous)
+        self.assertEqual(rc, 0)
+        self.assertTrue(os.path.isabs(captured["work"]))
+        self.assertEqual(captured["work"], os.path.join(cwd, "relwork"))
+
+
+class RetryWorkDirStateTest(unittest.TestCase):
+    """r139 panel: the retry must restart from clean work dirs
+    (operations/parity/portability F1). A stateful engine leaves
+    artifacts behind (a created database, a published name); a retry
+    that sees them fails with a product-looking error."""
+
+    def test_the_retry_restarts_from_clean_work_dirs(self):
+        state = {"n": 0}
+
+        def fake(binary, name, scenario, work, calls, peer=None,
+                 engine_work=None, peak=None, prepare=False, deferred=None):
+            state["n"] += 1
+            marker = os.path.join(engine_work, "artifact")
+            if os.path.exists(marker):
+                raise AssertionError(
+                    f"{name}: engine_work not reset between attempts")
+            with open(marker, "w", encoding="utf-8") as stream:
+                stream.write("leftover engine state")
+            if state["n"] > 2:  # only the retry's legs yield samples
+                peak["observed"] = True
+                peak["kib"] = 1234
+            return []
+
+        scenario = {"name": "retry-detect",
+                    "write": [{"method": "iprange.v1.system.describe",
+                               "compare": []}]}
+        with tempfile.TemporaryDirectory() as work, \
+                mock.patch.object(_bench, "run_engine", fake):
+            report = _bench.run_perf(scenario, "rust", "go", 1, work)
+        self.assertEqual(state["n"], 4, "exactly one retry")
+        self.assertEqual(report["rust"]["child_max_rss_kib"]["median"], 1234)
+
+
+class RetryEvidenceTest(unittest.TestCase):
+    """r139 panel (tester F1): the discarded attempt must leak no
+    elapsed sample, and the retry must be named on stderr — the two
+    claims the earlier detectors left unasserted."""
+
+    def _scenario(self):
+        return {"name": "retry-detect",
+                "write": [{"method": "iprange.v1.system.describe",
+                           "compare": []}]}
+
+    def _fake_engine(self, fill):
+        def fake(binary, name, scenario, work, calls, peer=None,
+                 engine_work=None, peak=None, prepare=False, deferred=None):
+            if peak is not None:
+                fill(peak)
+            return []
+        return fake
+
+    def test_the_discarded_attempt_leaks_no_elapsed(self):
+        import contextlib
+        import io
+        # Scripted clock: attempt 1's legs span 100 s each; the
+        # retry's legs span 1 s each. Only the retry's spans may
+        # reach the report (elapsed is SOW-0030's binding quantity).
+        script = [0.0, 100.0, 100.0, 200.0, 300.0, 301.0, 301.0, 302.0]
+        state = {"i": 0, "n": 0}
+
+        def clock():
+            index = state["i"]
+            state["i"] += 1
+            return script[index] if index < len(script) else 400.0 + index
+
+        def fill(peak):
+            state["n"] += 1
+            if state["n"] > 2:
+                peak["observed"] = True
+                peak["kib"] = 1234
+
+        with tempfile.TemporaryDirectory() as work, \
+                mock.patch.object(_bench, "run_engine",
+                                  self._fake_engine(fill)), \
+                mock.patch("time.perf_counter", clock), \
+                contextlib.redirect_stderr(io.StringIO()):
+            report = _bench.run_perf(self._scenario(), "rust", "go", 1, work)
+        for label in ("rust", "go"):
+            span = report[label]["elapsed_seconds"]
+            self.assertEqual(span["median"], 1.0,
+                             "the failed attempt's elapsed must be discarded")
+            self.assertEqual(span["max"], 1.0, label)
+
+    def test_the_retry_is_named_on_stderr(self):
+        import contextlib
+        import io
+        state = {"n": 0}
+
+        def fill(peak):
+            state["n"] += 1
+            if state["n"] > 2:
+                peak["observed"] = True
+                peak["kib"] = 1234
+
+        captured = io.StringIO()
+        with tempfile.TemporaryDirectory() as work, \
+                mock.patch.object(_bench, "run_engine",
+                                  self._fake_engine(fill)), \
+                contextlib.redirect_stderr(captured):
+            _bench.run_perf(self._scenario(), "rust", "go", 1, work)
+        self.assertIn("re-measured once", captured.getvalue(),
+                      "the retry must be disclosed on stderr")
+
+    def test_an_observed_miss_prints_no_retry_note(self):
+        import contextlib
+        import io
+
+        def fill(peak):
+            peak["observed"] = True
+
+        captured = io.StringIO()
+        with tempfile.TemporaryDirectory() as work, \
+                mock.patch.object(_bench, "run_engine",
+                                  self._fake_engine(fill)), \
+                contextlib.redirect_stderr(captured):
+            with self.assertRaisesRegex(AssertionError, "no RSS sample"):
+                _bench.run_perf(self._scenario(), "rust", "go", 1, work)
+        self.assertNotIn("re-measured once", captured.getvalue(),
+                         "a real defect must not be disclosed as a retry")
+
+
+class WorkDirCorrectnessModeTest(unittest.TestCase):
+    """r139 panel (tester F2): the work-dir normalization is the
+    entry-point's, not the perf branch's — correctness mode must
+    receive the same absolute work dir."""
+
+    def test_correctness_mode_receives_the_normalized_work_dir(self):
+        import contextlib
+        import io
+        captured = {}
+
+        def fake_run_engine(binary, name, scenario, work, calls, peer=None,
+                            engine_work=None, peak=None, prepare=True,
+                            deferred=None):
+            captured["work"] = work
+            return []
+
+        with tempfile.TemporaryDirectory() as cwd:
+            os.makedirs(os.path.join(cwd, "relwork"))
+            previous = os.getcwd()
+            os.chdir(cwd)
+            try:
+                argv = ["run.py", "--rust", "/bin/true", "--go", "/bin/true",
+                        "--scenario", "s.json", "--work-dir", "relwork"]
+                with mock.patch.object(sys, "argv", argv), \
+                        mock.patch.object(_bench, "run_engine",
+                                          fake_run_engine), \
+                        mock.patch.object(_bench, "load_scenario",
+                                          lambda path: {"name": "s"}), \
+                        contextlib.redirect_stdout(io.StringIO()):
                     rc = _bench.main()
             finally:
                 os.chdir(previous)

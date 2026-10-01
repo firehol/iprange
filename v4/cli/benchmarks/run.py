@@ -515,6 +515,7 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
     # The call path is deadline-bounded like the frame reads: a peer
     # that never answers fails at 120 s instead of hanging the proof
     # (SilentPeerTest pins the mechanism).
+    sampler = None
     if peak is not None and service is not None:
         # Performance mode samples the service child's VmHWM while it
         # runs; the sampler stops when the child exits. A cli-only run
@@ -569,6 +570,10 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
     # crash/stall sessions use close_forced and are the only exempt
     # class.
     exit_gate(name, service.proc.returncode if service is not None else 0)
+    if sampler is not None:
+        # The round's peak flags are read after this call returns:
+        # join the sampler so no late fold can race those reads.
+        sampler.join(timeout=2)
     return result
 
 
@@ -648,6 +653,11 @@ def run_perf(scenario, rust, go, rounds, work):
         # round, so the timed window never carries fixture or
         # generator work.
         for engine_work in (rust_work, go_work):
+            # Every attempt starts from a clean directory: a retried
+            # round must not see the discarded attempt's engine
+            # artifacts (a created database or published name would
+            # make the retry fail with a product-looking error).
+            shutil.rmtree(engine_work, ignore_errors=True)
             os.makedirs(engine_work, exist_ok=True)
             write_fixtures(scenario, engine_work)
             write_generated(scenario, engine_work)
