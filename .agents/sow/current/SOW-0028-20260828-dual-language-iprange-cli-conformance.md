@@ -22343,8 +22343,9 @@ dispositioned, not silently carried:
   `v4/cli/benchmarks/run.py`), so an in-flight failure is no longer
   replaced by the gate message, and ordinary close no longer exempts
   an already-dead peer (`v4/cli/run.py`: an answered-then-died-nonzero
-  peer fails ordinary close; exemptions are explicit `close_forced`
-  only). The turn-3 demand — correct or explicitly supersede these
+  peer fails ordinary close; exemptions are explicit
+  (`close_forced`/forced teardown, broken-exchange cleanup, and
+  poisoned sessions). The turn-3 demand — correct or explicitly supersede these
   statements — is satisfied by this note.
 - **Exit-gate exception masking.** `run_engine`'s `finally` gate raises
   unconditionally, replacing an in-flight `run_calls` failure with the
@@ -22550,8 +22551,9 @@ see the external-control change record below).
 2026-10-01).** The milestone's final external gate reviewer is **sol**
 (gpt-6.1-sol, xhigh reasoning) via the `external-reviewers` runner,
 replacing astra (prior session `ca3adec1808d4ffa87380361edc214c9`,
-last verdict turn-3 NEEDS CHANGES — all nine findings fixed in rounds
-131-135; turn texts staged at `.local/shared/evidence/m5-astra/`, with
+last verdict turn-3 NEEDS CHANGES — all nine findings fixed across rounds
+131-139 (the shutdown-description limb landed in round-139 — see
+the turn-3 record's annotation); turn texts staged at `.local/shared/evidence/m5-astra/`, with
 turn-1/turn-2 raws salvaged from the runner session dir into the same
 gate directory). The interim seven-role panels are internal subagents
 on the lead's own model; durable records must not name the lead's
@@ -22561,12 +22563,16 @@ after salvage via the REVIEWS.md three-check procedure (ownership,
 inactivity, preservation), at each restage and gate close — first pass
 2026-10-01 removed the accumulated pi-era scratch (~22 GB). The
 milestone run is autonomous: restage → r137 panel → sol gate → full
-battery → close, push pre-authorized by REVIEWS.md. Cost names (the
-test-execution policy's pre-run disclosure): the 13-log restage
-bundle runs ~35-40 wall-minutes (sweep ~10-15 min, ceiling ~12-20
-min, the remaining logs ~5-8 min) and the full battery ~200 s plus
-engine builds; every future restage or battery is named with its
-cost before it runs.
+battery → close, push pre-authorized by REVIEWS.md. Cost names (measured baseline at
+the b24c73c2 restage; the earlier ~35-40 wall-minute names were
+wrong by 3-45x and are corrected here): the 13-log restage bundle
+~10 wall-minutes (sweep ~20 s; ceiling ~8.3 min — its ~6-minute
+timed part plus corpus generation, consistent with the validation
+plan's own name; the remaining logs ~1.5 min). A loaded host
+inflates wall time (the r137-era restages measured 35-45 min under
+load 15+). The full battery adds engine builds to its ~200 s of
+tracks; every future restage or battery is named with its cost
+before it runs.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
