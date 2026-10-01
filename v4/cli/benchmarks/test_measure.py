@@ -1578,6 +1578,34 @@ class SamplerJoinTest(unittest.TestCase):
                     f"{fname}: sampler may only bind None or a literal "
                     f"threading.Thread (a wrapper could hide a timed join)")
             self.assertGreaterEqual(seen, 1, f"{fname}: sampler binds")
+            self.assertIn(
+                "assert_sampler_dead(sampler)" if fname == "run_engine"
+                else "sampler.is_alive()", source,
+                f"{fname}: the join's runtime postcondition must be "
+                f"called at the join site")
+
+    def test_the_join_postcondition_catches_an_expiring_join(self):
+        # The runtime boundary (r161 panel): any join that returns
+        # while the sampler still runs must fail loudly — this is
+        # what closes the whole indirection class, whatever spell a
+        # forgery takes.
+        import threading
+        import time
+
+        def slow_fold(pid):
+            time.sleep(1.2)
+            return 4096
+
+        sampler = threading.Thread(
+            target=slow_fold, args=(0,), daemon=True)
+        sampler.start()
+        time.sleep(0.1)
+        sampler.join(timeout=0.05)  # the forged expiring join
+        with self.assertRaisesRegex(AssertionError,
+                                    "sampler thread still alive"):
+            _bench.assert_sampler_dead(sampler)
+        sampler.join()
+        _bench.assert_sampler_dead(sampler)  # the honest end state passes
 
     def test_run_once_joins_before_reading_its_samples(self):
         import contextlib

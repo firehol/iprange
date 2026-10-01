@@ -489,6 +489,20 @@ def exit_gate(name, status):
         raise AssertionError(f"{name} exited {status}")
 
 
+def assert_sampler_dead(sampler):
+    """Runtime postcondition for the join contract (r161 panel): the
+    sampler thread must be dead when the join returns. A forged or
+    expiring timed join returns with the thread still folding and
+    fails here; a join that waited long enough delivers the correct
+    semantics. This closes the indirection class at runtime — the
+    source pin is a regression detector, not the boundary."""
+    if sampler.is_alive():
+        raise AssertionError(
+            "sampler thread still alive after join: the join must "
+            "outlive the sampler (a timed or forged join races the "
+            "sample reads)")
+
+
 def prepare_engine_dirs(*engine_works, may_wipe=frozenset()):
     """Start engine directories clean without ever deleting foreign
     content. Deletion authority is in-memory provenance only: a
@@ -616,9 +630,13 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
         # The round's peak flags are read after this call returns:
         # join the sampler so no late fold can race those reads. The
         # join is unconditional — the loop provably exits when the
-        # child is reaped, so a timed join would only reopen the
-        # race silently (r141 panel).
+        # child is reaped. The runtime postcondition closes the
+        # whole indirection class (r161 panel): any join spelling
+        # that returns while the sampler still runs — a forged or
+        # expiring timed join — fails here loudly instead of racing
+        # the reads.
         sampler.join()
+        assert_sampler_dead(sampler)
     return result
 
 

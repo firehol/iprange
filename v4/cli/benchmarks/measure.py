@@ -179,7 +179,14 @@ def run_once(argv, stdin_bytes=None, cwd=None):
         # Unconditional join (r143 panel): a timed join falls
         # through silently and reopens the sample-classification
         # race; this sampler loop provably exits at child reaping.
+        # The runtime postcondition (r161 panel) closes the whole
+        # indirection class: any join returning while the sampler
+        # still runs fails loudly.
         sampler.join()
+        if sampler.is_alive():
+            raise AssertionError(
+                "sampler thread still alive after join: the join "
+                "must outlive the sampler")
     elapsed = time.perf_counter() - started
     if service.proc.returncode != 0:
         raise AssertionError(f"child exited {service.proc.returncode}: {argv[0]}")
