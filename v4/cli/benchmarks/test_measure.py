@@ -1374,25 +1374,58 @@ class SamplerJoinTest(unittest.TestCase):
         import ast
         import inspect
         import measure as measure_module
-        # AST pins (r147 panel): comments cannot forge a call node,
-        # and any argument — literal, positional, starred, keyword,
-        # or named constant — fails. Exactly one sampler.join() per
-        # function, so a dead-code decoy cannot carry a forged twin.
+        # AST pins (r147/r149 panels): comments cannot forge a call
+        # node, any argument form fails, and the deliberate
+        # indirection residuals — aliasing, getattr, rebinding the
+        # sampler — are closed by counting every `sampler.join`
+        # reference, every binding of `sampler`, and the absence of
+        # getattr on it.
         for module, fname in ((_bench, "run_engine"),
                               (measure_module, "run_once")):
             source = inspect.getsource(getattr(module, fname))
-            joins = [node for node in ast.walk(ast.parse(source))
-                     if isinstance(node, ast.Call)
-                     and isinstance(node.func, ast.Attribute)
-                     and node.func.attr == "join"
-                     and isinstance(node.func.value, ast.Name)
-                     and node.func.value.id == "sampler"]
-            self.assertEqual(len(joins), 1,
-                             f"{fname}: exactly one sampler.join() call")
-            self.assertEqual(joins[0].args, [],
+            tree = ast.parse(source)
+            refs = [node for node in ast.walk(tree)
+                    if isinstance(node, ast.Attribute)
+                    and node.attr == "join"
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "sampler"]
+            self.assertEqual(
+                len(refs), 1,
+                f"{fname}: exactly one sampler.join reference "
+                f"(aliasing and dead-code twins add references)")
+            calls = [node for node in ast.walk(tree)
+                     if isinstance(node, ast.Call) and node.func is refs[0]]
+            self.assertEqual(len(calls), 1,
+                             f"{fname}: the join reference must be the call")
+            self.assertEqual(calls[0].args, [],
                              f"{fname}: the join must take no argument")
-            self.assertEqual(joins[0].keywords, [],
+            self.assertEqual(calls[0].keywords, [],
                              f"{fname}: the join must take no keyword")
+            assigns = [node for node in ast.walk(tree)
+                       if isinstance(node, ast.Assign)
+                       and any(isinstance(t, ast.Name) and t.id == "sampler"
+                               for t in node.targets)]
+            for assign in assigns:
+                value = assign.value
+                is_thread = (isinstance(value, ast.Call)
+                             and isinstance(value.func, ast.Attribute)
+                             and value.func.attr == "Thread")
+                is_none = (isinstance(value, ast.Constant)
+                           and value.value is None)
+                self.assertTrue(
+                    is_thread or is_none,
+                    f"{fname}: sampler may only be None or a Thread "
+                    f"(a wrapper object could hide a timed join)")
+            getters = [node for node in ast.walk(tree)
+                       if isinstance(node, ast.Call)
+                       and isinstance(node.func, ast.Name)
+                       and node.func.id == "getattr"
+                       and node.args
+                       and isinstance(node.args[0], ast.Name)
+                       and node.args[0].id == "sampler"]
+            self.assertEqual(getters, [],
+                             f"{fname}: getattr(sampler, ...) could hide "
+                             f"a timed join")
 
     def test_run_once_joins_before_reading_its_samples(self):
         import contextlib
@@ -1580,10 +1613,15 @@ class WorkDirForeignContentTest(unittest.TestCase):
     def test_a_failed_wipe_raises_instead_of_swallowing(self):
         real_rmtree = shutil.rmtree
 
-        def flaky_rmtree(path, ignore_errors=False, **kwargs):
-            # Emulates the delete failure's own semantics: only the
-            # swallow form (ignore_errors) hides it.
+        def flaky_rmtree(path, ignore_errors=False, onerror=None,
+                         onexc=None, **kwargs):
+            # Emulates every swallow idiom the delete failure can be
+            # hidden behind: ignore_errors, a quiet onerror/onexc
+            # handler, or an outer try/except (which the raised
+            # exception defeats on its own).
             if ignore_errors:
+                return real_rmtree(path, **kwargs)
+            if onerror is not None or onexc is not None:
                 return real_rmtree(path, **kwargs)
             raise PermissionError("simulated wipe denial")
 

@@ -496,9 +496,11 @@ def prepare_engine_dirs(*engine_works, may_wipe=frozenset()):
     spawn-race retry's restart) may be wiped; any other pre-existing
     path is refused loudly and left untouched — `rust` and `go`
     collide with real directory names, so the runner never deletes
-    what it did not create in this process (r145 panel: no on-disk
-    marker can carry that authority — forged, stale, and symlinked
-    markers all defeat it). All paths are verified before any is
+    what it did not create in this process (the r145 panel named the
+    on-disk marker seam's forged, stale, and symlinked defeats and
+    offered hardened markers or refusal as remedies; this design
+    closes the class by removing the mechanism — a lead choice
+    strictly stronger than either). All paths are verified before any is
     touched, so a refusal has no side effects. The wipe is
     unconditional: a swallowed failure would resurrect the
     dirty-directory defect the wipe exists to close."""
