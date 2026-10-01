@@ -1692,11 +1692,22 @@ class SamplerJoinTest(unittest.TestCase):
         # A forged identity key must not silence the kernel check
         # (r169 panel): task-absent + oracle-alive is a disagreement
         # and refuses.
+        # The forged-key limb runs on an EXACT-CLASS sampler (the
+        # subclass form is refused earlier by the class gate — that
+        # gate has its own test above): a plain Thread whose key
+        # names a dead TID while it lives is a disagreement.
+        keyforger = threading.Thread(target=slow_fold, args=(0,))
+        keyforger.start()
+        keyforger._native_id = 999999999
+        with self.assertRaisesRegex(AssertionError,
+                                    "liveness disagrees"):
+            _bench.assert_sampler_dead(keyforger)
+        keyforger.join()
+        # A subclass (state-forgeable) is refused at the class gate.
         class KeyForger(threading.Thread):
             pass
         forger = KeyForger(target=slow_fold, args=(0,))
         forger.start()
-        forger._native_id = 999999999
         with self.assertRaisesRegex(AssertionError,
                                     "not an exact threading.Thread"):
             _bench.assert_sampler_dead(forger)

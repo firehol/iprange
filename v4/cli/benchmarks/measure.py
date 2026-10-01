@@ -22,9 +22,11 @@ import time
 # Thread.is_alive captured at import — a forged sampler cannot lie
 # to it.
 _REAL_THREAD_IS_ALIVE = threading.Thread.is_alive
+_REAL_THREAD_TYPE = threading.Thread
 _REAL_LISTDIR = __import__("os").listdir
 
-def assert_sampler_dead(sampler):
+def assert_sampler_dead(sampler, _alive=_REAL_THREAD_IS_ALIVE,
+                      _listdir=_REAL_LISTDIR):
     """Runtime postcondition for the join contract (r161/r163
     panels): the sampler thread must be dead when the join returns.
     The verdict comes from the FOREIGN oracle — the real
@@ -43,7 +45,7 @@ def assert_sampler_dead(sampler):
     # TID reuse (a dead thread's TID recycled by a later thread —
     # observed as a false positive on s5-exclude).
     import threading as _threading
-    if type(sampler) is not _threading.Thread:
+    if type(sampler) is not _REAL_THREAD_TYPE:
         raise AssertionError(
             "sampler is not an exact threading.Thread: subclass "
             "state cannot be verified")
@@ -52,7 +54,7 @@ def assert_sampler_dead(sampler):
         try:
             key = str(native_id)
             for _ in range(3):
-                in_tasks = key in _REAL_LISTDIR("/proc/self/task")
+                in_tasks = key in _listdir("/proc/self/task")
                 alive = _REAL_THREAD_IS_ALIVE(sampler)
                 if not in_tasks and not alive:
                     return  # both agree: dead
@@ -62,7 +64,7 @@ def assert_sampler_dead(sampler):
                         "join must outlive the sampler")
                 time.sleep(0.01)
             # Persisting single-sided disagreement:
-            in_tasks = key in _REAL_LISTDIR("/proc/self/task")
+            in_tasks = key in _listdir("/proc/self/task")
             alive = _REAL_THREAD_IS_ALIVE(sampler)
             if in_tasks and not alive:
                 return  # TID reuse: the thread object says dead
@@ -72,12 +74,12 @@ def assert_sampler_dead(sampler):
                 "trust the sampler's own bookkeeping")
         except OSError:
             pass  # no /proc: the disagreement rule cannot run
-    if _REAL_THREAD_IS_ALIVE(sampler):
+    if _alive(sampler):
         raise AssertionError(
             "sampler thread still alive after join: the join must "
             "outlive the sampler (a timed or forged join races the "
             "sample reads)")
-    if _REAL_THREAD_IS_ALIVE(sampler):
+    if _alive(sampler):
         raise AssertionError(
             "sampler thread still alive after join: the join must "
             "outlive the sampler (a timed or forged join races the "
