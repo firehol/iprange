@@ -1374,15 +1374,19 @@ class SamplerJoinTest(unittest.TestCase):
         import ast
         import inspect
         import measure as measure_module
-        # AST pins with a NAMED residual floor (r151 panel; the
-        # SOW decoy-floor convention): the demonstrated forgery
-        # lanes die — receiver aliases, unbound calls, dead twins,
-        # getattr/dunder/setattr indirection, wrapper bindings,
-        # typed rebindings, argument forms of every spelling. The
-        # declared floor is deliberate multi-part deception
-        # (e.g. operator.methodcaller) which no source pin can
-        # universally exclude; the behavioral late-fold detector is
-        # the semantic backstop (its 0.75 s margin is disclosed).
+        # AST regression detector for the join contract (r151/r153
+        # panels; the SOW decoy-floor convention). Accurate scope:
+        # it kills the literal-form violations the panels executed —
+        # argument forms, extra/receiver-aliased references, dead
+        # twins, wrapper/typed/tuple/walrus rebindings, and
+        # reflection through getattr/dunder/setattr/vars — but it is
+        # NOT a security boundary. The DECLARED floor: module-level
+        # shadowing (e.g. rebinding `threading` outside the
+        # function), aliased builtins bound outside it, and
+        # operator.methodcaller-and-kin shapes — the pin examines
+        # one function's source only. The behavioral late-fold
+        # detector is the semantic backstop (0.75 s margin
+        # disclosed).
         for module, fname in ((_bench, "run_engine"),
                               (measure_module, "run_once")):
             source = inspect.getsource(getattr(module, fname))
@@ -1393,8 +1397,10 @@ class SamplerJoinTest(unittest.TestCase):
                     continue
                 receiver = node.value
                 if (isinstance(receiver, ast.Attribute)
-                        and receiver.attr == "path"):
-                    continue  # os.path.join is unrelated
+                        and receiver.attr == "path"
+                        and isinstance(receiver.value, ast.Name)
+                        and receiver.value.id == "os"):
+                    continue  # os.path.join is unrelated (exact form)
                 if isinstance(receiver, ast.Constant):
                     continue  # str.join is unrelated
                 joins.append(node)
@@ -1411,33 +1417,54 @@ class SamplerJoinTest(unittest.TestCase):
                              f"{fname}: the join must take no argument")
             self.assertEqual(call[0].keywords, [],
                              f"{fname}: the join must take no keyword")
-            for kind in ("getattr", "setattr", "delattr"):
-                for node in ast.walk(tree):
-                    if (isinstance(node, ast.Call)
-                            and isinstance(node.func, ast.Name)
-                            and node.func.id == kind and node.args
-                            and isinstance(node.args[0], ast.Name)
-                            and node.args[0].id == "sampler"):
-                        self.fail(f"{fname}: {kind}(sampler, ...) could "
-                                  f"hide a timed join")
+            reflection = ("getattr", "setattr", "delattr", "vars",
+                          "__import__")
             for node in ast.walk(tree):
-                if (isinstance(node, ast.Attribute)
-                        and isinstance(node.value, ast.Name)
-                        and node.value.id == "sampler"
-                        and node.attr.startswith("__")):
-                    self.fail(f"{fname}: sampler.__dunder__ indirection "
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name)
+                        and node.func.id in reflection):
+                    continue
+                sanctioned = (node.func.id == "getattr" and node.args
+                              and isinstance(node.args[0], ast.Name)
+                              and node.args[0].id == "service")
+                if not sanctioned:
+                    self.fail(f"{fname}: {node.func.id}(...) reflection "
                               f"could hide a timed join")
+                if (isinstance(node, ast.Attribute)
+                        and node.attr.startswith("__")
+                        and node.attr.endswith("__")):
+                    self.fail(f"{fname}: dunder indirection could hide "
+                              f"a timed join")
+                if (isinstance(node, ast.Name) and node.id in
+                        ("getattr", "threading")
+                        and isinstance(node.ctx, ast.Store)):
+                    self.fail(f"{fname}: rebinding {node.id} hides calls")
+            def store_names(target):
+                if isinstance(target, ast.Name):
+                    yield target.id
+                elif isinstance(target, (ast.Tuple, ast.List)):
+                    for element in target.elts:
+                        yield from store_names(element)
+                elif isinstance(target, ast.Starred):
+                    yield from store_names(target.value)
+            bindings = []
             for node in ast.walk(tree):
                 if isinstance(node, ast.AnnAssign):
-                    targets = [node.target]
+                    bindings.append((node.target, node.value))
                 elif isinstance(node, ast.Assign):
-                    targets = list(node.targets)
-                else:
+                    for target in node.targets:
+                        bindings.append((target, node.value))
+                elif isinstance(node, ast.NamedExpr):
+                    bindings.append((node.target, node.value))
+                elif isinstance(node, (ast.AugAssign, ast.For)):
+                    bindings.append((node.target
+                                     if isinstance(node, ast.AugAssign)
+                                     else node.target, None))
+            seen = 0
+            for target, value in bindings:
+                if "sampler" not in set(store_names(target)):
                     continue
-                if not any(isinstance(t, ast.Name) and t.id == "sampler"
-                           for t in targets):
-                    continue
-                value = node.value
+                seen += 1
                 is_thread = (isinstance(value, ast.Call)
                              and isinstance(value.func, ast.Attribute)
                              and value.func.attr == "Thread"
@@ -1449,6 +1476,7 @@ class SamplerJoinTest(unittest.TestCase):
                     is_thread or is_none,
                     f"{fname}: sampler may only bind None or a literal "
                     f"threading.Thread (a wrapper could hide a timed join)")
+            self.assertGreaterEqual(seen, 1, f"{fname}: sampler binds")
 
     def test_run_once_joins_before_reading_its_samples(self):
         import contextlib
@@ -1632,6 +1660,18 @@ class WorkDirForeignContentTest(unittest.TestCase):
             self.assertFalse(os.path.exists(good),
                              "the verified path must not be created "
                              "when a sibling is refused")
+
+    def test_a_swallowed_wipe_fails_the_postcondition(self):
+        with tempfile.TemporaryDirectory() as work:
+            target = os.path.join(work, "perf-rust-0")
+            _bench.prepare_engine_dirs(target)
+            # A no-op rmtree: any call-path swallow leaves the path,
+            # and the postcondition fails loudly.
+            with mock.patch.object(_bench.shutil, "rmtree", lambda *a, **k: None):
+                with self.assertRaisesRegex(AssertionError,
+                                            "wipe did not remove"):
+                    _bench.prepare_engine_dirs(target, may_wipe={target})
+            self.assertTrue(os.path.exists(target))
 
     def test_a_failed_wipe_raises_instead_of_swallowing(self):
         real_rmtree = shutil.rmtree

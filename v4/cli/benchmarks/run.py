@@ -516,6 +516,14 @@ def prepare_engine_dirs(*engine_works, may_wipe=frozenset()):
     for engine_work in engine_works:
         if os.path.exists(engine_work):
             shutil.rmtree(engine_work)
+        if os.path.exists(engine_work):
+            # Postcondition: the wipe contract is self-enforcing.
+            # Any swallow (ignore_errors, a quiet handler, an outer
+            # except) leaves the path behind and fails here loudly
+            # instead of resurrecting the dirty-directory defect.
+            raise AssertionError(
+                f"wipe did not remove {engine_work}: refusing to "
+                f"continue with state this run did not create clean")
         os.makedirs(engine_work, exist_ok=True)
 
 
