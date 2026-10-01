@@ -364,6 +364,13 @@ Binding details recorded from user decisions 2026-09-16:
   `.local/<role>/HEARTBEAT` in its sandbox so the lead can see progress or
   silence from outside. Time/thinking budgets belong in every dispatch
   brief, not in ad-hoc instructions.
+- Records conventions (binding, the lead's wave records): a wave
+  header says "every blocking finding fixed" or enumerates the
+  fixed set — never a bare "all fixed" over a panel with carried
+  findings; a "complete enumeration" claim carries the
+  reports-as-exhaustive disclaimer; a claimed fix carries its
+  detecting test (staged evidence) or an explicit disposition; and
+  a claim's grades cite the filed grades, noting any lead re-grade.
 - Severity conventions (binding): **P0** corruption/crash/breach; **P1**
   wrong behavior on valid input, or an explicitly claimed contract with no
   detecting test; **P2** contract/records/measurable-performance defects,

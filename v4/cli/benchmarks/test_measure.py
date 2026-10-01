@@ -1370,24 +1370,29 @@ class SamplerJoinTest(unittest.TestCase):
         self.assertEqual(report["rust"]["child_max_rss_kib"]["median"], 4096)
         self.assertEqual(report["go"]["child_max_rss_kib"]["median"], 4096)
 
-    def test_both_joins_are_unconditional_line_form_calls(self):
+    def test_both_joins_are_unconditional_no_arg_calls(self):
+        import ast
         import inspect
-        import re
         import measure as measure_module
-        # Line-form regex pins (r145 panel): a decoy comment, a
-        # positional call, or a timed join must not satisfy these.
+        # AST pins (r147 panel): comments cannot forge a call node,
+        # and any argument — literal, positional, starred, keyword,
+        # or named constant — fails. Exactly one sampler.join() per
+        # function, so a dead-code decoy cannot carry a forged twin.
         for module, fname in ((_bench, "run_engine"),
                               (measure_module, "run_once")):
             source = inspect.getsource(getattr(module, fname))
-            self.assertRegex(
-                source, re.compile(r"^\s+sampler\.join\(\)\s*$", re.M),
-                f"{fname} must join its sampler unconditionally")
-            self.assertNotRegex(
-                source, re.compile(r"join\(\s*timeout"),
-                f"{fname}: a timed join falls through silently")
-            self.assertNotRegex(
-                source, re.compile(r"join\(\s*\d"),
-                f"{fname}: a positional timeout is still a timed join")
+            joins = [node for node in ast.walk(ast.parse(source))
+                     if isinstance(node, ast.Call)
+                     and isinstance(node.func, ast.Attribute)
+                     and node.func.attr == "join"
+                     and isinstance(node.func.value, ast.Name)
+                     and node.func.value.id == "sampler"]
+            self.assertEqual(len(joins), 1,
+                             f"{fname}: exactly one sampler.join() call")
+            self.assertEqual(joins[0].args, [],
+                             f"{fname}: the join must take no argument")
+            self.assertEqual(joins[0].keywords, [],
+                             f"{fname}: the join must take no keyword")
 
     def test_run_once_joins_before_reading_its_samples(self):
         import contextlib
@@ -1425,9 +1430,10 @@ class SamplerJoinTest(unittest.TestCase):
 
 
 class CorrectnessWorkDirStateTest(unittest.TestCase):
-    """portability-r141 F1: a reused --work-dir restarts clean in
-    correctness mode too (the same-failure search over the perf
-    path's retry fix)."""
+    """portability-r141 F1 via the r145 refusal contract: a reused
+    --work-dir is refused with the honest message (never a
+    misattributed engine error, never a delete) — the same-failure
+    search over the perf path's retry fix."""
 
     def test_a_reused_work_dir_is_refused_not_cleaned(self):
         import contextlib
@@ -1472,11 +1478,11 @@ class CorrectnessWorkDirStateTest(unittest.TestCase):
 
 
 class WorkDirForeignContentTest(unittest.TestCase):
-    """r143 panel P1: the clean-restart wipe must never delete
-    foreign content. `rust` and `go` collide with real directory
-    names (--work-dir v4 would target source trees); a pre-existing
-    path without the harness ownership marker is refused loudly and
-    left untouched."""
+    """r143/r145 panels: the runner must never delete foreign
+    content. `rust` and `go` collide with real directory names
+    (--work-dir v4 would target source trees); deletion authority is
+    in-memory provenance only, so every pre-existing path is refused
+    loudly and left untouched."""
 
     def test_foreign_content_is_refused_not_deleted(self):
         import contextlib
@@ -1527,6 +1533,8 @@ class WorkDirForeignContentTest(unittest.TestCase):
             self.assertTrue(os.path.isdir(target))
 
     def test_a_symlinked_engine_path_is_refused(self):
+        # Latent platform step (Windows symlink privilege); no
+        # Windows leg runs this suite (recorded decision 2026-09-17).
         with tempfile.TemporaryDirectory() as work:
             real = os.path.join(work, "real")
             os.makedirs(real)
@@ -1568,3 +1576,21 @@ class WorkDirForeignContentTest(unittest.TestCase):
             self.assertFalse(os.path.exists(good),
                              "the verified path must not be created "
                              "when a sibling is refused")
+
+    def test_a_failed_wipe_raises_instead_of_swallowing(self):
+        real_rmtree = shutil.rmtree
+
+        def flaky_rmtree(path, ignore_errors=False, **kwargs):
+            # Emulates the delete failure's own semantics: only the
+            # swallow form (ignore_errors) hides it.
+            if ignore_errors:
+                return real_rmtree(path, **kwargs)
+            raise PermissionError("simulated wipe denial")
+
+        with tempfile.TemporaryDirectory() as work:
+            target = os.path.join(work, "perf-rust-0")
+            _bench.prepare_engine_dirs(target)
+            with mock.patch.object(_bench.shutil, "rmtree", flaky_rmtree):
+                with self.assertRaisesRegex(PermissionError,
+                                            "simulated wipe denial"):
+                    _bench.prepare_engine_dirs(target, may_wipe={target})
