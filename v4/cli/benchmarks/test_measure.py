@@ -1593,6 +1593,42 @@ class SamplerJoinTest(unittest.TestCase):
                 f"{fname}: the join's runtime postcondition must be "
                 f"called at the join site")
 
+    def test_run_engine_call_site_fails_loudly_on_an_expiring_join(self):
+        # The second wiring property (operations/parity r165): the
+        # run_engine call site — the live measurement path — must
+        # fail loudly under an expiring join exactly like run_once.
+        import contextlib
+        import io
+        import time as _time
+
+        def slow_fold(pid):
+            _time.sleep(0.75)
+            return 4096
+
+        scenario = {"name": "wiring-engine",
+                    "write": [{"method": "iprange.v1.system.describe",
+                               "params": {},
+                               "compare": []}]}
+        with tempfile.TemporaryDirectory() as work:
+            stub = os.path.join(work, "wiring_engine_stub")
+            inner = os.path.join(_HERE, "stub_engine.py")
+            with open(stub, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_EXIT'] = '0'\n"
+                    f"os.execv({inner!r}, [{inner!r}] + sys.argv[1:])\n")
+            os.chmod(stub, 0o755)
+            with mock.patch("threading.Thread.join",
+                            lambda self, timeout=None: None), \
+                    mock.patch.object(_bench, "child_hwm_kib", slow_fold), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaisesRegex(
+                        AssertionError, "sampler thread still alive"):
+                    _bench.run_engine(stub, "rust", scenario, work,
+                                      scenario["write"],
+                                      peak={"kib": 0, "observed": False})
+
     def test_the_call_sites_fail_loudly_on_an_expiring_join(self):
         # The behavioral wiring property (operations-r163): with a
         # fold slower than the join, the REAL call sites must fail
@@ -1656,6 +1692,16 @@ class SamplerJoinTest(unittest.TestCase):
             _bench.assert_sampler_dead(sampler)
         sampler.join()
         _bench.assert_sampler_dead(sampler)  # the honest end state passes
+        # A lying subclass (overridden is_alive) is refused before
+        # the oracle is even asked.
+        class Liar(threading.Thread):
+            def is_alive(self):
+                return False
+        liar = Liar(target=slow_fold, args=(0,))
+        liar.start()
+        with self.assertRaisesRegex(AssertionError, "not a plain"):
+            _bench.assert_sampler_dead(liar)
+        liar.join()
 
     def test_run_once_joins_before_reading_its_samples(self):
         import contextlib

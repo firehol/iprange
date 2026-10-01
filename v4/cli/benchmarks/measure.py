@@ -188,6 +188,11 @@ def run_once(argv, stdin_bytes=None, cwd=None):
         # indirection class: any join returning while the sampler
         # still runs fails loudly.
         sampler.join()
+        if (not isinstance(sampler, threading.Thread)
+                or type(sampler).is_alive is not threading.Thread.is_alive):
+            raise AssertionError(
+                "sampler is not a plain threading.Thread: its "
+                "liveness cannot be verified by the foreign oracle")
         if _REAL_THREAD_IS_ALIVE(sampler):
             raise AssertionError(
                 "sampler thread still alive after join: the join "

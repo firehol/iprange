@@ -503,6 +503,12 @@ def assert_sampler_dead(sampler):
     verdict). A forged or expiring timed join fails loudly; a join
     that waited long enough delivers the correct semantics. The
     source pin is a regression detector, not the boundary."""
+    import threading as _threading
+    if (not isinstance(sampler, _threading.Thread)
+            or type(sampler).is_alive is not _threading.Thread.is_alive):
+        raise AssertionError(
+            "sampler is not a plain threading.Thread: its liveness "
+            "cannot be verified by the foreign oracle")
     if _REAL_THREAD_IS_ALIVE(sampler):
         raise AssertionError(
             "sampler thread still alive after join: the join must "
