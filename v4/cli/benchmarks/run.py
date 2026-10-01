@@ -489,7 +489,6 @@ def exit_gate(name, status):
         raise AssertionError(f"{name} exited {status}")
 
 
-_REAL_THREAD_IS_ALIVE = __import__("threading").Thread.is_alive
 
 
 def prepare_engine_dirs(*engine_works, may_wipe=frozenset()):

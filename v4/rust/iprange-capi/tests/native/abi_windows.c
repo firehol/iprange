@@ -135,6 +135,8 @@ int main(int argc, char **argv)
         error = NULL;
         CHECK(iprange_v4_abi1_writer_close(meta_writer, &report, &error) ==
               IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(iprange_v4_abi1_writer_destroy(meta_writer, &error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
         CHECK(report != NULL);
         CHECK(iprange_v4_abi1_report_destroy(report, &error) ==
               IPRANGE_V4_ABI1_STATUS_OK);

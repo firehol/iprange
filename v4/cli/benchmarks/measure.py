@@ -55,7 +55,7 @@ def assert_sampler_dead(sampler, _alive=_REAL_THREAD_IS_ALIVE,
             key = str(native_id)
             for _ in range(3):
                 in_tasks = key in _listdir("/proc/self/task")
-                alive = _REAL_THREAD_IS_ALIVE(sampler)
+                alive = _alive(sampler)
                 if not in_tasks and not alive:
                     return  # both agree: dead
                 if in_tasks and alive:
@@ -65,7 +65,7 @@ def assert_sampler_dead(sampler, _alive=_REAL_THREAD_IS_ALIVE,
                 time.sleep(0.01)
             # Persisting single-sided disagreement:
             in_tasks = key in _listdir("/proc/self/task")
-            alive = _REAL_THREAD_IS_ALIVE(sampler)
+            alive = _alive(sampler)
             if in_tasks and not alive:
                 return  # TID reuse: the thread object says dead
             raise AssertionError(
@@ -74,11 +74,6 @@ def assert_sampler_dead(sampler, _alive=_REAL_THREAD_IS_ALIVE,
                 "trust the sampler's own bookkeeping")
         except OSError:
             pass  # no /proc: the disagreement rule cannot run
-    if _alive(sampler):
-        raise AssertionError(
-            "sampler thread still alive after join: the join must "
-            "outlive the sampler (a timed or forged join races the "
-            "sample reads)")
     if _alive(sampler):
         raise AssertionError(
             "sampler thread still alive after join: the join must "

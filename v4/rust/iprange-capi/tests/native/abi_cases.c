@@ -1270,6 +1270,8 @@ static int check_fixture(const char *corpus, const char *slice, const char *slic
         }
         CHECK(iprange_v4_abi1_cursor_close(cursor, &cursor_error) ==
               IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(iprange_v4_abi1_cursor_destroy(cursor, &cursor_error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
     }
     if (kind_code == 0) {
         CHECK(check_direct(reader, ranges, count, gaps) == 0);
