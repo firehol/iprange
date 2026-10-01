@@ -1381,12 +1381,11 @@ class SamplerJoinTest(unittest.TestCase):
         # twins, wrapper/typed/tuple/walrus rebindings, and
         # reflection through getattr/dunder/setattr/vars — but it is
         # NOT a security boundary. The DECLARED floor: module-level
-        # shadowing (e.g. rebinding `threading` outside the
-        # function), aliased builtins bound outside it, and
-        # operator.methodcaller-and-kin shapes — the pin examines
-        # one function's source only. The behavioral late-fold
-        # detector is the semantic backstop (0.75 s margin
-        # disclosed).
+        # shadowing, operator.methodcaller-and-kin shapes, and a
+        # deliberately CONDITIONAL join (the unconditionality claim
+        # describes this code, not a property the pin proves). The
+        # behavioral late-fold detector is the semantic backstop
+        # (0.75 s margin disclosed).
         for module, fname in ((_bench, "run_engine"),
                               (measure_module, "run_once")):
             source = inspect.getsource(getattr(module, fname))
@@ -1496,15 +1495,35 @@ class SamplerJoinTest(unittest.TestCase):
                         if not sanctioned:
                             self.fail(f"{fname}: {name}(...) reflection "
                                       f"could hide a timed join")
-                if (isinstance(node, ast.Attribute)
-                        and node.attr.startswith("__")
-                        and node.attr.endswith("__")):
-                    self.fail(f"{fname}: dunder indirection could hide "
+                if (isinstance(node, ast.Attribute)):
+                    if node.attr.startswith("__") and node.attr.endswith("__"):
+                        self.fail(f"{fname}: dunder indirection could hide "
+                                  f"a timed join")
+                    if (node.attr in banned
+                            and isinstance(node.ctx, ast.Load)):
+                        self.fail(f"{fname}: qualified reference "
+                                  f"{node.attr} could hide a timed join")
+                if (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name)
+                        and node.func.id in ("globals", "locals")):
+                    self.fail(f"{fname}: globals()/locals() could hide "
                               f"a timed join")
+                if (isinstance(node, ast.Subscript)
+                        and isinstance(node.ctx, ast.Store)
+                        and isinstance(node.slice, ast.Constant)
+                        and node.slice.value in ("threading", "getattr",
+                                                 "sampler")):
+                    self.fail(f"{fname}: subscript store of a protected "
+                              f"name could hide a timed join")
                 if (isinstance(node, ast.Name) and node.id in
                         ("getattr", "threading")
                         and isinstance(node.ctx, ast.Store)):
                     self.fail(f"{fname}: rebinding {node.id} hides calls")
+                for string_bind in (getattr(node, "name", None),):
+                    if (isinstance(string_bind, str)
+                            and string_bind in ("getattr", "threading")):
+                        self.fail(f"{fname}: rebinding {string_bind} "
+                                  f"hides calls")
             def store_names(target):
                 if isinstance(target, str):
                     yield target
