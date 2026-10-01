@@ -239,8 +239,10 @@ def run_cli(binary, name, call, work, peak=None):
                 # creation).
                 if peak is not None:
                     current = child_hwm_kib(proc.pid)
-                    if current is not None and current > peak["kib"]:
-                        peak["kib"] = current
+                    if current is not None:
+                        peak["observed"] = True
+                        if current > peak["kib"]:
+                            peak["kib"] = current
                 for key, _mask in selector.select(0.001):
                     sink = chunks if key.fd == proc.stdout.fileno() else err_chunks
                     try:
@@ -520,8 +522,10 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
         def sample_peak():
             while service.proc.poll() is None:
                 current = child_hwm_kib(service.proc.pid)
-                if current is not None and current > peak["kib"]:
-                    peak["kib"] = current
+                if current is not None:
+                    peak["observed"] = True
+                    if current > peak["kib"]:
+                        peak["kib"] = current
                 time.sleep(0.001)
         sampler = threading.Thread(target=sample_peak, daemon=True)
         sampler.start()
@@ -615,6 +619,15 @@ def run_perf(scenario, rust, go, rounds, work):
     round: wall time, the child's peak RSS (VmHWM sampled while
     alive, one accumulator per round), then actual min/median/max
     over the rounds, and the Go/Rust ratio as the honest ≤1.3x input.
+
+    RSS-sample spawn race: a child that completes before the
+    sampler's first read leaves the round's peak mechanically
+    unrecoverable (a zombie carries no VmHWM). A round whose sample
+    is missing from a child the sampler never observed is
+    re-measured exactly once, the failed attempt's data discarded
+    and the retry named on stderr. A missing sample from a child
+    that WAS observed is a real defect and refuses at once; two
+    consecutive misses refuse as before.
     """
     write_calls = scenario.get("write", scenario.get("calls", []))
     # Legacy CLI steps execute inside the timed write phase: they are
@@ -623,7 +636,12 @@ def run_perf(scenario, rust, go, rounds, work):
     read_calls = scenario.get("read", [])
     elapsed = {"rust": [], "go": []}
     peaks = {"rust": [], "go": []}
-    for round_index in range(rounds):
+
+    def run_round(round_index):
+        """One engine-order-alternated round: un-timed input
+        preparation, the timed legs, the deferred oracles, and the
+        cross-engine comparison. All state is round-local so a
+        spawn-race retry can discard the whole attempt."""
         rust_work = os.path.join(work, f"perf-rust-{round_index}")
         go_work = os.path.join(work, f"perf-go-{round_index}")
         # Un-timed input preparation: one directory per engine per
@@ -633,7 +651,9 @@ def run_perf(scenario, rust, go, rounds, work):
             os.makedirs(engine_work, exist_ok=True)
             write_fixtures(scenario, engine_work)
             write_generated(scenario, engine_work)
-        round_peak = {"rust": {"kib": 0}, "go": {"kib": 0}}
+        round_peak = {"rust": {"kib": 0, "observed": False},
+                      "go": {"kib": 0, "observed": False}}
+        round_elapsed = {"rust": [], "go": []}
         deferred = []
 
         def timed(label, binary, name, calls, engine_work, peer=None, extend=False):
@@ -646,9 +666,9 @@ def run_perf(scenario, rust, go, rounds, work):
             # A cross-open read joins its engine's round: the round's
             # elapsed is that engine's write plus read time.
             if extend:
-                elapsed[label][-1] += span
+                round_elapsed[label][-1] += span
             else:
-                elapsed[label].append(span)
+                round_elapsed[label].append(span)
             return observations
 
         # Alternate the engine order each round (run-order-correlated
@@ -686,17 +706,35 @@ def run_perf(scenario, rust, go, rounds, work):
         # observation pairing — a wrong answer fails the perf run.
         for check in deferred:
             check()
-        for label in ("rust", "go"):
-            if round_peak[label]["kib"] <= 0:
-                raise AssertionError(
-                    f"{label} round {round_index}: no RSS sample was "
-                    f"observed for the round")
-            peaks[label].append(round_peak[label]["kib"])
+        missing = [label for label in ("rust", "go")
+                   if round_peak[label]["kib"] <= 0]
+        if missing:
+            return round_elapsed, round_peak, missing
         mismatches = compare(scenario, rust_obs + rust_reads, go_obs + go_reads)
         if mismatches:
             raise AssertionError(
                 f"{scenario['name']} round {round_index}: "
                 + "; ".join(mismatches))
+        return round_elapsed, round_peak, []
+
+    for round_index in range(rounds):
+        for attempt in (0, 1):
+            round_elapsed, round_peak, missing = run_round(round_index)
+            if not missing:
+                break
+            unobserved = all(not round_peak[label].get("observed")
+                             for label in missing)
+            if attempt == 1 or not unobserved:
+                raise AssertionError(
+                    f"{missing[0]} round {round_index}: no RSS sample was "
+                    f"observed for the round")
+            print(
+                f"note: {', '.join(missing)} round {round_index}: the RSS "
+                f"sampler never observed the child (spawn race); the round "
+                f"is re-measured once", file=sys.stderr)
+        for label in ("rust", "go"):
+            elapsed[label].extend(round_elapsed[label])
+            peaks[label].append(round_peak[label]["kib"])
     report = {"scenario": scenario["name"], "rounds": rounds}
     for label in ("rust", "go"):
         times = elapsed[label]
@@ -733,7 +771,11 @@ def main():
             return fail(f"{label} is not an absolute executable: {path}")
     scenario = load_scenario(args.scenario)
     own_work = args.work_dir is None
-    work = args.work_dir or tempfile.mkdtemp(prefix="iprange-bench-")
+    # A work dir names harness-cwd-relative $WORK paths while the
+    # engine runs with cwd=work_dir: normalize once at the entry so a
+    # relative --work-dir cannot split the two views.
+    work = (os.path.abspath(args.work_dir) if args.work_dir
+            else tempfile.mkdtemp(prefix="iprange-bench-"))
     os.makedirs(work, exist_ok=True)
     if args.mode == "perf":
         if args.rounds < 1:

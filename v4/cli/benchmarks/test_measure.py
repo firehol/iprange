@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -1054,3 +1055,107 @@ class EngineOrderAlternationTest(unittest.TestCase):
                       "run_perf must alternate engine order by round")
         self.assertEqual(source.count("round_index % 2"), 2,
                          "both the write leg and the read leg must alternate")
+
+
+class RssSpawnRaceRetryTest(unittest.TestCase):
+    """r137: the RSS-sample spawn race (performance-r137 F1). A child
+    that completes before the sampler's first read leaves the round's
+    peak mechanically unrecoverable. A round whose sample is missing
+    from a child the sampler never observed is re-measured exactly
+    once, the failed attempt discarded; a miss from an observed child
+    is a real defect and refuses at once; two consecutive misses
+    refuse as before (the guard's detector power is unchanged)."""
+
+    def _scenario(self):
+        return {"name": "retry-detect",
+                "write": [{"method": "iprange.v1.system.describe",
+                           "compare": []}]}
+
+    def _fake_engine(self, fill):
+        calls = []
+
+        def fake(binary, name, scenario, work, calls_arg, peer=None,
+                 engine_work=None, peak=None, prepare=False, deferred=None):
+            calls.append(name)
+            if peak is not None:
+                fill(peak)
+            return []
+
+        fake.calls = calls
+        return fake
+
+    def test_a_spawn_race_round_is_remeasured_once(self):
+        state = {"n": 0}
+
+        def fill(peak):
+            state["n"] += 1
+            if state["n"] > 2:  # only the retry's legs yield samples
+                peak["observed"] = True
+                peak["kib"] = 1234
+
+        fake = self._fake_engine(fill)
+        with tempfile.TemporaryDirectory() as work, \
+                mock.patch.object(_bench, "run_engine", fake):
+            report = _bench.run_perf(self._scenario(), "rust", "go", 1, work)
+        self.assertEqual(len(fake.calls), 4,
+                         "exactly one retry: two legs, then two more")
+        for label in ("rust", "go"):
+            stats = report[label]["child_max_rss_kib"]
+            self.assertEqual(stats["median"], 1234, label)
+            self.assertEqual(stats["min"], 1234,
+                             "the failed attempt's data must be discarded")
+
+    def test_two_consecutive_misses_refuse_after_one_retry(self):
+        fake = self._fake_engine(lambda peak: None)
+        with tempfile.TemporaryDirectory() as work, \
+                mock.patch.object(_bench, "run_engine", fake):
+            with self.assertRaisesRegex(AssertionError, "no RSS sample"):
+                _bench.run_perf(self._scenario(), "rust", "go", 1, work)
+        self.assertEqual(len(fake.calls), 4,
+                         "the retry is bounded to exactly one")
+
+    def test_an_observed_child_miss_refuses_without_retry(self):
+        def fill(peak):
+            # The sampler saw the child but folded no sample: a real
+            # defect, not the spawn race — no retry may mask it.
+            peak["observed"] = True
+
+        fake = self._fake_engine(fill)
+        with tempfile.TemporaryDirectory() as work, \
+                mock.patch.object(_bench, "run_engine", fake):
+            with self.assertRaisesRegex(AssertionError, "no RSS sample"):
+                _bench.run_perf(self._scenario(), "rust", "go", 1, work)
+        self.assertEqual(len(fake.calls), 2, "a real miss must not retry")
+
+
+class WorkDirNormalizationTest(unittest.TestCase):
+    """r137: relative --work-dir (operations-r137 F3). $WORK paths are
+    harness-cwd-relative while the engine runs with cwd=work_dir; the
+    entry point normalizes the work dir once so the two views cannot
+    split."""
+
+    def test_relative_work_dir_is_normalized(self):
+        captured = {}
+
+        def fake_run_perf(scenario, rust, go, rounds, work):
+            captured["work"] = work
+            return {"scenario": scenario["name"], "rounds": rounds}
+
+        with tempfile.TemporaryDirectory() as cwd:
+            os.makedirs(os.path.join(cwd, "relwork"))
+            previous = os.getcwd()
+            os.chdir(cwd)
+            try:
+                argv = ["run.py", "--rust", "/bin/true", "--go", "/bin/true",
+                        "--scenario", "s.json", "--mode", "perf",
+                        "--rounds", "1", "--work-dir", "relwork"]
+                with mock.patch.object(sys, "argv", argv), \
+                        mock.patch.object(_bench, "run_perf", fake_run_perf), \
+                        mock.patch.object(_bench, "load_scenario",
+                                          lambda path: {"name": "s"}):
+                    rc = _bench.main()
+            finally:
+                os.chdir(previous)
+        self.assertEqual(rc, 0)
+        self.assertTrue(os.path.isabs(captured["work"]))
+        self.assertEqual(captured["work"], os.path.join(cwd, "relwork"))
