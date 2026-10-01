@@ -1418,18 +1418,30 @@ class SamplerJoinTest(unittest.TestCase):
             self.assertEqual(call[0].keywords, [],
                              f"{fname}: the join must take no keyword")
             reflection = ("getattr", "setattr", "delattr", "vars",
-                          "__import__")
+                          "__import__", "getattribute", "__getattribute__",
+                          "__getattr__", "__setattr__")
             for node in ast.walk(tree):
-                if not (isinstance(node, ast.Call)
-                        and isinstance(node.func, ast.Name)
-                        and node.func.id in reflection):
-                    continue
-                sanctioned = (node.func.id == "getattr" and node.args
-                              and isinstance(node.args[0], ast.Name)
-                              and node.args[0].id == "service")
-                if not sanctioned:
-                    self.fail(f"{fname}: {node.func.id}(...) reflection "
-                              f"could hide a timed join")
+                if isinstance(node, ast.Call):
+                    callee = node.func
+                    name = (callee.id if isinstance(callee, ast.Name)
+                            else callee.attr if isinstance(callee, ast.Attribute)
+                            else "")
+                    if name in reflection:
+                        default_ok = (
+                            len(node.args) == 2
+                            or (len(node.args) == 3
+                                and isinstance(node.args[2], ast.Constant)
+                                and node.args[2].value is None))
+                        sanctioned = (
+                            name == "getattr" and node.args
+                            and isinstance(node.args[0], ast.Name)
+                            and node.args[0].id == "service"
+                            and default_ok
+                            and isinstance(node.args[1], ast.Constant)
+                            and node.args[1].value == "_raw_stdin")
+                        if not sanctioned:
+                            self.fail(f"{fname}: {name}(...) reflection "
+                                      f"could hide a timed join")
                 if (isinstance(node, ast.Attribute)
                         and node.attr.startswith("__")
                         and node.attr.endswith("__")):
@@ -1460,6 +1472,20 @@ class SamplerJoinTest(unittest.TestCase):
                     bindings.append((node.target
                                      if isinstance(node, ast.AugAssign)
                                      else node.target, None))
+                elif isinstance(node, ast.With):
+                    for item in node.items:
+                        if item.optional_vars is not None:
+                            bindings.append((item.optional_vars, None))
+                elif isinstance(node, ast.ExceptHandler):
+                    if node.name is not None:
+                        bindings.append((ast.Name(id=node.name,
+                                                  ctx=ast.Store()), None))
+                elif isinstance(node, (ast.comprehension, ast.MatchAs)):
+                    target = (node.target
+                              if isinstance(node, ast.comprehension)
+                              else node.name)
+                    if target is not None:
+                        bindings.append((target, None))
             seen = 0
             for target, value in bindings:
                 if "sampler" not in set(store_names(target)):
