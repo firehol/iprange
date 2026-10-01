@@ -80,6 +80,21 @@ against the lead's process.
   adversarial self-review findings with dispositions. Read it before the
   code; the code is what you attack.
 
+## Deliberation budget (binding, REVIEWS.md § Reviewer work rules)
+
+You have no ambient clock or turn counter: self-administer the protocol.
+Run `date +%s` once at start (T0) and before every numbered probe, printing
+elapsed in the probe line. Per-probe budget is 4 minutes with up to five
+attempts per incident (initial attempt + four retries) to prove one alleged
+defect. If the fifth attempt has not produced the concrete scenario, report
+the item as `INCONCLUSIVE AND POTENTIALLY WRONG: <what was tried, what
+remains unproven>` — a valid terminal outcome that does not count toward
+the verdict and carries no severity. A total wall budget applies; at 70% of
+it, stop probing and write the report with what you have. A probe whose
+intent repeats an already-executed probe's intent is a stop-and-report
+condition. Append one heartbeat line per probe boundary
+(`[probe k/N attempt m elapsed Ts verdict]`) to `.local/<role>/HEARTBEAT`.
+
 ## Severity conventions (project-wide, binding)
 
 - **P0** — data corruption, crash, or security breach.
@@ -102,8 +117,11 @@ the rest of the class across the chunk, not just the cited line.
 Start with `Reviewed HEAD: <hash>`; then the verdict (PASS / FAIL); then
 numbered findings, each with severity, file:line, trigger, expected,
 actual, material impact, causal path. Non-blocking notes (P3) go last.
-Write your full report to `.local/<role>/report.md` AND return a compact
-version in your reply.
+End with a separate `## Inconclusive and potentially wrong` section
+holding every item the five-attempt budget could not prove (what was
+tried, what remains unproven, what would settle it); such items never
+make a round FAIL. Write your full report to `.local/<role>/report.md`
+AND return a compact version in your reply.
 
 You stay open across review rounds: later messages are **delta re-reviews**
 of the same role at a new HEAD. Verify that previously claimed fixes

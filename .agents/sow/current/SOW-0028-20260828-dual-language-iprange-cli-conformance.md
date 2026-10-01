@@ -22378,8 +22378,9 @@ dispositioned, not silently carried:
   (61.1–75.6 s, one round ~21% over its median; observed values
   preserved at `evidence/m5-ceiling/superseded-round36-run1.md`);
   it was immediately re-run. The CPU ratio over every session that
-  recorded CPU spans 1.869–2.001 (the round-96 restage measured
-  2.001, the current maximum) — tight while elapsed swings by
+  recorded CPU spans 1.869–2.276 (the round-137 restage measured
+  2.276, the current maximum; the round-96 2.001 was the previous
+  maximum) — a narrower span than elapsed, which swings by
   more than 70% relative. The verdict owner (SOW-0030) must treat
   elapsed wall-clock as run-condition-dominated: no session's
   elapsed ratio is evidence of an engine difference, and the
