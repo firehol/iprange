@@ -489,28 +489,32 @@ def exit_gate(name, status):
         raise AssertionError(f"{name} exited {status}")
 
 
-HARNESS_OWNED_MARKER = ".iprange-bench-owned"
-
-
-def prepare_engine_dir(engine_work):
-    """Start an engine directory clean without ever deleting foreign
-    content. Ownership is a sibling marker file, so it cannot pollute
-    the engine's own directory state. A pre-existing path without the
-    marker may hold user data — `rust` and `go` collide with real
-    directory names — and is refused, never deleted (r143 panel P1).
-    The wipe is unconditional: a swallowed failure would resurrect
-    the dirty-directory defect the wipe exists to close."""
-    marker = engine_work + ".owned"
-    if os.path.exists(engine_work):
-        if not (os.path.isdir(engine_work) and os.path.isfile(marker)):
+def prepare_engine_dirs(*engine_works, may_wipe=frozenset()):
+    """Start engine directories clean without ever deleting foreign
+    content. Deletion authority is in-memory provenance only: a
+    directory this process created for an earlier attempt (the
+    spawn-race retry's restart) may be wiped; any other pre-existing
+    path is refused loudly and left untouched — `rust` and `go`
+    collide with real directory names, so the runner never deletes
+    what it did not create in this process (r145 panel: no on-disk
+    marker can carry that authority — forged, stale, and symlinked
+    markers all defeat it). All paths are verified before any is
+    touched, so a refusal has no side effects. The wipe is
+    unconditional: a swallowed failure would resurrect the
+    dirty-directory defect the wipe exists to close."""
+    for engine_work in engine_works:
+        if os.path.islink(engine_work):
             raise AssertionError(
-                f"refusing to touch {engine_work}: it exists but is not "
-                f"harness-owned (no {os.path.basename(marker)} sibling); "
-                f"remove it yourself if it is disposable scratch")
-        shutil.rmtree(engine_work)
-    os.makedirs(engine_work, exist_ok=True)
-    with open(marker, "w", encoding="utf-8") as stream:
-        stream.write("harness-owned engine directory\n")
+                f"refusing to touch {engine_work}: it is a symlink")
+        if os.path.exists(engine_work) and engine_work not in may_wipe:
+            raise AssertionError(
+                f"refusing to touch {engine_work}: it already exists "
+                f"and this run did not create it; remove it yourself "
+                f"if it is disposable scratch")
+    for engine_work in engine_works:
+        if os.path.exists(engine_work):
+            shutil.rmtree(engine_work)
+        os.makedirs(engine_work, exist_ok=True)
 
 
 def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None, peak=None,
@@ -678,13 +682,15 @@ def run_perf(scenario, rust, go, rounds, work):
         go_work = os.path.join(work, f"perf-go-{round_index}")
         # Un-timed input preparation: one directory per engine per
         # round, so the timed window never carries fixture or
-        # generator work.
+        # generator work. Every attempt starts from clean
+        # directories: a retried round must not see the discarded
+        # attempt's engine artifacts (a created database or published
+        # name would make the retry fail with a product-looking
+        # error). Only directories this process created may be wiped
+        # (the retry's own earlier attempt).
+        prepare_engine_dirs(rust_work, go_work, may_wipe=created_dirs)
+        created_dirs.update((rust_work, go_work))
         for engine_work in (rust_work, go_work):
-            # Every attempt starts from a clean directory: a retried
-            # round must not see the discarded attempt's engine
-            # artifacts (a created database or published name would
-            # make the retry fail with a product-looking error).
-            prepare_engine_dir(engine_work)
             write_fixtures(scenario, engine_work)
             write_generated(scenario, engine_work)
         round_peak = {"rust": {"kib": 0, "observed": False},
@@ -753,6 +759,7 @@ def run_perf(scenario, rust, go, rounds, work):
                 + "; ".join(mismatches))
         return round_elapsed, round_peak, []
 
+    created_dirs = set()
     for round_index in range(rounds):
         for attempt in (0, 1):
             round_elapsed, round_peak, missing = run_round(round_index)
@@ -826,13 +833,11 @@ def main():
     try:
         rust_work = os.path.join(work, "rust")
         go_work = os.path.join(work, "go")
-        # Clean restart for a reused work dir (portability-r141 F1):
-        # a second run over the same --work-dir must not see the
-        # first run's engine artifacts — the same misattribution the
-        # perf path's retry fix closes. Foreign content is refused,
-        # never deleted (r143 panel P1).
-        for engine_work in (rust_work, go_work):
-            prepare_engine_dir(engine_work)
+        # A reused work dir is refused, never cleaned (r145 panel):
+        # a second run over the same --work-dir fails with this exact
+        # message instead of the misattributed create/publish error,
+        # and nothing the run did not create is ever deleted.
+        prepare_engine_dirs(rust_work, go_work)
         write_calls = scenario.get("write", scenario.get("calls", []))
         write_calls = write_calls + scenario.get("cli", [])
         read_calls = scenario.get("read", [])

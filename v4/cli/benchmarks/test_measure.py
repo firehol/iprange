@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -1369,18 +1370,58 @@ class SamplerJoinTest(unittest.TestCase):
         self.assertEqual(report["rust"]["child_max_rss_kib"]["median"], 4096)
         self.assertEqual(report["go"]["child_max_rss_kib"]["median"], 4096)
 
-    def test_measure_run_once_joins_its_sampler_before_reading(self):
+    def test_both_joins_are_unconditional_line_form_calls(self):
         import inspect
+        import re
         import measure as measure_module
-        # Exact-form pins (r143 panel): any `.join(` text — a decoy
-        # or a timed join — must not satisfy this test.
+        # Line-form regex pins (r145 panel): a decoy comment, a
+        # positional call, or a timed join must not satisfy these.
         for module, fname in ((_bench, "run_engine"),
                               (measure_module, "run_once")):
             source = inspect.getsource(getattr(module, fname))
-            self.assertIn("sampler.join()", source,
-                          f"{fname} must join its sampler unconditionally")
-            self.assertNotIn("join(timeout", source,
-                             f"{fname}: a timed join falls through silently")
+            self.assertRegex(
+                source, re.compile(r"^\s+sampler\.join\(\)\s*$", re.M),
+                f"{fname} must join its sampler unconditionally")
+            self.assertNotRegex(
+                source, re.compile(r"join\(\s*timeout"),
+                f"{fname}: a timed join falls through silently")
+            self.assertNotRegex(
+                source, re.compile(r"join\(\s*\d"),
+                f"{fname}: a positional timeout is still a timed join")
+
+    def test_run_once_joins_before_reading_its_samples(self):
+        import contextlib
+        import io
+        import time
+
+        def slow_fold(pid):
+            time.sleep(0.75)
+            return 4096
+
+        def slow_cpu(pid):
+            time.sleep(0.75)
+            return 0.5
+
+        with tempfile.TemporaryDirectory() as work:
+            stub = os.path.join(work, "join_stub")
+            inner = os.path.join(_HERE, "stub_engine.py")
+            with open(stub, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_EXIT'] = '0'\n"
+                    f"os.execv({inner!r}, [{inner!r}] + sys.argv[1:])\n")
+            os.chmod(stub, 0o755)
+            request = json.dumps({"jsonrpc": "2.0", "id": 1,
+                                  "method": "iprange.v1.system.describe",
+                                  "params": {}}).encode()
+            with mock.patch("measure.child_hwm_kib", slow_fold), \
+                    mock.patch("measure.child_tree_cpu_seconds", slow_cpu), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                result = run_once([stub], stdin_bytes=request, cwd=work)
+        self.assertEqual(result["child_max_rss_kib"], 4096,
+                         "a late fold must be joined before the samples "
+                         "are read")
 
 
 class CorrectnessWorkDirStateTest(unittest.TestCase):
@@ -1388,7 +1429,7 @@ class CorrectnessWorkDirStateTest(unittest.TestCase):
     correctness mode too (the same-failure search over the perf
     path's retry fix)."""
 
-    def test_a_reused_work_dir_restarts_clean_in_correctness_mode(self):
+    def test_a_reused_work_dir_is_refused_not_cleaned(self):
         import contextlib
         import io
         calls = []
@@ -1397,12 +1438,9 @@ class CorrectnessWorkDirStateTest(unittest.TestCase):
                             engine_work=None, peak=None, prepare=True,
                             deferred=None):
             target = engine_work or os.path.join(work, name)
-            marker = os.path.join(target, "artifact")
-            if os.path.exists(marker):
-                raise AssertionError(
-                    f"{name}: engine state survived into a later run")
             os.makedirs(target, exist_ok=True)
-            with open(marker, "w", encoding="utf-8") as stream:
+            with open(os.path.join(target, "artifact"), "w",
+                      encoding="utf-8") as stream:
                 stream.write("engine artifact")
             calls.append(name)
             return []
@@ -1410,15 +1448,27 @@ class CorrectnessWorkDirStateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             argv = ["run.py", "--rust", "/bin/true", "--go", "/bin/true",
                     "--scenario", "s.json", "--work-dir", work]
-            for _ in range(2):  # the same work dir, two runs
-                with mock.patch.object(sys, "argv", argv), \
-                        mock.patch.object(_bench, "run_engine",
-                                          fake_run_engine), \
-                        mock.patch.object(_bench, "load_scenario",
-                                          lambda path: {"name": "s"}), \
-                        contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(_bench.main(), 0)
-        self.assertEqual(len(calls), 4, "two runs, two engine legs each")
+            with mock.patch.object(sys, "argv", argv), \
+                    mock.patch.object(_bench, "run_engine", fake_run_engine), \
+                    mock.patch.object(_bench, "load_scenario",
+                                      lambda path: {"name": "s"}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(_bench.main(), 0)
+            # A second run over the same work dir is refused with the
+            # honest message — never the misattributed engine error,
+            # and never a delete (r145 panel's refusal contract).
+            with mock.patch.object(sys, "argv", argv), \
+                    mock.patch.object(_bench, "run_engine", fake_run_engine), \
+                    mock.patch.object(_bench, "load_scenario",
+                                      lambda path: {"name": "s"}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(AssertionError,
+                                            "refusing to touch"):
+                    _bench.main()
+            self.assertTrue(os.path.exists(
+                os.path.join(work, "rust", "artifact")),
+                "the second run must leave the first run's state intact")
+        self.assertEqual(len(calls), 2, "one run, two engine legs")
 
 
 class WorkDirForeignContentTest(unittest.TestCase):
@@ -1453,18 +1503,68 @@ class WorkDirForeignContentTest(unittest.TestCase):
                     _bench.main()
             self.assertTrue(os.path.exists(precious),
                             "foreign content must survive a refused run")
-            self.assertFalse(os.path.exists(precious + ".owned"))
+            self.assertEqual(os.listdir(victim), ["userdata.txt"],
+                             "a refusal must leave the directory untouched")
 
-    def test_prepare_engine_dir_wipes_only_marker_owned_state(self):
+    def test_prepare_engine_dirs_wipes_only_process_owned_state(self):
         with tempfile.TemporaryDirectory() as work:
             target = os.path.join(work, "perf-rust-0")
-            _bench.prepare_engine_dir(target)
+            _bench.prepare_engine_dirs(target)
             with open(os.path.join(target, "artifact"), "w",
                       encoding="utf-8") as stream:
                 stream.write("engine state")
-            _bench.prepare_engine_dir(target)  # owned: wiped and remade
-            self.assertFalse(os.path.exists(os.path.join(target, "artifact")))
-            self.assertTrue(os.path.exists(target + ".owned"))
-            os.remove(target + ".owned")
+            # The retry's restart: this process created the directory,
+            # so it may be wiped and remade.
+            _bench.prepare_engine_dirs(target, may_wipe={target})
+            self.assertEqual(os.listdir(target), [])
+
+    def test_any_preexisting_path_is_refused_even_when_empty(self):
+        with tempfile.TemporaryDirectory() as work:
+            target = os.path.join(work, "rust")
+            os.makedirs(target)
             with self.assertRaisesRegex(AssertionError, "refusing to touch"):
-                _bench.prepare_engine_dir(target)
+                _bench.prepare_engine_dirs(target)
+            self.assertTrue(os.path.isdir(target))
+
+    def test_a_symlinked_engine_path_is_refused(self):
+        with tempfile.TemporaryDirectory() as work:
+            real = os.path.join(work, "real")
+            os.makedirs(real)
+            precious = os.path.join(real, "userdata.txt")
+            with open(precious, "w", encoding="utf-8") as stream:
+                stream.write("must survive")
+            link = os.path.join(work, "rust")
+            os.symlink(real, link)
+            with self.assertRaisesRegex(AssertionError, "refusing to touch"):
+                _bench.prepare_engine_dirs(link, may_wipe={link})
+            self.assertTrue(os.path.exists(precious))
+
+    def test_no_on_disk_state_grants_deletion_authority(self):
+        with tempfile.TemporaryDirectory() as work:
+            target = os.path.join(work, "rust")
+            os.makedirs(target)
+            precious = os.path.join(target, "userdata.txt")
+            with open(precious, "w", encoding="utf-8") as stream:
+                stream.write("content must survive any on-disk claim")
+            # Whatever files a user places alongside (old marker
+            # names included), a path this process did not create is
+            # refused — deletion authority is in-memory only.
+            for name in (target + ".owned", target + ".iprange-bench-owned"):
+                with open(name, "w", encoding="utf-8") as stream:
+                    stream.write("iprange-bench-owned-v1 1 2\n")
+                with self.assertRaisesRegex(AssertionError,
+                                            "refusing to touch"):
+                    _bench.prepare_engine_dirs(target)
+                os.remove(name)
+            self.assertTrue(os.path.exists(precious))
+
+    def test_a_refusal_has_no_side_effects(self):
+        with tempfile.TemporaryDirectory() as work:
+            good = os.path.join(work, "rust")
+            bad = os.path.join(work, "go")
+            os.makedirs(bad)
+            with self.assertRaisesRegex(AssertionError, "refusing to touch"):
+                _bench.prepare_engine_dirs(good, bad)
+            self.assertFalse(os.path.exists(good),
+                             "the verified path must not be created "
+                             "when a sibling is refused")
