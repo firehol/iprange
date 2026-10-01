@@ -22344,8 +22344,8 @@ dispositioned, not silently carried:
   replaced by the gate message, and ordinary close no longer exempts
   an already-dead peer (`v4/cli/run.py`: an answered-then-died-nonzero
   peer fails ordinary close; exemptions are explicit
-  (`close_forced`/forced teardown, broken-exchange cleanup, and
-  poisoned sessions). The turn-3 demand — correct or explicitly supersede these
+  (`close_forced`/forced teardown and broken-exchange cleanup;
+  poisoned sessions suppress the teardown raise). The turn-3 demand — correct or explicitly supersede these
   statements — is satisfied by this note.
 - **Exit-gate exception masking.** `run_engine`'s `finally` gate raises
   unconditionally, replacing an in-flight `run_calls` failure with the
@@ -22565,7 +22565,7 @@ inactivity, preservation), at each restage and gate close — first pass
 milestone run is autonomous: restage → r137 panel → sol gate → full
 battery → close, push pre-authorized by REVIEWS.md. Cost names (measured baseline at
 the b24c73c2 restage; the earlier ~35-40 wall-minute names were
-wrong by 3-45x and are corrected here): the 13-log restage bundle
+wrong by 1.4-45x and are corrected here): the 13-log restage bundle
 ~10 wall-minutes (sweep ~20 s; ceiling ~8.3 min — its ~6-minute
 timed part plus corpus generation, consistent with the validation
 plan's own name; the remaining logs ~1.5 min). A loaded host
