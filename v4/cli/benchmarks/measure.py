@@ -18,6 +18,11 @@ import sys
 import threading
 import time
 
+# Foreign oracle for the join postcondition (r163 panel): the real
+# Thread.is_alive captured at import — a forged sampler cannot lie
+# to it.
+_REAL_THREAD_IS_ALIVE = threading.Thread.is_alive
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from run import JsonRpcService  # noqa: E402
 
@@ -183,7 +188,7 @@ def run_once(argv, stdin_bytes=None, cwd=None):
         # indirection class: any join returning while the sampler
         # still runs fails loudly.
         sampler.join()
-        if sampler.is_alive():
+        if _REAL_THREAD_IS_ALIVE(sampler):
             raise AssertionError(
                 "sampler thread still alive after join: the join "
                 "must outlive the sampler")

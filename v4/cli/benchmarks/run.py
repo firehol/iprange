@@ -489,14 +489,21 @@ def exit_gate(name, status):
         raise AssertionError(f"{name} exited {status}")
 
 
+_REAL_THREAD_IS_ALIVE = __import__("threading").Thread.is_alive
+
+
 def assert_sampler_dead(sampler):
-    """Runtime postcondition for the join contract (r161 panel): the
-    sampler thread must be dead when the join returns. A forged or
-    expiring timed join returns with the thread still folding and
-    fails here; a join that waited long enough delivers the correct
-    semantics. This closes the indirection class at runtime — the
+    """Runtime postcondition for the join contract (r161/r163
+    panels): the sampler thread must be dead when the join returns.
+    The verdict comes from the FOREIGN oracle — the real
+    threading.Thread.is_alive captured at module import and called
+    unbound — so a forged object cannot lie about its own liveness
+    (an impostor that is not a real Thread raises here loudly; a
+    Thread subclass with an overridden is_alive gets the REAL
+    verdict). A forged or expiring timed join fails loudly; a join
+    that waited long enough delivers the correct semantics. The
     source pin is a regression detector, not the boundary."""
-    if sampler.is_alive():
+    if _REAL_THREAD_IS_ALIVE(sampler):
         raise AssertionError(
             "sampler thread still alive after join: the join must "
             "outlive the sampler (a timed or forged join races the "

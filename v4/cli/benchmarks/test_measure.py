@@ -1578,11 +1578,61 @@ class SamplerJoinTest(unittest.TestCase):
                     f"{fname}: sampler may only bind None or a literal "
                     f"threading.Thread (a wrapper could hide a timed join)")
             self.assertGreaterEqual(seen, 1, f"{fname}: sampler binds")
+            if fname == "run_engine":
+                post_calls = [node for node in ast.walk(tree)
+                              if isinstance(node, ast.Call)
+                              and isinstance(node.func, ast.Name)
+                              and node.func.id == "assert_sampler_dead"]
+                self.assertEqual(len(post_calls), 1,
+                                 "run_engine: the postcondition must be "
+                                 "CALLED exactly once at the join site "
+                                 "(a comment decoy is not a call)")
             self.assertIn(
                 "assert_sampler_dead(sampler)" if fname == "run_engine"
-                else "sampler.is_alive()", source,
+                else "_REAL_THREAD_IS_ALIVE(sampler)", source,
                 f"{fname}: the join's runtime postcondition must be "
                 f"called at the join site")
+
+    def test_the_call_sites_fail_loudly_on_an_expiring_join(self):
+        # The behavioral wiring property (operations-r163): with a
+        # fold slower than the join, the REAL call sites must fail
+        # loudly — dead-coding the postcondition or expiring the
+        # join are both caught here, whatever the source text says.
+        import contextlib
+        import io
+        import time as _time
+
+        def slow_fold(pid):
+            _time.sleep(0.75)
+            return 4096
+
+        def slow_cpu(pid):
+            _time.sleep(0.75)
+            return 0.5
+
+        with tempfile.TemporaryDirectory() as work:
+            stub = os.path.join(work, "wiring_stub")
+            inner = os.path.join(_HERE, "stub_engine.py")
+            with open(stub, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_EXIT'] = '0'\n"
+                    f"os.execv({inner!r}, [{inner!r}] + sys.argv[1:])\n")
+            os.chmod(stub, 0o755)
+            request = json.dumps({"jsonrpc": "2.0", "id": 1,
+                                  "method": "iprange.v1.system.describe",
+                                  "params": {}}).encode()
+            # The forged expiring join: the join returns while the
+            # sampler still folds.
+            with mock.patch("threading.Thread.join",
+                            lambda self, timeout=None: None), \
+                    mock.patch("measure.child_hwm_kib", slow_fold), \
+                    mock.patch("measure.child_tree_cpu_seconds", slow_cpu), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaisesRegex(
+                        AssertionError, "sampler thread still alive"):
+                    run_once([stub], stdin_bytes=request, cwd=work)
 
     def test_the_join_postcondition_catches_an_expiring_join(self):
         # The runtime boundary (r161 panel): any join that returns
