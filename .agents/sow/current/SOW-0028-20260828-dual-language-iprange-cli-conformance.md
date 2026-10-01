@@ -22601,6 +22601,24 @@ measured by construction). The full battery adds engine builds to its ~200 s of
 tracks; every future restage or battery is named with its cost
 before it runs.
 
+**Sol milestone gate (the external control, gpt-6.1-sol xhigh):
+turn 1 NEEDS CHANGES (2026-10-02) — its in-scope P2s (missing
+internal approval of the repair tree; exit-stage driver-status
+discipline; mutation-driver scratch isolation) were fixed and the
+seven-role approving re-review ran at the repaired tree (r173,
+findings recorded in the kit ledger); turn 2 NEEDS CHANGES — a
+new verified defect layer in the proof harness (13 P2 + 1 P1:
+close-failure loss in the parallel-feed proof, blocking stderr
+close, RSS-retry discarding correctness failures, ignored null
+expectations, IPv6 cardinality gaps in the C attestation,
+undecoded Windows corpus paths, a live thread abandoned at
+reservation-watch close, silent omission of turn-1 findings, and
+more; raw staged at the kit's evidence/m5-sol/). The milestone
+remains OPEN pending that cluster, sol turn 3, and the full
+battery. SOW-0030 owns the <=1.3x acceptance verdict (64
+recorded ceiling sessions; run-condition-dominated wall-clock
+spread disclosed).
+
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
 milestone stays open until the seven-role round approves the exact
