@@ -26,16 +26,16 @@ _REAL_THREAD_TYPE = threading.Thread
 _REAL_LISTDIR = __import__("os").listdir
 
 def assert_sampler_dead(sampler, _alive=_REAL_THREAD_IS_ALIVE,
-                      _listdir=_REAL_LISTDIR):
-    """Runtime postcondition for the join contract (r161/r163
+                      _listdir=_REAL_LISTDIR,
+                      _type=_REAL_THREAD_TYPE):
+    """Runtime postcondition for the join contract (r161-r173
     panels): the sampler thread must be dead when the join returns.
-    The verdict comes from the FOREIGN oracle — the real
-    threading.Thread.is_alive captured at module import and called
-    unbound — so a forged object cannot lie about its own liveness
-    (an impostor that is not a real Thread raises here loudly; a
-    Thread subclass with an overridden is_alive gets the REAL
-    verdict). A forged or expiring timed join fails loudly; a join
-    that waited long enough delivers the correct semantics. The
+    The oracles and the thread type are def-bound at import
+    (rebinding-immune); an exact-class gate refuses every subclass;
+    a forged or expiring timed join fails loudly. Named residual
+    floors (status.md entry 27): the fork-shaped channel; harness-
+    level tampering by trusted code; the TID-reuse amnesty assumes
+    the def-bound oracle is honest on an exact-class thread. The
     source pin is a regression detector, not the boundary."""
     # Exact-class + two-sided disagreement rule (r169/r171 panels):
     # only a plain, unmodified threading.Thread is trusted at all
@@ -44,8 +44,7 @@ def assert_sampler_dead(sampler, _alive=_REAL_THREAD_IS_ALIVE,
     # for the two honest races: the task-exit window after join, and
     # TID reuse (a dead thread's TID recycled by a later thread —
     # observed as a false positive on s5-exclude).
-    import threading as _threading
-    if type(sampler) is not _REAL_THREAD_TYPE:
+    if type(sampler) is not _type:
         raise AssertionError(
             "sampler is not an exact threading.Thread: subclass "
             "state cannot be verified")

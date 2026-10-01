@@ -1380,12 +1380,14 @@ class SamplerJoinTest(unittest.TestCase):
         # argument forms, extra/receiver-aliased references, dead
         # twins, wrapper/typed/tuple/walrus rebindings, and
         # reflection through getattr/dunder/setattr/vars — but it is
-        # NOT a security boundary. The DECLARED floor: module-level
-        # shadowing, operator.methodcaller-and-kin shapes, and a
-        # deliberately CONDITIONAL join (the unconditionality claim
-        # describes this code, not a property the pin proves). The
-        # behavioral late-fold detector is the semantic backstop
-        # (0.75 s margin disclosed).
+        # NOT a security boundary. Declared floors (entry 27): the
+        # fork-shaped channel; harness-level tampering by trusted
+        # code (including conditioning the postcondition call or
+        # capturing .join — the wiring property is observed through
+        # the mocked-expiry leg); operator.methodcaller-and-kin; a
+        # deliberately CONDITIONAL join. The runtime postcondition
+        # (assert_sampler_dead) is the boundary; this pin is a
+        # regression detector over enumerated forms.
         for module, fname in ((_bench, "run_engine"),
                               (measure_module, "run_once")):
             source = inspect.getsource(getattr(module, fname))
@@ -1703,6 +1705,29 @@ class SamplerJoinTest(unittest.TestCase):
                                     "liveness disagrees"):
             _bench.assert_sampler_dead(keyforger)
         keyforger.join()
+        # A subclass (state-forgeable) is refused at the class gate.
+        # Rebind-immunity (r173 panel): the def-bound oracles and
+        # thread type cannot be neutralized by module writes.
+        saved = (_bench if False else None)
+        import measure as _m
+        keep_alive, keep_listdir, keep_type = (
+            _m._REAL_THREAD_IS_ALIVE, _m._REAL_LISTDIR, _m._REAL_THREAD_TYPE)
+        try:
+            _m._REAL_THREAD_IS_ALIVE = lambda t: False
+            _m._REAL_LISTDIR = lambda p: []
+            class Shim:
+                pass
+            _m._REAL_THREAD_TYPE = Shim
+            plain = threading.Thread(target=slow_fold, args=(0,))
+            plain.start()
+            with self.assertRaisesRegex(AssertionError,
+                                        "sampler thread still alive"):
+                _bench.assert_sampler_dead(plain)
+            plain.join()
+        finally:
+            _m._REAL_THREAD_IS_ALIVE = keep_alive
+            _m._REAL_LISTDIR = keep_listdir
+            _m._REAL_THREAD_TYPE = keep_type
         # A subclass (state-forgeable) is refused at the class gate.
         class KeyForger(threading.Thread):
             pass

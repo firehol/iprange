@@ -22330,6 +22330,28 @@ update-ipsets was not pushed.
   rounds per engine, about six wall-minutes plus corpus generation;
   the final-revision `--tier gate` battery is about three wall-minutes.
 
+### Join-contract residuals (round-175, durable record)
+
+The proof harness's sampler-join contract and its named floors,
+recorded here so a fresh clone can recover them (the kit is
+gitignored): the runtime postcondition `assert_sampler_dead`
+(measure.py, shared by both sampler call sites) enforces that the
+sampler thread is dead when its join returns — exact-class gate
+(only a plain threading.Thread is trusted), def-bound oracles
+(rebinding-immune), and a two-sided disagreement rule against
+/proc/self/task with bounded grace for the honest exit and TID-
+reuse races. Named floors: (a) the fork-shaped channel — the
+sampler thread genuinely dead while the fold runs in another task;
+(b) harness-level tampering — the harness's own code rewriting its
+sampler's fields, the module registry, or conditioning the
+postcondition call (trusted code; the in-tree mutation drivers are
+the visible demonstration, not a threat model); (c) the TID-reuse
+amnesty assumes the def-bound oracle is honest on an exact-class
+thread. The source pins in test_measure.py are regression
+detectors over enumerated forms, not the boundary; the battery's
+limb attribution is a first-matching-phrase containment check over
+each arm's failure output.
+
 ### Documented residuals (round 18, recorded for the roles)
 
 These are properties of the harness that reviewer roles have carried as
