@@ -489,6 +489,30 @@ def exit_gate(name, status):
         raise AssertionError(f"{name} exited {status}")
 
 
+HARNESS_OWNED_MARKER = ".iprange-bench-owned"
+
+
+def prepare_engine_dir(engine_work):
+    """Start an engine directory clean without ever deleting foreign
+    content. Ownership is a sibling marker file, so it cannot pollute
+    the engine's own directory state. A pre-existing path without the
+    marker may hold user data — `rust` and `go` collide with real
+    directory names — and is refused, never deleted (r143 panel P1).
+    The wipe is unconditional: a swallowed failure would resurrect
+    the dirty-directory defect the wipe exists to close."""
+    marker = engine_work + ".owned"
+    if os.path.exists(engine_work):
+        if not (os.path.isdir(engine_work) and os.path.isfile(marker)):
+            raise AssertionError(
+                f"refusing to touch {engine_work}: it exists but is not "
+                f"harness-owned (no {os.path.basename(marker)} sibling); "
+                f"remove it yourself if it is disposable scratch")
+        shutil.rmtree(engine_work)
+    os.makedirs(engine_work, exist_ok=True)
+    with open(marker, "w", encoding="utf-8") as stream:
+        stream.write("harness-owned engine directory\n")
+
+
 def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None, peak=None,
                prepare=True, deferred=None):
     # Each engine gets its own directory. Sharing one directory makes the
@@ -660,8 +684,7 @@ def run_perf(scenario, rust, go, rounds, work):
             # round must not see the discarded attempt's engine
             # artifacts (a created database or published name would
             # make the retry fail with a product-looking error).
-            shutil.rmtree(engine_work, ignore_errors=True)
-            os.makedirs(engine_work, exist_ok=True)
+            prepare_engine_dir(engine_work)
             write_fixtures(scenario, engine_work)
             write_generated(scenario, engine_work)
         round_peak = {"rust": {"kib": 0, "observed": False},
@@ -806,9 +829,10 @@ def main():
         # Clean restart for a reused work dir (portability-r141 F1):
         # a second run over the same --work-dir must not see the
         # first run's engine artifacts — the same misattribution the
-        # perf path's retry fix closes.
+        # perf path's retry fix closes. Foreign content is refused,
+        # never deleted (r143 panel P1).
         for engine_work in (rust_work, go_work):
-            shutil.rmtree(engine_work, ignore_errors=True)
+            prepare_engine_dir(engine_work)
         write_calls = scenario.get("write", scenario.get("calls", []))
         write_calls = write_calls + scenario.get("cli", [])
         read_calls = scenario.get("read", [])

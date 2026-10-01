@@ -176,7 +176,10 @@ def run_once(argv, stdin_bytes=None, cwd=None):
             service.proc.wait(timeout=120)
     finally:
         service.close(allow_forced=True, broken_exchange=True)
-        sampler.join(timeout=5)
+        # Unconditional join (r143 panel): a timed join falls
+        # through silently and reopens the sample-classification
+        # race; this sampler loop provably exits at child reaping.
+        sampler.join()
     elapsed = time.perf_counter() - started
     if service.proc.returncode != 0:
         raise AssertionError(f"child exited {service.proc.returncode}: {argv[0]}")

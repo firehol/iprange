@@ -1372,9 +1372,15 @@ class SamplerJoinTest(unittest.TestCase):
     def test_measure_run_once_joins_its_sampler_before_reading(self):
         import inspect
         import measure as measure_module
-        source = inspect.getsource(measure_module.run_once)
-        self.assertIn(".join(", source,
-                      "run_once must join its sampler before reading samples")
+        # Exact-form pins (r143 panel): any `.join(` text — a decoy
+        # or a timed join — must not satisfy this test.
+        for module, fname in ((_bench, "run_engine"),
+                              (measure_module, "run_once")):
+            source = inspect.getsource(getattr(module, fname))
+            self.assertIn("sampler.join()", source,
+                          f"{fname} must join its sampler unconditionally")
+            self.assertNotIn("join(timeout", source,
+                             f"{fname}: a timed join falls through silently")
 
 
 class CorrectnessWorkDirStateTest(unittest.TestCase):
@@ -1413,3 +1419,52 @@ class CorrectnessWorkDirStateTest(unittest.TestCase):
                         contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(_bench.main(), 0)
         self.assertEqual(len(calls), 4, "two runs, two engine legs each")
+
+
+class WorkDirForeignContentTest(unittest.TestCase):
+    """r143 panel P1: the clean-restart wipe must never delete
+    foreign content. `rust` and `go` collide with real directory
+    names (--work-dir v4 would target source trees); a pre-existing
+    path without the harness ownership marker is refused loudly and
+    left untouched."""
+
+    def test_foreign_content_is_refused_not_deleted(self):
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as work:
+            victim = os.path.join(work, "rust")
+            os.makedirs(victim)
+            precious = os.path.join(victim, "userdata.txt")
+            with open(precious, "w", encoding="utf-8") as stream:
+                stream.write("user data that must survive")
+
+            def fake_run_engine(*args, **kwargs):
+                raise AssertionError("the run must not reach the engine")
+
+            argv = ["run.py", "--rust", "/bin/true", "--go", "/bin/true",
+                    "--scenario", "s.json", "--work-dir", work]
+            with mock.patch.object(sys, "argv", argv), \
+                    mock.patch.object(_bench, "run_engine", fake_run_engine), \
+                    mock.patch.object(_bench, "load_scenario",
+                                      lambda path: {"name": "s"}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(AssertionError,
+                                            "refusing to touch"):
+                    _bench.main()
+            self.assertTrue(os.path.exists(precious),
+                            "foreign content must survive a refused run")
+            self.assertFalse(os.path.exists(precious + ".owned"))
+
+    def test_prepare_engine_dir_wipes_only_marker_owned_state(self):
+        with tempfile.TemporaryDirectory() as work:
+            target = os.path.join(work, "perf-rust-0")
+            _bench.prepare_engine_dir(target)
+            with open(os.path.join(target, "artifact"), "w",
+                      encoding="utf-8") as stream:
+                stream.write("engine state")
+            _bench.prepare_engine_dir(target)  # owned: wiped and remade
+            self.assertFalse(os.path.exists(os.path.join(target, "artifact")))
+            self.assertTrue(os.path.exists(target + ".owned"))
+            os.remove(target + ".owned")
+            with self.assertRaisesRegex(AssertionError, "refusing to touch"):
+                _bench.prepare_engine_dir(target)
