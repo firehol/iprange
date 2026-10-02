@@ -22398,14 +22398,14 @@ dispositioned, not silently carried:
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Sixty-eight recorded
+- **Elapsed-ratio cross-session spread.** Sixty-nine recorded
   ceiling sessions (the first thirty at the pre-rebuild binaries, the rest at the rebuilt pair — each population byte-identical within itself; r2 1.159 — elapsed
   and RSS only, no CPU recorded; r4 1.244; each of rounds 5 through
   19; the round-32 through round-46 rebinds at 1.184, 1.193, 1.266,
   1.203, 1.186, 1.241, 1.234, 1.203, 1.193, 1.108, and 1.248; the
   two round-36 runs; and the later restage rebinds — round-89 1.247,
   round-92 1.050, round-94 1.170, round-96 1.305, round-98 1.188,
-  round-100 1.172, round-102 1.192, round-105 1.262, round-107 1.225, round-109 1.324, round-111 1.167, round-119 1.225, round-131 1.160, round-137 1.239, round-139 1.385, round-141 1.223, round-143 1.142, round-145 1.333, round-147 1.271, round-149 1.218, round-151 1.199, round-153 1.148, round-155 1.176, round-157 1.231, round-159 1.214, round-161 1.202, round-163 1.104, round-165 1.140, round-167 1.187, round-169 1.214, round-171 1.252, round-173 1.236, round-175 1.218, round-177 1.172, round-179 1.194, round-181 1.228, round-183 0.966, round-185 1.179) span
+  round-100 1.172, round-102 1.192, round-105 1.262, round-107 1.225, round-109 1.324, round-111 1.167, round-119 1.225, round-131 1.160, round-137 1.239, round-139 1.385, round-141 1.223, round-143 1.142, round-145 1.333, round-147 1.271, round-149 1.218, round-151 1.199, round-153 1.148, round-155 1.176, round-157 1.231, round-159 1.214, round-161 1.202, round-163 1.104, round-165 1.140, round-167 1.187, round-169 1.214, round-171 1.252, round-173 1.236, round-175 1.218, round-177 1.172, round-179 1.194, round-181 1.228, round-183 0.966, round-185 1.179, round-187 1.179) span
   elapsed
   **0.916–1.586** — wall-clock noise that crosses both 1.0 and the
   1.3x bound: the round-7 session measured 1.586 on an idle machine
@@ -22619,7 +22619,7 @@ undecoded Windows corpus paths, a live thread abandoned at
 reservation-watch close, silent omission of turn-1 findings, and
 more; raw staged at the kit's evidence/m5-sol/). The milestone
 remains OPEN pending that cluster, sol turn 3, and the full
-battery. SOW-0030 owns the <=1.3x acceptance verdict (68
+battery. SOW-0030 owns the <=1.3x acceptance verdict (69
 recorded ceiling sessions; run-condition-dominated wall-clock
 spread disclosed).
 
