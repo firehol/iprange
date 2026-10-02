@@ -120,6 +120,13 @@ static inline int selftest_decode_utf8_to_utf16(void)
     CHECK(decode_utf8_to_utf16("\xe2\x82", units, 8, &length) == 1);
     /* rejection: encoded surrogate D800 */
     CHECK(decode_utf8_to_utf16("\xed\xa0\x80", units, 8, &length) == 1);
+    /* acceptance: the exact U+10FFFF boundary (4-byte form) */
+    CHECK(decode_utf8_to_utf16("\xf4\x8f\xbf\xbf", units, 8, &length) == 0);
+    CHECK(length == 1 && units[0] == 0xdbff && units[1] == 0xdfff);
+    /* rejection: overlong three-byte form of a two-byte scalar */
+    CHECK(decode_utf8_to_utf16("\xe0\x81\xa9", units, 8, &length) == 1);
+    /* rejection: a low surrogate encoded directly (DC00) */
+    CHECK(decode_utf8_to_utf16("\xed\xb0\x80", units, 8, &length) == 1);
     /* rejection: beyond U+10FFFF */
     CHECK(decode_utf8_to_utf16("\xf4\x90\x80\x80", units, 8, &length) == 1);
     /* rejection: invalid lead */

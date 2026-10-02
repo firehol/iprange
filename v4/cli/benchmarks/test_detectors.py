@@ -976,6 +976,32 @@ class SolTurn2DetectorTest(unittest.TestCase):
             parallel_feeds.BenchSession = saved
         self.assertEqual(str(box["error"]), "publish failed")
 
+    def test_a_non_pair_publish_failure_still_lands_in_the_result_channel(self):
+        # The escape limb (r185 panel): a failure class outside
+        # (AssertionError, OSError) — the JSON decode error of a dead
+        # peer, a harness KeyError — must land in the result channel,
+        # not die with the worker thread unseen.
+        import parallel_feeds
+        box = {}
+
+        class Escaping:
+            def __init__(self, binary):
+                pass
+
+            def call(self, method, params):
+                raise ValueError("truncated JSON response")
+
+            def close(self):
+                pass
+
+        saved = parallel_feeds.BenchSession
+        parallel_feeds.BenchSession = Escaping
+        try:
+            parallel_feeds.run_publish("engine", "text", "dest", "feed", box)
+        finally:
+            parallel_feeds.BenchSession = saved
+        self.assertEqual(str(box.get("error")), "truncated JSON response")
+
     def test_the_trailing_drain_requires_observed_eof(self):
         # A peer that exits zero while a descendant retains stdout
         # cannot prove a complete response set: the drain must fail
@@ -1141,13 +1167,31 @@ class SolTurn2DetectorTest(unittest.TestCase):
         # exactly itself, not glued to stale bytes.
         pending = service._absorb_stderr_chunk(b"AFTER-DROP\n", pending)
         self.assertIn("AFTER-DROP\n", service.stderr_tail)
-        # (3) the ring keeps the tail bounded on the line path too.
+        # (3) the ring keeps the LAST 20 entries on the line path.
         for index in range(50):
             pending = service._absorb_stderr_chunk(
                 ("line%d\n" % index).encode(), pending)
-        self.assertLessEqual(len(service.stderr_tail), 20)
-        # the prelude shape: a long partial under the cap is kept.
+        self.assertEqual(len(service.stderr_tail), 20)
+        self.assertIn("line49\n", service.stderr_tail)
+        self.assertNotIn("line29\n", service.stderr_tail)
+        # (4) a partial under the cap is KEPT and reassembled across
+        # chunks (the accumulate limb; a never-keeps mutant fails).
+        pending = service._absorb_stderr_chunk(b"par", b"")
+        self.assertEqual(pending, b"par")
+        pending = service._absorb_stderr_chunk(b"tial\n", pending)
+        self.assertIn("partial\n", service.stderr_tail)
         self.assertEqual(pending, b"")
+
+    def test_the_drainer_uses_the_pinned_seam_at_the_call_site(self):
+        # Call-node pin (r185 operations/parity): the drainer must
+        # route its chunks through the seam the detectors exercise —
+        # restoring an inline block at the call site is the exact
+        # revert that would silently reopen the crossing-chunk loss.
+        import inspect
+        from run import JsonRpcService as Service
+        source = inspect.getsource(Service.__init__)
+        self.assertIn("self._absorb_stderr_chunk(chunk, pending)", source,
+                      "the stderr drainer must call the pinned seam")
 
     def test_a_quiet_reservation_watch_stops_at_close(self):
         # A quiet watch (no reservation ever appears) must stop its
