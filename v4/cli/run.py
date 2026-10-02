@@ -1573,25 +1573,23 @@ class JsonRpcService:
                     if not chunk:
                         return
                     pending += chunk
-                    if len(pending) > 8192:
-                        # A newline-free flood must not accumulate
-                        # without bound or force whole-buffer re-splits
-                        # per chunk (sol turn-2 follow-up): drop the
-                        # partial line with a marker; complete lines
-                        # already delivered stay in the tail.
-                        self.stderr_tail.append(
-                            "[stderr partial line dropped: over 8 KiB "
-                            "without a newline]\n")
-                        if len(self.stderr_tail) > 20:
-                            self.stderr_tail.pop(0)
-                        pending = b""
-                        continue
                     *lines, pending = pending.split(b"\n")
                     for line in lines:
                         self.stderr_tail.append(
                             line.decode("utf-8", "replace") + "\n")
                         if len(self.stderr_tail) > 20:
                             self.stderr_tail.pop(0)
+                    if len(pending) > 8192:
+                        # A newline-free flood must not accumulate
+                        # without bound (r181 operations/security):
+                        # complete lines in this chunk were delivered
+                        # above; only the partial tail is dropped.
+                        self.stderr_tail.append(
+                            "[stderr partial line dropped: over 8 KiB "
+                            "without a newline]\n")
+                        if len(self.stderr_tail) > 20:
+                            self.stderr_tail.pop(0)
+                        pending = b""
             finally:
                 selector.close()
 
@@ -2090,9 +2088,18 @@ class JsonRpcService:
         # closes, releasing the lock. A stderr wrapper whose drainer
         # did not terminate (a descendant retains the pipe) is left to
         # the process: closing it here could block on the reader.
+        buffered_watcher = getattr(self, "_buffered_watcher", None)
         for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
             if stream is self.proc.stderr and drainer is not None \
                     and drainer.is_alive():
+                continue
+            if stream is self.proc.stdout and buffered_watcher is not None \
+                    and buffered_watcher.is_alive():
+                # A descendant retains stdout and the drain watcher
+                # still holds the buffer lock across its blocking
+                # peek: closing the wrapper here would wait on that
+                # lock forever (r181 operations). Leave it to the
+                # process, exactly like the stderr case above.
                 continue
             try:
                 if stream is not None and not stream.closed:
@@ -2209,6 +2216,7 @@ class JsonRpcService:
                     parts.append(chunk)
                 result["eof"] = False  # ceiling exhausted first
             watcher = threading.Thread(target=_buffered_drain, daemon=True)
+            self._buffered_watcher = watcher
             watcher.start()
             watcher.join(timeout=5.0)
             if watcher.is_alive() or not result.get("eof"):

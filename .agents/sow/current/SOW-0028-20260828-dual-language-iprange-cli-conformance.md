@@ -22610,7 +22610,8 @@ internal approval of the repair tree; exit-stage driver-status
 discipline; mutation-driver scratch isolation) were fixed and the
 seven-role approving re-review ran at the repaired tree (r173,
 findings recorded in the kit ledger); turn 2 NEEDS CHANGES — a
-new verified defect layer in the proof harness (13 P2 + 1 P1:
+new verified defect layer in the proof harness (13 P2 + 3 P3
++ 1 unrelated P1:
 close-failure loss in the parallel-feed proof, blocking stderr
 close, RSS-retry discarding correctness failures, ignored null
 expectations, IPv6 cardinality gaps in the C attestation,
@@ -22618,13 +22619,13 @@ undecoded Windows corpus paths, a live thread abandoned at
 reservation-watch close, silent omission of turn-1 findings, and
 more; raw staged at the kit's evidence/m5-sol/). The milestone
 remains OPEN pending that cluster, sol turn 3, and the full
-battery. SOW-0030 owns the <=1.3x acceptance verdict (65
+battery. SOW-0030 owns the <=1.3x acceptance verdict (66
 recorded ceiling sessions; run-condition-dominated wall-clock
 spread disclosed).
 
 ### Sol turn-2 repair waves (2026-10-02, recorded before implementation)
 
-The turn-2 cluster (13 P2 + 3 P3) is fixed in five waves, each with
+The turn-2 cluster (13 P2 + 3 P3 + 1 unrelated P1) is fixed in five waves, each with
 detecting tests, then a restage, the approving seven-role re-review
 of the exact revision, sol turn 3, and the full battery:
 

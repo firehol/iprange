@@ -1772,6 +1772,24 @@ class SamplerJoinTest(unittest.TestCase):
             release.set()
             busy.join()
 
+    def test_a_registry_patched_thread_class_is_refused(self):
+        # The type anchor is the IMPORT-TIME capture (r181 parity):
+        # poisoning the threading registry after import must not
+        # launder an impostor through the exact-class gate. A
+        # call-time `threading.Thread` re-resolution fails this.
+        import threading
+        class Impostor(threading.Thread):
+            pass
+        saved = threading.Thread
+        threading.Thread = Impostor
+        try:
+            fake = Impostor(target=lambda: None)
+            with self.assertRaisesRegex(
+                    AssertionError, "not an exact threading.Thread"):
+                _bench.assert_sampler_dead(fake)
+        finally:
+            threading.Thread = saved
+
     def test_the_non_proc_fallback_refuses_live_and_accepts_dead(self):
         # The OSError fallback limb (r179 portability): without
         # /proc/self/task the rule degrades to the oracle verdict —

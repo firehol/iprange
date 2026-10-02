@@ -912,13 +912,13 @@ class SolTurn2DetectorTest(unittest.TestCase):
         "os.environ['STUB_EXIT'] = '0'\n"
     )
 
-    def _holder(self, work, hold_stderr_only=False, stream=False):
+    def _holder(self, work, hold_stderr_only=False, stream_mode=False):
         stub = os.path.join(_HERE, "stub_engine.py")
         wrapper = os.path.join(work, "holder_engine")
         with open(wrapper, "w", encoding="utf-8") as stream:
             stream.write(self.HOLDER.format(
                 hold_stderr_only="True" if hold_stderr_only else "False",
-                stream="True" if stream else "False",
+                stream="True" if stream_mode else "False",
                 release=os.path.join(work, "release"),
                 start=os.path.join(work, "start")))
             stream.write(f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
@@ -950,6 +950,31 @@ class SolTurn2DetectorTest(unittest.TestCase):
             parallel_feeds.BenchSession = saved
         self.assertIn("error", box)
         self.assertEqual(str(box["error"]), "teardown failed")
+
+    def test_the_primary_publish_error_wins_over_a_teardown_error(self):
+        # The result channel carries both errors (sol turn-2): the
+        # publish failure is primary, the teardown failure secondary
+        # — overwriting it would misreport the failure class.
+        import parallel_feeds
+        box = {}
+
+        class BothFail:
+            def __init__(self, binary):
+                pass
+
+            def call(self, method, params):
+                raise AssertionError("publish failed")
+
+            def close(self):
+                raise AssertionError("teardown failed")
+
+        saved = parallel_feeds.BenchSession
+        parallel_feeds.BenchSession = BothFail
+        try:
+            parallel_feeds.run_publish("engine", "text", "dest", "feed", box)
+        finally:
+            parallel_feeds.BenchSession = saved
+        self.assertEqual(str(box["error"]), "publish failed")
 
     def test_the_trailing_drain_requires_observed_eof(self):
         # A peer that exits zero while a descendant retains stdout
@@ -995,7 +1020,7 @@ class SolTurn2DetectorTest(unittest.TestCase):
         import tempfile
         from run import JsonRpcService as Service
         with tempfile.TemporaryDirectory() as work:
-            wrapper = self._holder(work, stream=True)
+            wrapper = self._holder(work, stream_mode=True)
             start = os.path.join(work, "start")
             release = os.path.join(work, "release")
             service = Service([wrapper, "--jsonrpc"], "holder",
@@ -1008,6 +1033,89 @@ class SolTurn2DetectorTest(unittest.TestCase):
             finally:
                 open(release, "w").close()
                 service.close(allow_forced=True, broken_exchange=True)
+
+    def test_a_stuck_stdout_reader_cannot_block_a_second_close(self):
+        # The buffered-drain watcher holds the stdout buffer lock
+        # across its blocking peek (r181 operations): a later close
+        # must not wait on that lock forever. The composed teardown
+        # (close raises on the incomplete drain, the harness closes
+        # again with allow_forced) is the harness's own shape.
+        import tempfile
+        from run import JsonRpcService as Service
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = self._holder(work)
+            release = os.path.join(work, "release")
+            service = Service([wrapper, "--jsonrpc"], "holder")
+            try:
+                service.call("s1", "iprange.v1.system.describe", {})
+                with self.assertRaisesRegex(
+                        AssertionError, "did not reach EOF"):
+                    service.close()
+                outcome = {}
+
+                def _close_again():
+                    try:
+                        service.close(allow_forced=True, broken_exchange=True)
+                        outcome["done"] = True
+                    except Exception as exc:  # recorded, not raised
+                        outcome["error"] = exc
+
+                import threading
+                worker = threading.Thread(target=_close_again, daemon=True)
+                worker.start()
+                worker.join(timeout=15)
+                try:
+                    self.assertFalse(
+                        worker.is_alive(),
+                        "a second close blocked on the stuck drain "
+                        "watcher's buffer lock")
+                finally:
+                    open(release, "w").close()
+            finally:
+                open(release, "w").close()
+                service.close(allow_forced=True, broken_exchange=True)
+
+    def test_the_stderr_partial_line_bound_is_enforced(self):
+        # The 8 KiB partial-line cap is a claimed contract (r181
+        # security/performance): a newline-free stderr flood delivers
+        # the drop marker and leaves the tail capped, instead of
+        # accumulating without bound.
+        import tempfile
+        from run import JsonRpcService as Service
+        flood = (
+            "#!/usr/bin/env python3\n"
+            "import os, sys, time\n"
+            "pid = os.fork()\n"
+            "if pid == 0:\n"
+            "    release = {release!r}\n"
+            "    while not os.path.exists(release):\n"
+            "        sys.stderr.write('y' * 65536)\n"
+            "        sys.stderr.flush()\n"
+            "    os._exit(0)\n"
+            "os.environ['STUB_EXIT'] = '0'\n"
+        )
+        with tempfile.TemporaryDirectory() as work:
+            stub = os.path.join(_HERE, "stub_engine.py")
+            wrapper = os.path.join(work, "flood_engine")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(flood.format(release=os.path.join(work, "release")))
+                stream.write(f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            release = os.path.join(work, "release")
+            service = Service([wrapper, "--jsonrpc"], "flood",
+                              read_deadline=5, write_deadline=5)
+            try:
+                service.call("s1", "iprange.v1.system.describe", {})
+                import time
+                time.sleep(0.5)  # let the flood fill the tail
+            finally:
+                open(release, "w").close()
+                service.close(allow_forced=True, broken_exchange=True)
+            joined = "".join(service.stderr_tail)
+            self.assertIn("stderr partial line dropped", joined)
+            self.assertLessEqual(
+                len(joined), 20 * 8200,
+                "the stderr tail grew without its partial-line bound")
 
     def test_a_quiet_reservation_watch_stops_at_close(self):
         # A quiet watch (no reservation ever appears) must stop its
