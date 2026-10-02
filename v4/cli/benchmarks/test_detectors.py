@@ -1117,6 +1117,38 @@ class SolTurn2DetectorTest(unittest.TestCase):
                 len(joined), 20 * 8200,
                 "the stderr tail grew without its partial-line bound")
 
+    def test_the_stderr_seam_delivers_crossing_chunk_lines(self):
+        # The seam (r183 panel): one chunk that crosses the 8 KiB cap
+        # must still deliver its complete diagnostic lines before the
+        # partial tail is dropped; the pending reset and the line-path
+        # ring are load-bearing. Each named mutant fails one limb:
+        # drop-before-split loses the marker line; a missing reset
+        # glues stale bytes onto the next line; a deleted ring lets
+        # the tail grow past its cap.
+        from run import JsonRpcService as Service
+        service = Service.__new__(Service)  # logic seam, no process
+        service.stderr_tail = []
+        pending = b""
+        # (1) a crossing chunk: completes the partial line, carries a
+        # diagnostic line, then overruns the cap in the same chunk.
+        pending = service._absorb_stderr_chunk(
+            b"MORE\nMARKER-LINE\n" + b"y" * 9000, pending)
+        self.assertIn("MARKER-LINE\n", service.stderr_tail)
+        self.assertIn(
+            "[stderr partial line dropped: over 8 KiB without a "
+            "newline]\n", service.stderr_tail)
+        # (2) after the drop the buffer is clean: the next line is
+        # exactly itself, not glued to stale bytes.
+        pending = service._absorb_stderr_chunk(b"AFTER-DROP\n", pending)
+        self.assertIn("AFTER-DROP\n", service.stderr_tail)
+        # (3) the ring keeps the tail bounded on the line path too.
+        for index in range(50):
+            pending = service._absorb_stderr_chunk(
+                ("line%d\n" % index).encode(), pending)
+        self.assertLessEqual(len(service.stderr_tail), 20)
+        # the prelude shape: a long partial under the cap is kept.
+        self.assertEqual(pending, b"")
+
     def test_a_quiet_reservation_watch_stops_at_close(self):
         # A quiet watch (no reservation ever appears) must stop its
         # thread at close and return promptly (sol turn-2): closing

@@ -1572,24 +1572,7 @@ class JsonRpcService:
                         return
                     if not chunk:
                         return
-                    pending += chunk
-                    *lines, pending = pending.split(b"\n")
-                    for line in lines:
-                        self.stderr_tail.append(
-                            line.decode("utf-8", "replace") + "\n")
-                        if len(self.stderr_tail) > 20:
-                            self.stderr_tail.pop(0)
-                    if len(pending) > 8192:
-                        # A newline-free flood must not accumulate
-                        # without bound (r181 operations/security):
-                        # complete lines in this chunk were delivered
-                        # above; only the partial tail is dropped.
-                        self.stderr_tail.append(
-                            "[stderr partial line dropped: over 8 KiB "
-                            "without a newline]\n")
-                        if len(self.stderr_tail) > 20:
-                            self.stderr_tail.pop(0)
-                        pending = b""
+                    pending = self._absorb_stderr_chunk(chunk, pending)
             finally:
                 selector.close()
 
@@ -2117,6 +2100,32 @@ class JsonRpcService:
                 self._raw_stdout.close()
             except OSError:
                 pass
+
+    def _absorb_stderr_chunk(self, chunk, pending):
+        """Accumulate one raw stderr chunk into the tail.
+
+        Bound (r181 operations/security, seam pinned r183): complete
+        lines in the chunk are delivered BEFORE the partial tail is
+        capped and dropped — a crossing chunk must never swallow its
+        diagnostic lines — the tail ring keeps the last 20 entries,
+        and the partial buffer resets on the drop. Returns the new
+        partial-line buffer.
+        """
+        pending += chunk
+        *lines, pending = pending.split(b"\n")
+        for line in lines:
+            self.stderr_tail.append(
+                line.decode("utf-8", "replace") + "\n")
+            if len(self.stderr_tail) > 20:
+                self.stderr_tail.pop(0)
+        if len(pending) > 8192:
+            self.stderr_tail.append(
+                "[stderr partial line dropped: over 8 KiB "
+                "without a newline]\n")
+            if len(self.stderr_tail) > 20:
+                self.stderr_tail.pop(0)
+            pending = b""
+        return pending
 
     def _drain_trailing_stdout(self):
         """Every stdout byte remaining after the response set.

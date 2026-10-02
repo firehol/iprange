@@ -1816,8 +1816,9 @@ class SamplerJoinTest(unittest.TestCase):
         # The runtime boundary (r161 panel): any join that returns
         # while the sampler still runs must fail loudly. This covers
         # the demonstrated forms (timed, expiring, dead-code joins);
-        # the named floors (entry 27) are the fork-shaped channel and
-        # harness-level tampering by trusted code.
+        # the named floors (entry 27, narrowed entry 34(e)) are the
+        # fork-shaped channel and the registry/conditioning forms of
+        # harness tampering (field forgeries are covered per field).
         import threading
         import time
 

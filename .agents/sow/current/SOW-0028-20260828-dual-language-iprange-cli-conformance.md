@@ -22625,9 +22625,10 @@ spread disclosed).
 
 ### Sol turn-2 repair waves (2026-10-02, recorded before implementation)
 
-The turn-2 cluster (13 P2 + 3 P3 + 1 unrelated P1) is fixed in five waves, each with
-detecting tests, then a restage, the approving seven-role re-review
-of the exact revision, sol turn 3, and the full battery:
+The turn-2 cluster (13 P2 + 3 P3 + 1 unrelated P1) is fixed in
+eight waves (A-H), each with detecting tests, then a restage, the
+approving seven-role re-review of the exact revision, sol turn 3,
+and the full battery:
 
 - Wave A (harness teardown/drain): the parallel-feed proof cannot
   lose close failures (worker result channel carries teardown);
@@ -22658,6 +22659,21 @@ C corpus attestation on every native leg).
   archives are staged and the false salvage statement corrected;
   stale universal-closure language rescoped to the named floors;
   the Linux corpus attestation gains a single owner.
+- Wave F (r179 panel): the TID-reuse amnesty and forged-
+  bookkeeping acceptance pinned as tests; the non-/proc fallback
+  tested with platform-correct messages; the raw-stdout ceiling
+  detector; the stderr partial-line bound; primary-error
+  precedence; the restage-gate hardening (verdict words, anchored
+  per-arm greps, residue vetoes); CHECK(exact == opened) and the
+  Windows exact pin.
+- Wave G (r181 panel): the buffered-drain watcher termination
+  gate on stdout close (the composed-teardown hang twin); the
+  stderr-flood and precedence detectors; the registry-capture
+  type-anchor pin; the holder-knob shadow fix; the exit-stage
+  veto vocabulary.
+- Wave H (r183 panel): the stderr seam detector (crossing-chunk
+  line delivery, pending reset, ring cap — one seam pinning all
+  three limbs) and the parallel_feeds escape-limb closure.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The

@@ -52,8 +52,11 @@ def run_publish(binary, text_path, destination, name, box):
     try:
         box["result"] = session.call("iprange.v1.current.publish", publish_request(
             text_path, destination, name)["params"])
-    except (AssertionError, OSError) as exc:
-        box["error"] = exc
+    except Exception as exc:
+        # Every publish failure lands in the result channel (r183):
+        # an exception class outside the narrow pair must not escape
+        # the worker thread unseen.
+        box.setdefault("error", exc)
     finally:
         try:
             session.close()
