@@ -1573,6 +1573,19 @@ class JsonRpcService:
                     if not chunk:
                         return
                     pending += chunk
+                    if len(pending) > 8192:
+                        # A newline-free flood must not accumulate
+                        # without bound or force whole-buffer re-splits
+                        # per chunk (sol turn-2 follow-up): drop the
+                        # partial line with a marker; complete lines
+                        # already delivered stay in the tail.
+                        self.stderr_tail.append(
+                            "[stderr partial line dropped: over 8 KiB "
+                            "without a newline]\n")
+                        if len(self.stderr_tail) > 20:
+                            self.stderr_tail.pop(0)
+                        pending = b""
+                        continue
                     *lines, pending = pending.split(b"\n")
                     for line in lines:
                         self.stderr_tail.append(

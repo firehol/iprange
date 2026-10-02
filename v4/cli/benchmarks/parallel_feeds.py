@@ -62,8 +62,10 @@ def run_publish(binary, text_path, destination, name, box):
             # produced the destination and report and then exited
             # nonzero or left residue must not pass because the close
             # failure died with this thread — Thread.join propagates
-            # nothing, so the result channel is the only path.
-            box["error"] = exc
+            # nothing, so the result channel is the only path. An
+            # earlier publish failure is the primary error; the
+            # teardown failure does not overwrite it.
+            box.setdefault("error", exc)
 
 
 def prove(binary, work):

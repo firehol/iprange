@@ -1735,6 +1735,65 @@ class SamplerJoinTest(unittest.TestCase):
                         AssertionError, "sampler thread still alive"):
                     run_once([stub], stdin_bytes=request, cwd=work)
 
+    def test_the_tid_reuse_amnesty_accepts_a_dead_thread_naming_a_live_task(self):
+        # Floor (c) witness (r179 panel): a finished thread whose key
+        # names a LIVE task — the honest TID-reuse shape — must be
+        # accepted dead. Deleting the amnesty turns this into a
+        # spurious disagreement refusal; widening it is visible too.
+        import threading
+        release = threading.Event()
+        keeper = threading.Thread(target=release.wait, daemon=True)
+        keeper.start()
+        try:
+            done = threading.Thread(target=lambda: None)
+            done.start()
+            done.join()
+            done._native_id = keeper.native_id  # reuse-shaped key
+            _bench.assert_sampler_dead(done)  # must not raise
+        finally:
+            release.set()
+            keeper.join()
+
+    def test_a_forged_bookkeeping_flag_is_the_documented_trusted_dead(self):
+        # Residual (b)/(c) witness (r179 panel): a running plain
+        # Thread whose _started bookkeeping is cleared reports dead
+        # while its task lives. That combination is the documented
+        # amnesty acceptance — this test PINS the acceptance so the
+        # named floor cannot silently change meaning.
+        import threading
+        release = threading.Event()
+        busy = threading.Thread(target=release.wait, daemon=True)
+        busy.start()
+        try:
+            busy._started.clear()
+            _bench.assert_sampler_dead(busy)  # must not raise
+        finally:
+            busy._started.set()
+            release.set()
+            busy.join()
+
+    def test_the_non_proc_fallback_refuses_live_and_accepts_dead(self):
+        # The OSError fallback limb (r179 portability): without
+        # /proc/self/task the rule degrades to the oracle verdict —
+        # a live sampler still refuses, a dead sampler returns clean.
+        import threading
+        def no_proc(path):
+            raise OSError("no /proc here")
+        release = threading.Event()
+        busy = threading.Thread(target=release.wait, daemon=True)
+        busy.start()
+        try:
+            with self.assertRaisesRegex(AssertionError,
+                                        "sampler thread still alive"):
+                _bench.assert_sampler_dead(busy, _listdir=no_proc)
+        finally:
+            release.set()
+            busy.join()
+        done = threading.Thread(target=lambda: None)
+        done.start()
+        done.join()
+        _bench.assert_sampler_dead(done, _listdir=no_proc)
+
     def test_the_join_postcondition_catches_an_expiring_join(self):
         # The runtime boundary (r161 panel): any join that returns
         # while the sampler still runs must fail loudly. This covers
@@ -1768,8 +1827,13 @@ class SamplerJoinTest(unittest.TestCase):
         keyforger = threading.Thread(target=slow_fold, args=(0,))
         keyforger.start()
         keyforger._native_id = 999999999
-        with self.assertRaisesRegex(AssertionError,
-                                    "liveness disagrees"):
+        # Platform-correct refusal (r179 portability): the
+        # disagreement rule is /proc-backed; without /proc the
+        # fallback refuses with the liveness message instead.
+        expected_refusal = ("liveness disagrees"
+                            if os.path.isdir("/proc/self/task")
+                            else "sampler thread still alive")
+        with self.assertRaisesRegex(AssertionError, expected_refusal):
             _bench.assert_sampler_dead(keyforger)
         keyforger.join()
         # A subclass (state-forgeable) is refused at the class gate.

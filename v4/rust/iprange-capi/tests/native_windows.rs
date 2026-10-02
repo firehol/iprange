@@ -111,7 +111,7 @@ fn external_c_caller_reads_the_conformance_cases() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.contains("cases=16 gaps=1007"),
+        stdout.contains("cases=16 gaps=1007 address_count_exact=16"),
         "cases.json was not applied: {stdout}"
     );
 }

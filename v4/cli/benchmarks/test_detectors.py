@@ -900,20 +900,27 @@ class SolTurn2DetectorTest(unittest.TestCase):
         "    if {hold_stderr_only}:\n"
         "        os.close(1)\n"
         "    release = {release!r}\n"
+        "    start = {start!r}\n"
         "    end = time.time() + 60\n"
         "    while time.time() < end and not os.path.exists(release):\n"
+        "        if {stream} and os.path.exists(start):\n"
+        "            sys.stdout.write('x' * 65536)\n"
+        "            sys.stdout.flush()\n"
+        "            continue\n"
         "        time.sleep(0.1)\n"
         "    os._exit(0)\n"
         "os.environ['STUB_EXIT'] = '0'\n"
     )
 
-    def _holder(self, work, hold_stderr_only=False):
+    def _holder(self, work, hold_stderr_only=False, stream=False):
         stub = os.path.join(_HERE, "stub_engine.py")
         wrapper = os.path.join(work, "holder_engine")
         with open(wrapper, "w", encoding="utf-8") as stream:
             stream.write(self.HOLDER.format(
                 hold_stderr_only="True" if hold_stderr_only else "False",
-                release=os.path.join(work, "release")))
+                stream="True" if stream else "False",
+                release=os.path.join(work, "release"),
+                start=os.path.join(work, "start")))
             stream.write(f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
         os.chmod(wrapper, 0o755)
         return wrapper
@@ -975,6 +982,28 @@ class SolTurn2DetectorTest(unittest.TestCase):
                 service.call("s1", "iprange.v1.system.describe", {})
                 with self.assertRaisesRegex(
                         AssertionError, "did not reach EOF"):
+                    service.close()
+            finally:
+                open(release, "w").close()
+                service.close(allow_forced=True, broken_exchange=True)
+
+    def test_the_trailing_drain_ceiling_is_enforced(self):
+        # Byte exhaustion is a named failure (sol turn-2 contract:
+        # "fail explicitly on time or byte exhaustion"): a descendant
+        # streaming trailing output must die at the ceiling, not
+        # accumulate until the deadline.
+        import tempfile
+        from run import JsonRpcService as Service
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = self._holder(work, stream=True)
+            start = os.path.join(work, "start")
+            release = os.path.join(work, "release")
+            service = Service([wrapper, "--jsonrpc"], "holder",
+                              read_deadline=5, write_deadline=5)
+            try:
+                service.call("s1", "iprange.v1.system.describe", {})
+                open(start, "w").close()
+                with self.assertRaisesRegex(AssertionError, "drain ceiling"):
                     service.close()
             finally:
                 open(release, "w").close()

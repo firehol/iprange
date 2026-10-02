@@ -22342,10 +22342,13 @@ sampler thread is dead when its join returns — exact-class gate
 /proc/self/task with bounded grace for the honest exit and TID-
 reuse races. Named floors: (a) the fork-shaped channel — the
 sampler thread genuinely dead while the fold runs in another task;
-(b) harness-level tampering — the harness's own code rewriting its
-sampler's fields, the module registry, or conditioning the
-postcondition call (trusted code; the in-tree mutation drivers are
-the visible demonstration, not a threat model); (c) the TID-reuse
+(b) harness-level tampering — the harness's own code rewriting the
+module registry or conditioning the postcondition call (trusted
+code; the battery's farm-isolated mutation runs are the visible
+demonstration, not a threat model). Sampler-field forgeries are
+covered per field: a forged key is refused by the disagreement
+rule, while forged bookkeeping (the _started flag) lands in the
+documented amnesty (c); (c) the TID-reuse
 amnesty assumes the def-bound oracle is honest on an exact-class
 thread. The source pins in test_measure.py are regression
 detectors over enumerated forms, not the boundary; the battery's
@@ -22615,7 +22618,7 @@ undecoded Windows corpus paths, a live thread abandoned at
 reservation-watch close, silent omission of turn-1 findings, and
 more; raw staged at the kit's evidence/m5-sol/). The milestone
 remains OPEN pending that cluster, sol turn 3, and the full
-battery. SOW-0030 owns the <=1.3x acceptance verdict (64
+battery. SOW-0030 owns the <=1.3x acceptance verdict (65
 recorded ceiling sessions; run-condition-dominated wall-clock
 spread disclosed).
 
@@ -22641,7 +22644,9 @@ of the exact revision, sol turn 3, and the full battery:
   above-uint64 skip branch is removed) and pins the exact-
   verification count; the Windows path helper performs strict
   UTF-8 to UTF-16 decoding with truncation rejection, unit-tested
-  on this host through the portable Unix entry.
+  on this host through the native Linux corpus entry (the
+decoder is platform-independent; its selftest runs inside the
+C corpus attestation on every native leg).
 - Wave D (kit drivers): both mutation drivers derive the checkout
   from the driver path and materialize their mutation targets in
   an isolated symlink farm — no tracked source is mutated or

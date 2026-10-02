@@ -1412,6 +1412,9 @@ int main(int argc, char **argv)
     }
     free(text);
     CHECK(opened == 16);
+    /* Every opened fixture's address_count is verified exactly (r179
+     * portability): a skip branch anywhere leaves this short. */
+    CHECK(exact == opened);
     CHECK(saw_rust_v6 == 1 && saw_go_v6 == 1);
     CHECK(gaps >= 4); /* the manifest holes exist and are verified absent */
     printf("cases=%d gaps=%d address_count_exact=%d\n", opened, gaps, exact);
