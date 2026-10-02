@@ -1542,12 +1542,45 @@ class JsonRpcService:
         self._io_threads = []
         self.lock = threading.Lock()
         self.stderr_tail = []
+        self._drain_stop = threading.Event()
 
         def _drain():
-            for raw in self.proc.stderr:
-                self.stderr_tail.append(raw.decode("utf-8", "replace"))
-                if len(self.stderr_tail) > 20:
-                    self.stderr_tail.pop(0)
+            # Raw-fd chunked drain (sol turn-2): never touch the
+            # buffered wrapper, so no buffer lock can strand close(),
+            # and wake at least once per select timeout to observe the
+            # stop flag at teardown. Windows pipes cannot be selected
+            # (WinError 10038) and keep the buffered line loop there;
+            # close() is termination-verified either way.
+            if os.name == "nt":
+                for raw in self.proc.stderr:
+                    self.stderr_tail.append(raw.decode("utf-8", "replace"))
+                    if len(self.stderr_tail) > 20:
+                        self.stderr_tail.pop(0)
+                return
+            import selectors
+            fd = self.proc.stderr.fileno()
+            pending = b""
+            selector = selectors.DefaultSelector()
+            selector.register(fd, selectors.EVENT_READ)
+            try:
+                while not self._drain_stop.is_set():
+                    if not selector.select(0.2):
+                        continue
+                    try:
+                        chunk = os.read(fd, 65536)
+                    except OSError:
+                        return
+                    if not chunk:
+                        return
+                    pending += chunk
+                    *lines, pending = pending.split(b"\n")
+                    for line in lines:
+                        self.stderr_tail.append(
+                            line.decode("utf-8", "replace") + "\n")
+                        if len(self.stderr_tail) > 20:
+                            self.stderr_tail.pop(0)
+            finally:
+                selector.close()
 
         self.drainer = threading.Thread(target=_drain, daemon=True)
         self.drainer.start()
@@ -1994,10 +2027,14 @@ class JsonRpcService:
         # unblocked by the peer's exit or kill above.
         for thread in self._io_threads:
             thread.join(timeout=5)
-        # The stderr drainer ends at EOF once the peer is gone; join it
-        # before closing its stream so a closed-file race cannot appear.
-        if getattr(self, "drainer", None) is not None:
-            self.drainer.join(timeout=3)
+        # The stderr drainer ends at EOF once the peer is gone; stop
+        # and join it before closing its stream, and verify termination
+        # (sol turn-2): closing a buffered wrapper whose reader still
+        # holds the buffer lock blocks without bound.
+        drainer = getattr(self, "drainer", None)
+        if drainer is not None:
+            self._drain_stop.set()
+            drainer.join(timeout=3)
         # Ordinary-session final validation: the response set is
         # complete, so any remaining stdout bytes are a stray trailing
         # frame and a nonzero exit is an unclean end to a session this
@@ -2037,8 +2074,13 @@ class JsonRpcService:
                 self._close_raw_stdout()
         # Close the buffered wrappers only after the peer is gone: a
         # still-blocked writer's write fails once the peer's pipe end
-        # closes, releasing the lock.
+        # closes, releasing the lock. A stderr wrapper whose drainer
+        # did not terminate (a descendant retains the pipe) is left to
+        # the process: closing it here could block on the reader.
         for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+            if stream is self.proc.stderr and drainer is not None \
+                    and drainer.is_alive():
+                continue
             try:
                 if stream is not None and not stream.closed:
                     stream.close()
@@ -2085,6 +2127,9 @@ class JsonRpcService:
             sel = selectors.DefaultSelector()
             sel.register(fd, selectors.EVENT_READ)
             deadline = time.monotonic() + (self.read_deadline or 1.0)
+            ceiling = frame.OUTPUT_FRAME_LIMIT * 2
+            total = 0
+            saw_eof = False
             try:
                 while time.monotonic() < deadline:
                     remaining = deadline - time.monotonic()
@@ -2097,8 +2142,35 @@ class JsonRpcService:
                     except (BlockingIOError, InterruptedError):
                         continue
                     if not chunk:
+                        saw_eof = True
                         break
+                    total += len(chunk)
+                    if total > ceiling:
+                        raise AssertionError(
+                            f"stdout kept producing trailing output past "
+                            f"the {ceiling}-byte drain ceiling without EOF "
+                            f"(a descendant holds the write end)")
                     parts.append(chunk)
+                if not saw_eof:
+                    # One last non-blocking probe separates "EOF arrived
+                    # as the deadline expired" from "no EOF at all";
+                    # only the latter is an incomplete drain (sol
+                    # turn-2: returning the accumulated bytes here let
+                    # a silent descendant launder an unfinished pipe).
+                    try:
+                        tail = os.read(fd, 65536)
+                    except (BlockingIOError, InterruptedError):
+                        tail = None
+                    if tail == b"":
+                        pass  # EOF after all
+                    elif tail is None:
+                        raise AssertionError(
+                            "stdout did not reach EOF within the drain "
+                            "deadline (a descendant holds the write end)")
+                    else:
+                        raise AssertionError(
+                            f"stdout produced {len(tail)} more trailing "
+                            f"byte(s) past the drain deadline without EOF")
             finally:
                 sel.close()
             return b"".join(parts)
@@ -2118,21 +2190,22 @@ class JsonRpcService:
                 while total <= ceiling:
                     chunk = stream.read1(65536)
                     if not chunk:
-                        break
+                        result["eof"] = True
+                        return
                     total += len(chunk)
                     parts.append(chunk)
-                result["eof"] = True
+                result["eof"] = False  # ceiling exhausted first
             watcher = threading.Thread(target=_buffered_drain, daemon=True)
             watcher.start()
             watcher.join(timeout=5.0)
-            if watcher.is_alive():
-                # The drain did not reach EOF within the bound: a
-                # descendant holds the pipe. Report it (the trailing-
-                # bytes check below will fail on whatever arrived).
-                parts.append(b"[drain bound exceeded: no EOF within 5s - "
-                             b"a descendant holds the pipe]")
+            if watcher.is_alive() or not result.get("eof"):
+                # The drain did not observe EOF within its bounds (sol
+                # turn-2: reaching the byte ceiling is not completion).
+                raise AssertionError(
+                    "stdout did not reach EOF within the drain bounds "
+                    "(a descendant holds the write end)")
             # The buffered stream may still be locked by the watcher
-            # thread; the close below is best-effort.
+            # thread; the close below is verification-gated.
         return b"".join(parts)
 
 

@@ -18,9 +18,11 @@ import sys
 import threading
 import time
 
-# Foreign oracle for the join postcondition (r163 panel): the real
-# Thread.is_alive captured at import — a forged sampler cannot lie
-# to it.
+# Def-bound foreign oracles for the join postcondition (r163 panel,
+# def-bound since sol turn-2): the real Thread.is_alive and listdir
+# captured at import, so module rebinding cannot substitute them.
+# Named floors (status.md entry 27): the fork-shaped channel and
+# harness-level tampering by trusted code.
 _REAL_THREAD_IS_ALIVE = threading.Thread.is_alive
 _REAL_THREAD_TYPE = threading.Thread
 _REAL_LISTDIR = __import__("os").listdir
@@ -242,9 +244,10 @@ def run_once(argv, stdin_bytes=None, cwd=None):
         # Unconditional join (r143 panel): a timed join falls
         # through silently and reopens the sample-classification
         # race; this sampler loop provably exits at child reaping.
-        # The runtime postcondition (r161 panel) closes the whole
-        # indirection class: any join returning while the sampler
-        # still runs fails loudly.
+        # The runtime postcondition (r161 panel) is the boundary for
+        # the demonstrated forms: any join returning while the
+        # sampler still runs fails loudly. Named floors (entry 27):
+        # the fork-shaped channel; harness-level tampering.
         sampler.join()
         assert_sampler_dead(sampler)
     elapsed = time.perf_counter() - started

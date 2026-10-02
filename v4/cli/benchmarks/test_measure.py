@@ -544,6 +544,72 @@ class PerfModeDetectingTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "no RSS sample"):
             self._run_perf(scenario, sampler=lambda pid: None)
 
+    def test_an_explicit_null_expectation_is_enforced(self):
+        # Key presence is the expectation signal (sol turn-2): an
+        # explicit JSON null is an expected value. Conflating it with
+        # an absent expectation let identical wrong non-null answers
+        # from both engines pass a null control.
+        scenario = self._scenario(compare=["method"], expect={"method": None})
+        with self.assertRaisesRegex(AssertionError, "expect="):
+            self._run_perf(scenario)
+
+    def test_an_rss_retry_cannot_discard_a_correctness_failure(self):
+        # A re-measurement may discard only a measurement failure (sol
+        # turn-2): the first attempt answers wrongly AND is unmeasured;
+        # the retry answers correctly and is measured. The discarded
+        # attempt's wrong answer must fail the run — comparing only
+        # after the RSS classification laundered it through the retry.
+        import tempfile
+        # Attempt state is file-backed so the wrappers and the
+        # sampler observe the same counter across processes.
+
+        with tempfile.TemporaryDirectory() as work:
+            stub = os.path.join(_HERE, "stub_engine.py")
+            counter = os.path.join(work, "attempts")
+            with open(counter, "w", encoding="utf-8") as stream:
+                stream.write("0")
+            launcher = (
+                "#!/usr/bin/env python3\n"
+                "import os, sys\n"
+                f"counter = {counter!r}\n"
+                "n = int(open(counter).read().strip() or 0) + 1\n"
+                "with open(counter, 'w') as stream:\n"
+                "    stream.write(str(n))\n"
+            )
+            plain = os.path.join(work, "plain_engine")
+            with open(plain, "w", encoding="utf-8") as stream:
+                stream.write(launcher)
+                stream.write("os.environ['STUB_EXIT'] = '0'\n")
+                stream.write(f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            os.chmod(plain, 0o755)
+            variant = os.path.join(work, "variant_engine")
+            with open(variant, "w", encoding="utf-8") as stream:
+                stream.write(launcher)
+                stream.write(
+                    "if n <= 2:\n"
+                    "    import json\n"
+                    "    for line in sys.stdin:\n"
+                    "        if not line.strip():\n"
+                    "            continue\n"
+                    "        request = json.loads(line)\n"
+                    "        sys.stdout.write(json.dumps(\n"
+                    "            {'jsonrpc': '2.0', 'id': request['id'],\n"
+                    "             'result': {'product': 'other'}}) + '\\n')\n"
+                    "        sys.stdout.flush()\n"
+                    "    raise SystemExit(0)\n")
+                stream.write("os.environ['STUB_EXIT'] = '0'\n")
+                stream.write(f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            os.chmod(variant, 0o755)
+
+            def sampler(pid):
+                n = int(open(counter).read().strip() or 0)
+                return None if n <= 2 else 5000
+
+            scenario = self._scenario(compare=["product"])
+            with mock.patch.object(_bench, "child_hwm_kib", sampler):
+                with self.assertRaisesRegex(AssertionError, "product"):
+                    _bench.run_perf(scenario, plain, variant, 1, work)
+
     def test_a_valid_round_reports_all_fields(self):
         scenario = self._scenario(
             compare=["method"],
@@ -1671,9 +1737,10 @@ class SamplerJoinTest(unittest.TestCase):
 
     def test_the_join_postcondition_catches_an_expiring_join(self):
         # The runtime boundary (r161 panel): any join that returns
-        # while the sampler still runs must fail loudly — this is
-        # what closes the whole indirection class, whatever spell a
-        # forgery takes.
+        # while the sampler still runs must fail loudly. This covers
+        # the demonstrated forms (timed, expiring, dead-code joins);
+        # the named floors (entry 27) are the fork-shaped channel and
+        # harness-level tampering by trusted code.
         import threading
         import time
 
@@ -1708,7 +1775,6 @@ class SamplerJoinTest(unittest.TestCase):
         # A subclass (state-forgeable) is refused at the class gate.
         # Rebind-immunity (r173 panel): the def-bound oracles and
         # thread type cannot be neutralized by module writes.
-        saved = (_bench if False else None)
         import measure as _m
         keep_alive, keep_listdir, keep_type = (
             _m._REAL_THREAD_IS_ALIVE, _m._REAL_LISTDIR, _m._REAL_THREAD_TYPE)

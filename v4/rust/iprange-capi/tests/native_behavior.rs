@@ -102,8 +102,12 @@ fn native_c_reads_conformance_cases() {
     // (with the 1000-range go/history fixture) implies 1007 such holes.
     // The exact figure is pinned so a checker that silently skips hole
     // lookups fails here.
+    // The exact-count pin is corpus-derived (sol turn-2): all 16
+    // manifests declare address_count and every total — including the
+    // whole-IPv6 2^128 fixtures — is verified with exact 129-bit
+    // arithmetic. A checker that skips any comparison fails here.
     assert!(
-        stdout.contains("cases=16 gaps=1007"),
+        stdout.contains("cases=16 gaps=1007 address_count_exact=16"),
         "cases.json was not applied: {stdout}"
     );
 }

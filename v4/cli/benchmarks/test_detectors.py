@@ -866,8 +866,10 @@ class AstraTurn3DetectorTest(unittest.TestCase):
         source = inspect.getsource(cli_run.JsonRpcService._drain_trailing_stdout)
         self.assertIn("watcher.join(timeout=5.0)", source,
                       "the buffered drain must be time-bounded")
-        self.assertIn("no EOF within 5s", source,
+        self.assertIn("did not reach EOF within the drain bounds", source,
                       "a missing EOF must be reported explicitly")
+        self.assertIn("result[\"eof\"] = False", source,
+                      "reaching the byte ceiling must not count as EOF")
 
     def test_c_corpus_compares_reader_cursor_boundaries(self):
         path = "v4/rust/iprange-capi/tests/native/abi_cases.c"
@@ -881,3 +883,152 @@ class AstraTurn3DetectorTest(unittest.TestCase):
                       "the under-yield direction must be pinned too")
         self.assertIn("CHECK(same_address(got.from, ranges[seen].from));", source)
         self.assertIn("CHECK(same_address(got.to, ranges[seen].to));", source)
+
+class SolTurn2DetectorTest(unittest.TestCase):
+    """Sol turn-2 repairs: the proof harness must not lose teardown
+    failures, must require observed EOF on the trailing drain, and
+    must never block without bound closing a stream whose reader is
+    stuck. Each test fails the pre-repair behavior."""
+
+    HOLDER = (
+        "#!/usr/bin/env python3\n"
+        "import os, sys, time\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        "    # Retain the inherited write ends until released; drop\n"
+        "    # stdout first so one pipe can be held in isolation.\n"
+        "    if {hold_stderr_only}:\n"
+        "        os.close(1)\n"
+        "    release = {release!r}\n"
+        "    end = time.time() + 60\n"
+        "    while time.time() < end and not os.path.exists(release):\n"
+        "        time.sleep(0.1)\n"
+        "    os._exit(0)\n"
+        "os.environ['STUB_EXIT'] = '0'\n"
+    )
+
+    def _holder(self, work, hold_stderr_only=False):
+        stub = os.path.join(_HERE, "stub_engine.py")
+        wrapper = os.path.join(work, "holder_engine")
+        with open(wrapper, "w", encoding="utf-8") as stream:
+            stream.write(self.HOLDER.format(
+                hold_stderr_only="True" if hold_stderr_only else "False",
+                release=os.path.join(work, "release")))
+            stream.write(f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+        os.chmod(wrapper, 0o755)
+        return wrapper
+
+    def test_the_parallel_feed_proof_cannot_lose_a_close_failure(self):
+        # A publish that produced its destination and report and then
+        # failed teardown must fail the proof: the worker thread is
+        # the only carrier of the close result (Thread.join eats it).
+        import parallel_feeds
+        box = {}
+
+        class Closer:
+            def __init__(self, binary):
+                pass
+
+            def call(self, method, params):
+                return {"report": {"addresses": 1}}
+
+            def close(self):
+                raise AssertionError("teardown failed")
+
+        saved = parallel_feeds.BenchSession
+        parallel_feeds.BenchSession = Closer
+        try:
+            parallel_feeds.run_publish("engine", "text", "dest", "feed", box)
+        finally:
+            parallel_feeds.BenchSession = saved
+        self.assertIn("error", box)
+        self.assertEqual(str(box["error"]), "teardown failed")
+
+    def test_the_trailing_drain_requires_observed_eof(self):
+        # A peer that exits zero while a descendant retains stdout
+        # cannot prove a complete response set: the drain must fail
+        # explicitly instead of returning the accumulated bytes.
+        import tempfile
+        from run import JsonRpcService as Service
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = self._holder(work)
+            release = os.path.join(work, "release")
+            service = Service([wrapper, "--jsonrpc"], "holder",
+                              read_deadline=1, write_deadline=5)
+            try:
+                service.call("s1", "iprange.v1.system.describe", {})
+                with self.assertRaisesRegex(
+                        AssertionError, "did not reach EOF"):
+                    service.close()
+            finally:
+                open(release, "w").close()
+                service.close(allow_forced=True, broken_exchange=True)
+
+    def test_the_buffered_trailing_drain_requires_observed_eof(self):
+        import tempfile
+        from run import JsonRpcService as Service
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = self._holder(work)
+            release = os.path.join(work, "release")
+            service = Service([wrapper, "--jsonrpc"], "holder")
+            try:
+                service.call("s1", "iprange.v1.system.describe", {})
+                with self.assertRaisesRegex(
+                        AssertionError, "did not reach EOF"):
+                    service.close()
+            finally:
+                open(release, "w").close()
+                service.close(allow_forced=True, broken_exchange=True)
+
+    def test_a_quiet_reservation_watch_stops_at_close(self):
+        # A quiet watch (no reservation ever appears) must stop its
+        # thread at close and return promptly (sol turn-2): closing
+        # the inotify fd from another thread does not cancel the
+        # thread's blocked read, so the old close left a live thread
+        # and a leaked inotify resource behind every attempt.
+        import tempfile
+        import crash_harness
+        with tempfile.TemporaryDirectory() as work:
+            watch = crash_harness.ReservationWatch(work, None)
+            thread = watch._thread
+            started = time.monotonic()
+            watch.close()
+            self.assertLess(time.monotonic() - started, 1.5,
+                            "close() lingered on a quiet watch")
+            self.assertIsNone(watch._thread)
+            if thread is not None:
+                self.assertFalse(thread.is_alive(),
+                                 "the watch thread survived close")
+
+    def test_a_stuck_stderr_reader_cannot_block_close(self):
+        # A descendant retaining stderr pins the drainer's read; the
+        # close must still finish under its bound (the buffered
+        # wrapper close waits on the reader's lock forever otherwise).
+        import tempfile
+        from run import JsonRpcService as Service
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = self._holder(work, hold_stderr_only=True)
+            release = os.path.join(work, "release")
+            service = Service([wrapper, "--jsonrpc"], "holder",
+                              read_deadline=1, write_deadline=5)
+            service.call("s1", "iprange.v1.system.describe", {})
+            outcome = {}
+
+            def _close():
+                try:
+                    service.close()
+                    outcome["done"] = True
+                except Exception as exc:  # recorded, not raised
+                    outcome["error"] = exc
+
+            import threading
+            worker = threading.Thread(target=_close, daemon=True)
+            worker.start()
+            worker.join(timeout=15)
+            try:
+                self.assertFalse(
+                    worker.is_alive(),
+                    "close() did not finish with a stuck stderr reader")
+            finally:
+                open(release, "w").close()
+            self.assertNotIn("error", outcome)

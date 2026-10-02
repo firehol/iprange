@@ -975,19 +975,83 @@ static int check_metadata(const iprange_v4_abi1_reader *reader, const char *slic
     return 0;
 }
 
-/* Borrow-safe span between two packed big-endian addresses: IPv4 fits
- * one 64-bit word (width < 8 packs wholly into the low word); IPv6
- * splits into hi/lo words with a borrow. Returns 0 and sets
- * *unrepresentable when the difference does not fit 64 bits. */
+/* An exact 129-bit unsigned value (sol turn-2): the whole-IPv6
+ * cardinalities are 2^128 and must be COMPARED, not skipped. Three
+ * 64-bit words hold any single range span (at most 2^128), any corpus
+ * sum, and the manifest's decimal claim. */
+typedef struct {
+    unsigned long long top;  /* words above bit 127 */
+    unsigned long long high;
+    unsigned long long low;
+} wide129;
+
+/* word = word * 10 + add (mod 2^64); *carry receives the overflow. */
+static unsigned long long wide129_mul10_add(unsigned long long word,
+                                            unsigned long long add,
+                                            unsigned long long *carry)
+{
+    unsigned long long low_part = (word & 0xffffffffULL) * 10 + add;
+    unsigned long long high_part = (word >> 32) * 10 + (low_part >> 32);
+    *carry = high_part >> 32;
+    return ((high_part & 0xffffffffULL) << 32) | (low_part & 0xffffffffULL);
+}
+
+/* Exact decimal parse. Returns 0 on success, 1 on malformed digits,
+ * 2 when the value exceeds the accumulator's 192 bits. */
+static int parse_decimal_129(const char *digits, wide129 *out)
+{
+    wide129 value;
+    const char *p = digits;
+    value.top = value.high = value.low = 0;
+    if (*p == '\0') {
+        return 1;
+    }
+    for (; *p != '\0'; p++) {
+        unsigned long long carry;
+        if (*p < '0' || *p > '9') {
+            return 1;
+        }
+        value.low = wide129_mul10_add(value.low, (unsigned long long)(*p - '0'),
+                                      &carry);
+        value.high = wide129_mul10_add(value.high, carry, &carry);
+        value.top = wide129_mul10_add(value.top, carry, &carry);
+        if (carry != 0) {
+            return 2;
+        }
+    }
+    *out = value;
+    return 0;
+}
+
+/* acc += value. Returns nonzero when the sum exceeds 192 bits. */
+static int wide129_add(wide129 *acc, const wide129 *value)
+{
+    unsigned long long low = acc->low + value->low;
+    int carry_low = (low < acc->low) ? 1 : 0;
+    unsigned long long high = acc->high + value->high;
+    int carry_high = (high < acc->high) ? 1 : 0;
+    unsigned long long high_sum = high + (unsigned long long)carry_low;
+    if (carry_low && high_sum < high) {
+        carry_high = 1;
+    }
+    unsigned long long top = acc->top + value->top + (unsigned long long)carry_high;
+    int overflow = (top < acc->top) ? 1 : 0;
+    acc->low = low;
+    acc->high = high_sum;
+    acc->top = top;
+    return overflow;
+}
+
+/* Borrow-safe span between two packed big-endian addresses, exact:
+ * span = to - from + 1 in 129 bits.  IPv4 packs wholly into the low
+ * word pair (width < 8); IPv6 splits into hi/lo words with a borrow. */
 static int packed_span(const iprange_v4_abi1_ip *from, const iprange_v4_abi1_ip *to,
-                       int width, unsigned long long *span, int *unrepresentable)
+                       int width, wide129 *span)
 {
     unsigned long long to_high = 0, to_low = 0;
     unsigned long long from_high = 0, from_low = 0;
-    unsigned long long borrow, low, high;
+    unsigned long long borrow, low, high, top;
     int position;
-    *unrepresentable = 0;
-    *span = 0;
     for (position = 0; position < width; position++) {
         if (position < width - 8) {
             to_high = (to_high << 8) | to->bytes[position];
@@ -1000,27 +1064,31 @@ static int packed_span(const iprange_v4_abi1_ip *from, const iprange_v4_abi1_ip 
     borrow = from_low > to_low ? 1u : 0u;
     low = to_low - from_low;
     high = to_high - from_high - borrow;
-    if (high != 0) {
-        *unrepresentable = 1;
-        return 0;
+    top = 0;
+    low += 1;
+    if (low == 0) {
+        high += 1;
+        if (high == 0) {
+            top = 1;
+        }
     }
-    if (low + 1 == 0) {
-        /* The full low word plus one wraps: unrepresentable. */
-        *unrepresentable = 1;
-        return 0;
-    }
-    *span = low + 1;
+    span->top = top;
+    span->high = high;
+    span->low = low;
     return 0;
 }
 
-/* The five-shape pin for packed_span (r93): borrow, simple, v4
- * universe, v6 universe, v6 documentation range. Runs before the
- * corpus walk; a regression in the arithmetic fails the whole run. */
+/* The shape pin for packed_span (r93, exact since sol turn-2):
+ * borrow, simple, v4 universe, v6 universe, v6 documentation range,
+ * cross-word borrow, wrap arm — plus the decimal parser's shapes.
+ * Runs before the corpus walk; a regression fails the whole run. */
 static int selftest_packed_span(void)
 {
     iprange_v4_abi1_ip from, to;
-    unsigned long long span;
-    int unrepresentable;
+    wide129 span;
+    wide129 parsed;
+    wide129 acc;
+    wide129 addend;
 
     memset(&from, 0, sizeof(from));
     memset(&to, 0, sizeof(to));
@@ -1029,25 +1097,26 @@ static int selftest_packed_span(void)
     from.family = to.family = IPRANGE_V4_ABI1_ADDRESS_FAMILY_IPV4;
     from.bytes[0] = 10; to.bytes[0] = 10;
     to.bytes[2] = 1; to.bytes[3] = 3; from.bytes[3] = 5;
-    CHECK(packed_span(&from, &to, 4, &span, &unrepresentable) == 0);
-    CHECK(!unrepresentable && span == 255);
+    CHECK(packed_span(&from, &to, 4, &span) == 0);
+    CHECK(span.top == 0 && span.high == 0 && span.low == 255);
 
     /* simple: 10.0.0.1 -> 10.0.0.3 = 3 */
     from.bytes[3] = 1; to.bytes[2] = 0; to.bytes[3] = 3;
-    CHECK(packed_span(&from, &to, 4, &span, &unrepresentable) == 0);
-    CHECK(!unrepresentable && span == 3);
+    CHECK(packed_span(&from, &to, 4, &span) == 0);
+    CHECK(span.top == 0 && span.high == 0 && span.low == 3);
 
     /* v4 universe: 0.0.0.0 -> 255.255.255.255 = 2^32 */
     memset(from.bytes, 0, 16);
     memset(to.bytes, 0xff, 4);
-    CHECK(packed_span(&from, &to, 4, &span, &unrepresentable) == 0);
-    CHECK(!unrepresentable && span == 4294967296ull);
+    CHECK(packed_span(&from, &to, 4, &span) == 0);
+    CHECK(span.top == 0 && span.high == 0 && span.low == 4294967296ull);
 
-    /* v6 universe: :: -> ffff:...:ffff is unrepresentable */
+    /* v6 universe: :: -> ffff:...:ffff = 2^128, now EXACT (the old
+     * 64-bit form skipped this comparison entirely) */
     memset(from.bytes, 0, 16);
     memset(to.bytes, 0xff, 16);
-    packed_span(&from, &to, 16, &span, &unrepresentable);
-    CHECK(unrepresentable);
+    CHECK(packed_span(&from, &to, 16, &span) == 0);
+    CHECK(span.top == 1 && span.high == 0 && span.low == 0);
 
     /* v6 documentation range: 2001:db8::1 -> 2001:db8::ffff = 65535 */
     memset(from.bytes, 0, 16);
@@ -1055,8 +1124,8 @@ static int selftest_packed_span(void)
     from.bytes[0] = 0x20; from.bytes[1] = 0x01; from.bytes[2] = 0x0d; from.bytes[3] = 0xb8;
     to.bytes[0] = 0x20; to.bytes[1] = 0x01; to.bytes[2] = 0x0d; to.bytes[3] = 0xb8;
     to.bytes[15] = 0xff; to.bytes[14] = 0xff; from.bytes[15] = 1;
-    CHECK(packed_span(&from, &to, 16, &span, &unrepresentable) == 0);
-    CHECK(!unrepresentable && span == 65535);
+    CHECK(packed_span(&from, &to, 16, &span) == 0);
+    CHECK(span.top == 0 && span.high == 0 && span.low == 65535);
 
     /* cross-word borrow: the low word of `to` is numerically BELOW the
      * low word of `from` and the high word advances by one — the exact
@@ -1067,14 +1136,12 @@ static int selftest_packed_span(void)
     memset(to.bytes, 0, 16);
     from.bytes[7] = 1; from.bytes[15] = 0x00; from.bytes[14] = 0x01;
     to.bytes[0] = 0; to.bytes[7] = 2;
-    /* from = 0x00000001_00000000_00000000_00000100 → high=1, low=0x100
-     * to   = 0x00000002_00000000_00000000_00000000 → high=2, low=0 */
-    packed_span(&from, &to, 16, &span, &unrepresentable);
-    CHECK(!unrepresentable && span == 0xffffffffffffff01ull);
+    CHECK(packed_span(&from, &to, 16, &span) == 0);
+    CHECK(span.top == 0 && span.high == 0 &&
+          span.low == 0xffffffffffffff01ull);
 
-    /* wrap arm: an exact 2^64 span (from = H:0, to = H:UINT64_MAX)
-     * does not fit low+1 — the unrepresentable skip must fire, not
-     * wrap to 0 (r97: the wrap arm was unpinned). */
+    /* wrap arm: an exact 2^64 span (from = H:0, to = H:UINT64_MAX) is
+     * (high=1, low=0) now, not a skip (r97 shape preserved). */
     memset(from.bytes, 0, 16);
     memset(to.bytes, 0, 16);
     from.bytes[7] = 1;
@@ -1085,13 +1152,38 @@ static int selftest_packed_span(void)
             to.bytes[byte] = 0xff;
         }
     }
-    packed_span(&from, &to, 16, &span, &unrepresentable);
-    CHECK(unrepresentable);
+    CHECK(packed_span(&from, &to, 16, &span) == 0);
+    CHECK(span.top == 0 && span.high == 1 && span.low == 0);
+
+    /* decimal parser: the whole-IPv6 manifest total 2^128 */
+    CHECK(parse_decimal_129(
+              "340282366920938463463374607431768211456", &parsed) == 0);
+    CHECK(parsed.top == 1 && parsed.high == 0 && parsed.low == 0);
+    /* decimal parser: zero and 2^64 */
+    CHECK(parse_decimal_129("0", &parsed) == 0);
+    CHECK(parsed.top == 0 && parsed.high == 0 && parsed.low == 0);
+    CHECK(parse_decimal_129("18446744073709551616", &parsed) == 0);
+    CHECK(parsed.top == 0 && parsed.high == 1 && parsed.low == 0);
+    /* rejection classes: empty, malformed, beyond 192 bits */
+    CHECK(parse_decimal_129("", &parsed) == 1);
+    CHECK(parse_decimal_129("12x", &parsed) == 1);
+    CHECK(parse_decimal_129(
+              "6277101735386680763835789423207666416102355444464034512896",
+              &parsed) == 2);
+    /* addition: 2^128 + 2^128 = 2^129 fits; carries past 192 bits
+     * are flagged */
+    acc.top = 1; acc.high = 0; acc.low = 0;
+    addend.top = 1; addend.high = 0; addend.low = 0;
+    CHECK(wide129_add(&acc, &addend) == 0);
+    CHECK(acc.top == 2 && acc.high == 0 && acc.low == 0);
+    acc.top = (unsigned long long)-1; acc.high = (unsigned long long)-1;
+    acc.low = (unsigned long long)-1;
+    CHECK(wide129_add(&acc, &addend) != 0);
 
     return 0;
 }
 
-static int check_fixture(const char *corpus, const char *slice, const char *slice_end, int *gaps)
+static int check_fixture(const char *corpus, const char *slice, const char *slice_end, int *gaps, int *exact_counts)
 {
     char file[128];
     char family[8];
@@ -1145,62 +1237,48 @@ static int check_fixture(const char *corpus, const char *slice, const char *slic
     CHECK(collect_ranges(slice, slice_end, range_key, ipv6, kind_code, &ranges, &count) == 0);
     CHECK(count > 0);
     CHECK(info.range_record_count == (uint64_t)count);
-    /* The manifest's address_count is the sum of the range spans. It
-     * is checked wherever the total fits a uint64: a reader whose
-     * covered address set differed from the manifest's would otherwise
-     * pass with only the per-range walks agreeing with itself. Totals
-     * beyond uint64 (the ipv6 whole-universe fixtures) stay out of
-     * scope of this comparison; range_record_count and
-     * active_feed_count remain the cardinality contract there. */
+    /* The manifest's address_count is the sum of the range spans,
+     * compared EXACTLY (sol turn-2): the whole-IPv6 totals are 2^128
+     * and the old 64-bit form skipped them above uint64, leaving the
+     * full-manifest claim unverified.  The 129-bit arithmetic carries
+     * every corpus total; each verified manifest increments the
+     * exact-verification count so the native runs pin that nothing
+     * was skipped. */
     {
         const char *found = find_key(slice, slice_end, "\"address_count\": \"");
         if (found != NULL) {
-            char digits[48];
+            char digits[64];
             const char *cursor = found + strlen("\"address_count\": \"");
             size_t written = 0;
-            unsigned long long claimed;
-            char *parse_end = NULL;
-            while (cursor < slice_end && *cursor != '"' && written + 1 < sizeof(digits)) {
+            int truncated = 0;
+            wide129 total, claimed;
+            size_t index2;
+            int width = ipv6 ? 16 : 4;
+            while (cursor < slice_end && *cursor != '"' &&
+                   written + 1 < sizeof(digits)) {
                 digits[written++] = *cursor++;
+            }
+            if (cursor < slice_end && *cursor != '"') {
+                /* A longer claim than the buffer can never equal the
+                 * accumulator: reject instead of comparing a
+                 * truncated prefix. */
+                truncated = 1;
             }
             digits[written] = '\0';
             CHECK(written > 0);
-            errno = 0;
-            claimed = strtoull(digits, &parse_end, 10);
-            if (errno == 0 && parse_end != NULL && *parse_end == '\0') {
-                /* Sum of the range spans, borrow-safe: subtract the
-                 * packed big-endian addresses (IPv4 fits one 64-bit
-                 * word; IPv6 splits into hi/lo with a borrow). A span
-                 * — or the running total — that does not fit 64 bits
-                 * (the whole-universe fixtures) makes the fixture's
-                 * claimed total unverifiable at this width and skips
-                 * the comparison; range_record_count remains its
-                 * cardinality contract. */
-                unsigned long long total = 0;
-                int unrepresentable = 0;
-                size_t index2;
-                for (index2 = 0; index2 < count && !unrepresentable; index2++) {
-                    unsigned long long span;
-                    int span_unrepresentable;
-                    int width = ipv6 ? 16 : 4;
-                    packed_span(&ranges[index2].from, &ranges[index2].to, width,
-                                &span, &span_unrepresentable);
-                    if (span_unrepresentable) {
-                        unrepresentable = 1;
-                        break;
-                    }
-                    if (total > UINT64_MAX - span) {
-                        /* the total would overflow: unverifiable at
-                         * 64 bits. */
-                        unrepresentable = 1;
-                        break;
-                    }
-                    total += span;
-                }
-                if (!unrepresentable) {
-                    CHECK(total == claimed);
-                }
+            CHECK(!truncated);
+            CHECK(parse_decimal_129(digits, &claimed) == 0);
+            total.top = total.high = total.low = 0;
+            for (index2 = 0; index2 < count; index2++) {
+                wide129 span;
+                CHECK(packed_span(&ranges[index2].from, &ranges[index2].to,
+                                  width, &span) == 0);
+                CHECK(wide129_add(&total, &span) == 0);
             }
+            CHECK(total.top == claimed.top);
+            CHECK(total.high == claimed.high);
+            CHECK(total.low == claimed.low);
+            (*exact_counts)++;
         }
     }
     (void)range_records;
@@ -1293,6 +1371,7 @@ int main(int argc, char **argv)
     const char *cursor;
     int opened = 0;
     int gaps = 0;
+    int exact = 0;
     int saw_rust_v6 = 0;
     int saw_go_v6 = 0;
     if (argc != 2) {
@@ -1301,6 +1380,7 @@ int main(int argc, char **argv)
     }
     CHECK(snprintf(cases_path, sizeof(cases_path), "%s/cases.json", argv[1]) < (int)sizeof(cases_path));
     CHECK(selftest_packed_span() == 0);
+    CHECK(selftest_decode_utf8_to_utf16() == 0);
     text = read_file(cases_path, &length);
     CHECK(text != NULL);
     cursor = text;
@@ -1313,7 +1393,7 @@ int main(int argc, char **argv)
             free(text);
             return 1;
         }
-        if (check_fixture(argv[1], cursor, end, &gaps) != 0) {
+        if (check_fixture(argv[1], cursor, end, &gaps, &exact) != 0) {
             fprintf(stderr, "fixture failed: %s\n", file);
             free(text);
             return 1;
@@ -1334,6 +1414,6 @@ int main(int argc, char **argv)
     CHECK(opened == 16);
     CHECK(saw_rust_v6 == 1 && saw_go_v6 == 1);
     CHECK(gaps >= 4); /* the manifest holes exist and are verified absent */
-    printf("cases=%d gaps=%d\n", opened, gaps);
+    printf("cases=%d gaps=%d address_count_exact=%d\n", opened, gaps, exact);
     return 0;
 }

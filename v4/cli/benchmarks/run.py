@@ -618,11 +618,12 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
         # The round's peak flags are read after this call returns:
         # join the sampler so no late fold can race those reads. The
         # join is unconditional — the loop provably exits when the
-        # child is reaped. The runtime postcondition closes the
-        # whole indirection class (r161 panel): any join spelling
+        # child is reaped. The runtime postcondition (r161 panel) is
+        # the boundary for the demonstrated forms: any join spelling
         # that returns while the sampler still runs — a forged or
         # expiring timed join — fails here loudly instead of racing
-        # the reads.
+        # the reads. Named floors (entry 27): the fork-shaped
+        # channel; harness-level tampering.
         sampler.join()
         assert_sampler_dead(sampler)
     return result
@@ -644,16 +645,22 @@ def scenario_calls(scenario):
 def compare(scenario, rust, go):
     mismatches = []
     for index, call in enumerate(scenario_calls(scenario)):
+        expect = call.get("expect", {})
         for path in call["compare"]:
             left = field(rust[index], path)
             right = field(go[index], path)
             if left != right:
                 label = call.get("method", "cli" if "cli" in call else "batch")
                 mismatches.append(f"{label} {path}: rust={left!r} go={right!r}")
-            expected = call.get("expect", {}).get(path)
-            if expected is not None and left != expected:
-                label = call.get("method", "cli" if "cli" in call else "batch")
-                mismatches.append(f"{label} {path}: got={left!r} expect={expected!r}")
+            # Key presence is the expectation signal (sol turn-2): an
+            # explicit JSON null is an expected value, not an absent
+            # expectation — conflating them let identical wrong
+            # non-null answers from both engines pass a null control.
+            if path in expect:
+                expected = expect[path]
+                if left != expected:
+                    label = call.get("method", "cli" if "cli" in call else "batch")
+                    mismatches.append(f"{label} {path}: got={left!r} expect={expected!r}")
         if call.get("expect_same_bytes"):
             left = rust[index].get("bytes")
             right = go[index].get("bytes")
@@ -768,15 +775,20 @@ def run_perf(scenario, rust, go, rounds, work):
         # observation pairing — a wrong answer fails the perf run.
         for check in deferred:
             check()
-        missing = [label for label in ("rust", "go")
-                   if round_peak[label]["kib"] <= 0]
-        if missing:
-            return round_elapsed, round_peak, missing
+        # Correctness first (sol turn-2): a retry may discard only a
+        # measurement failure. Classifying the RSS miss before this
+        # comparison let a wrong named scalar or cross-engine
+        # disagreement on the discarded attempt vanish when the
+        # re-measured attempt answered correctly.
         mismatches = compare(scenario, rust_obs + rust_reads, go_obs + go_reads)
         if mismatches:
             raise AssertionError(
                 f"{scenario['name']} round {round_index}: "
                 + "; ".join(mismatches))
+        missing = [label for label in ("rust", "go")
+                   if round_peak[label]["kib"] <= 0]
+        if missing:
+            return round_elapsed, round_peak, missing
         return round_elapsed, round_peak, []
 
     created_dirs = set()

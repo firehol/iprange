@@ -22619,6 +22619,40 @@ battery. SOW-0030 owns the <=1.3x acceptance verdict (64
 recorded ceiling sessions; run-condition-dominated wall-clock
 spread disclosed).
 
+### Sol turn-2 repair waves (2026-10-02, recorded before implementation)
+
+The turn-2 cluster (13 P2 + 3 P3) is fixed in five waves, each with
+detecting tests, then a restage, the approving seven-role re-review
+of the exact revision, sol turn 3, and the full battery:
+
+- Wave A (harness teardown/drain): the parallel-feed proof cannot
+  lose close failures (worker result channel carries teardown);
+  the trailing-stdout drain requires observed EOF and fails
+  explicitly on time/byte exhaustion; the stderr drain is
+  stop-flagged and selector-bounded (raw-fd reads, no buffer-lock
+  hostage) and close verifies reader termination before closing
+  buffered wrappers.
+- Wave B (measurement semantics): correctness comparisons run
+  before RSS-miss classification (a retry may discard only
+  measurement failure); scenario expectations enforce key
+  presence independent of value (explicit null is an expectation).
+- Wave C (attestation): the C corpus attestation verifies
+  address_count with exact 129-bit span-sum arithmetic (the
+  above-uint64 skip branch is removed) and pins the exact-
+  verification count; the Windows path helper performs strict
+  UTF-8 to UTF-16 decoding with truncation rejection, unit-tested
+  on this host through the portable Unix entry.
+- Wave D (kit drivers): both mutation drivers derive the checkout
+  from the driver path and materialize their mutation targets in
+  an isolated symlink farm — no tracked source is mutated or
+  restored in-tree (the overwrite limb and the replaced-restore
+  trap both die with the in-tree mutation).
+- Wave E (records + P3): the complete turn-1 finding inventory is
+  recorded with per-finding dispositions; the recovered r169
+  archives are staged and the false salvage statement corrected;
+  stale universal-closure language rescoped to the named floors;
+  the Linux corpus attestation gains a single owner.
+
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
 milestone stays open until the seven-role round approves the exact

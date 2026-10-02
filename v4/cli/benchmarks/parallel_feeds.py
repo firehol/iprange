@@ -55,7 +55,15 @@ def run_publish(binary, text_path, destination, name, box):
     except (AssertionError, OSError) as exc:
         box["error"] = exc
     finally:
-        session.close()
+        try:
+            session.close()
+        except Exception as exc:
+            # Teardown is part of the publish (sol turn-2): a peer that
+            # produced the destination and report and then exited
+            # nonzero or left residue must not pass because the close
+            # failure died with this thread — Thread.join propagates
+            # nothing, so the result channel is the only path.
+            box["error"] = exc
 
 
 def prove(binary, work):

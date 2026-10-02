@@ -709,6 +709,7 @@ class ReservationWatch:
         self._on_magic = on_magic
         self._fd = None
         self._thread = None
+        self._stop = threading.Event()
         self._ready = threading.Event()
         if os.name == "nt":
             self._ready.set()
@@ -736,7 +737,7 @@ class ReservationWatch:
             # readiness wait before the poll fallback takes over.
             self._ready.set()
             return
-        fd = libc.inotify_init1(0x80000)  # IN_CLOEXEC
+        fd = libc.inotify_init1(0x80800)  # IN_NONBLOCK | IN_CLOEXEC
         if fd < 0:
             self._ready.set()
             return
@@ -750,9 +751,19 @@ class ReservationWatch:
         self._ready.set()
         buf = ctypes.create_string_buffer(4096)
         header = struct.Struct("iIII")
-        while True:
+        # Nonblocking read loop (sol turn-2): closing another thread's
+        # descriptor does not cancel its blocked read, so the wake path
+        # is the stop flag checked between short reads — close() can
+        # then verify termination instead of abandoning the thread.
+        import errno
+        while not self._stop.is_set():
             n = libc.read(fd, buf, len(buf))
-            if n <= 0:
+            if n == 0:
+                return
+            if n < 0:
+                if ctypes.get_errno() == errno.EAGAIN:
+                    time.sleep(0.05)
+                    continue
                 return
             offset = 0
             while offset + header.size <= n:
@@ -784,6 +795,17 @@ class ReservationWatch:
         return False
 
     def close(self):
+        # Stop the watch first and verify the thread ended before
+        # releasing its descriptor (sol turn-2): the old order closed
+        # the fd from another thread, waited two seconds, and dropped
+        # the reference — a quiet watch stayed blocked forever.
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=3)
+            if self._thread.is_alive():
+                raise AssertionError(
+                    "reservation watch thread did not stop at close")
+            self._thread = None
         fd = self._fd
         self._fd = None
         if fd is not None:
@@ -791,9 +813,6 @@ class ReservationWatch:
                 os.close(fd)
             except OSError:
                 pass
-        if self._thread is not None:
-            self._thread.join(timeout=2)
-            self._thread = None
 
 
 def publish_until_reservation(service, work, request_id, params):

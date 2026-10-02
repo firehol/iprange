@@ -29,24 +29,129 @@ typedef struct {
     uint64_t offset;
 } direct_source;
 
+/* Strict UTF-8 to UTF-16 decoding (sol turn-2): byte-wise widening is
+ * not decoding — a multibyte checkout path becomes a different Windows
+ * path and cannot open the fixtures.  Malformed input (overlong forms,
+ * encoded surrogates, out-of-range scalars, truncated sequences) and
+ * destination overflow are REJECTED: a rejected input produces no
+ * path.  Returns 0 on success, 1 on malformed input, 2 on truncation.
+ * The conversion lives in the test support, not the product. */
+static inline int decode_utf8_to_utf16(const char *src, uint16_t *dst,
+                                       size_t cap, size_t *out_len)
+{
+    const unsigned char *p = (const unsigned char *)src;
+    size_t n = 0;
+    if (cap == 0) {
+        return 2;
+    }
+    while (*p != '\0') {
+        unsigned long code;
+        int extra;
+        unsigned char lead = *p++;
+        int index;
+        if (lead < 0x80) {
+            code = lead;
+            extra = 0;
+        } else if ((lead & 0xe0) == 0xc0) {
+            code = lead & 0x1fu;
+            extra = 1;
+        } else if ((lead & 0xf0) == 0xe0) {
+            code = lead & 0x0fu;
+            extra = 2;
+        } else if ((lead & 0xf8) == 0xf0) {
+            code = lead & 0x07u;
+            extra = 3;
+        } else {
+            return 1;
+        }
+        for (index = 0; index < extra; index++) {
+            unsigned char cont = *p++;
+            if ((cont & 0xc0) != 0x80) {
+                return 1;
+            }
+            code = (code << 6) | (cont & 0x3fu);
+        }
+        if (extra == 1 && code < 0x80ul) return 1;
+        if (extra == 2 && code < 0x800ul) return 1;
+        if (extra == 3 && code < 0x10000ul) return 1;
+        if (code > 0x10fffful) return 1;
+        if (code >= 0xd800ul && code <= 0xdffful) return 1;
+        if (code < 0x10000ul) {
+            if (cap - n < 2u) return 2;
+            dst[n++] = (uint16_t)code;
+        } else {
+            if (cap - n < 3u) return 2;
+            code -= 0x10000ul;
+            dst[n++] = (uint16_t)(0xd800u + (code >> 10));
+            dst[n++] = (uint16_t)(0xdc00u + (code & 0x3ffu));
+        }
+    }
+    dst[n] = 0;
+    *out_len = n;
+    return 0;
+}
+
+/* The decoder's shape pin: ASCII, multibyte, a surrogate pair, and
+ * every rejection class. Runs from abi_cases before the corpus walk;
+ * a regression in the decoding fails the whole run. */
+static inline int selftest_decode_utf8_to_utf16(void)
+{
+    uint16_t units[8];
+    size_t length = 0;
+
+    /* ASCII */
+    CHECK(decode_utf8_to_utf16("ab", units, 8, &length) == 0);
+    CHECK(length == 2 && units[0] == 'a' && units[1] == 'b' && units[2] == 0);
+    /* two-byte: U+00E9 */
+    CHECK(decode_utf8_to_utf16("\xc3\xa9", units, 8, &length) == 0);
+    CHECK(length == 1 && units[0] == 0x00e9);
+    /* three-byte: U+20AC */
+    CHECK(decode_utf8_to_utf16("\xe2\x82\xac", units, 8, &length) == 0);
+    CHECK(length == 1 && units[0] == 0x20ac);
+    /* four-byte: U+1D11E becomes the surrogate pair D834 DD1E */
+    CHECK(decode_utf8_to_utf16("\xf0\x9d\x84\x9e", units, 8, &length) == 0);
+    CHECK(length == 2 && units[0] == 0xd834 && units[1] == 0xdd1e);
+    /* empty input is one terminator */
+    CHECK(decode_utf8_to_utf16("", units, 8, &length) == 0);
+    CHECK(length == 0 && units[0] == 0);
+    /* rejection: overlong NUL */
+    CHECK(decode_utf8_to_utf16("\xc0\x80", units, 8, &length) == 1);
+    /* rejection: truncated sequence */
+    CHECK(decode_utf8_to_utf16("\xe2\x82", units, 8, &length) == 1);
+    /* rejection: encoded surrogate D800 */
+    CHECK(decode_utf8_to_utf16("\xed\xa0\x80", units, 8, &length) == 1);
+    /* rejection: beyond U+10FFFF */
+    CHECK(decode_utf8_to_utf16("\xf4\x90\x80\x80", units, 8, &length) == 1);
+    /* rejection: invalid lead */
+    CHECK(decode_utf8_to_utf16("\xff", units, 8, &length) == 1);
+    /* truncation is rejected, never a shortened path (an exact fit —
+     * two units plus terminator in three slots — is success) */
+    CHECK(decode_utf8_to_utf16("abc", units, 3, &length) == 2);
+    CHECK(decode_utf8_to_utf16("\xf0\x9d\x84\x9e", units, 2, &length) == 2);
+    CHECK(decode_utf8_to_utf16("\xf0\x9d\x84\x9e", units, 3, &length) == 0);
+    return 0;
+}
+
 static inline iprange_v4_abi1_path path_from(const char *path)
 {
     iprange_v4_abi1_path value = {0};
 #if defined(_WIN32)
     /* The Windows ABI refuses POSIX path kinds, so a caller that only
-     * passes bytes cannot reach any fixture.  The corpus names are
-     * ASCII here; the conversion lives in the test support, not the
-     * product. */
-    static uint16_t units[1024];
-    size_t index = 0;
-    while (path[index] != '\0' && index + 1 < sizeof(units) / sizeof(units[0])) {
-        units[index] = (uint16_t)(unsigned char)path[index];
-        ++index;
+     * passes bytes cannot reach any fixture.  Decode strictly and
+     * reject loudly: a wrong wide path would open the wrong file or
+     * none, and a silent truncation is a fabricated path. */
+    static uint16_t units[4096];
+    size_t length = 0;
+    if (decode_utf8_to_utf16(path, units,
+                             sizeof(units) / sizeof(units[0]), &length) != 0) {
+        fprintf(stderr,
+                "test support: fixture path is not decodable UTF-8 or "
+                "does not fit the wide buffer: %s\n", path);
+        exit(1);
     }
-    units[index] = 0;
     value.kind = IPRANGE_V4_ABI1_PATH_WINDOWS_UTF16;
     value.pointer = units;
-    value.length = index;
+    value.length = length;
 #else
     value.kind = IPRANGE_V4_ABI1_PATH_POSIX_BYTES;
     value.pointer = path;

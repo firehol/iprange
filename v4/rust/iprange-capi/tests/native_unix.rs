@@ -2,10 +2,11 @@
 //!
 //! `native_behavior.rs` is gated to Linux because it asserts POSIX
 //! path kinds and live entries, which FreeBSD refuses before any of
-//! that runs. The conformance reader and the path-free error codes are
-//! portable, so they run here on every unix — including Linux, where
-//! this file is compiled and executed, so the code is never unverified.
-//! A macOS or FreeBSD build that mis-reads a fixture or returns the
+//! that runs. The path-free error codes are portable and run here on
+//! every unix. The conformance-corpus execution is owned by
+//! `native_behavior.rs` on Linux (one owner; sol turn-2) and by this
+//! file on every other unix, where it is the only attestation: a
+//! macOS or FreeBSD build that mis-reads a fixture or returns the
 //! wrong code for an empty path fails here.
 
 #![cfg(unix)]
@@ -105,6 +106,7 @@ fn native_c_portable_errors_hold_on_this_host() {
     );
 }
 
+#[cfg(not(target_os = "linux"))]
 #[test]
 fn native_c_reads_conformance_cases_on_this_host() {
     let temporary = TemporaryDirectory::new();
@@ -121,7 +123,7 @@ fn native_c_reads_conformance_cases_on_this_host() {
     // non-adjacent manifest range pair is verified absent through the C
     // ABI; the current corpus implies 1007 such holes.
     assert!(
-        stdout.contains("cases=16 gaps=1007"),
+        stdout.contains("cases=16 gaps=1007 address_count_exact=16"),
         "cases.json was not applied: {stdout}"
     );
 }
