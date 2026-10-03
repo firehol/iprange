@@ -22405,7 +22405,7 @@ dispositioned, not silently carried:
   1.203, 1.186, 1.241, 1.234, 1.203, 1.193, 1.108, and 1.248; the
   two round-36 runs; and the later restage rebinds — round-89 1.247,
   round-92 1.050, round-94 1.170, round-96 1.305, round-98 1.188,
-  round-100 1.172, round-102 1.192, round-105 1.262, round-107 1.225, round-109 1.324, round-111 1.167, round-119 1.225, round-131 1.160, round-137 1.239, round-139 1.385, round-141 1.223, round-143 1.142, round-145 1.333, round-147 1.271, round-149 1.218, round-151 1.199, round-153 1.148, round-155 1.176, round-157 1.231, round-159 1.214, round-161 1.202, round-163 1.104, round-165 1.140, round-167 1.187, round-169 1.214, round-171 1.252, round-173 1.236, round-175 1.218, round-177 1.172, round-179 1.194, round-181 1.228, round-183 0.966, round-185 1.179, round-187 0.935, round-189 1.219, round-191 1.256, round-193 1.188, round-195 1.386, round-197 1.21) span
+  round-100 1.172, round-102 1.192, round-105 1.262, round-107 1.225, round-109 1.324, round-111 1.167, round-119 1.225, round-131 1.160, round-137 1.239, round-139 1.385, round-141 1.223, round-143 1.142, round-145 1.333, round-147 1.271, round-149 1.218, round-151 1.199, round-153 1.148, round-155 1.176, round-157 1.231, round-159 1.214, round-161 1.202, round-163 1.104, round-165 1.140, round-167 1.187, round-169 1.214, round-171 1.252, round-173 1.236, round-175 1.218, round-177 1.172, round-179 1.194, round-181 1.228, round-183 0.966, round-185 1.179, round-187 0.935, round-189 1.219, round-191 1.256, round-193 1.188, round-195 1.386, round-197 1.210) span
   elapsed
   **0.916–1.586** — wall-clock noise that crosses both 1.0 and the
   1.3x bound: the round-7 session measured 1.586 on an idle machine
