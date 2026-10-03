@@ -1094,6 +1094,18 @@ class SolTurn2DetectorTest(unittest.TestCase):
         finally:
             parallel_feeds.BenchSession = saved
         self.assertEqual(str(box4.get("error")), "spawn refused")
+        box6 = {}
+
+        class CustomSpawn:
+            def __init__(self, binary):
+                raise HarnessBug("spawn bug")
+
+        parallel_feeds.BenchSession = CustomSpawn
+        try:
+            parallel_feeds.run_publish("engine", "text", "dest", "feed", box6)
+        finally:
+            parallel_feeds.BenchSession = saved
+        self.assertIsInstance(box6.get("error"), HarnessBug)
 
     def test_the_trailing_drain_requires_observed_eof(self):
         # A peer that exits zero while a descendant retains stdout
@@ -1195,7 +1207,10 @@ class SolTurn2DetectorTest(unittest.TestCase):
                 service.close(allow_forced=True, broken_exchange=True)
 
     def test_the_stderr_partial_line_bound_is_enforced(self):
-        # The 8 KiB partial-line cap is a claimed contract (r181
+        # POSIX-demonstrated (r193 tester): the nt drainer keeps the
+        # buffered line-loop shape and carries no cap — named there,
+        # not claimed here. The 8 KiB partial-line cap is a claimed
+        # contract (r181
         # security/performance): a newline-free stderr flood delivers
         # the drop marker and leaves the tail capped, instead of
         # accumulating without bound.
@@ -1211,10 +1226,10 @@ class SolTurn2DetectorTest(unittest.TestCase):
             "    sent = False\n"
             "    while not os.path.exists(release):\n"
             "        if not sent and os.path.exists(start):\n"
-            "            sys.stderr.write('PAR')\n"
+            "            sys.stderr.write('P' * 200)\n"
             "            sys.stderr.flush()\n"
             "            time.sleep(0.3)\n"
-            "            sys.stderr.write('TIAL\\nKNOWN-LINE\\n')\n"
+            "            sys.stderr.write('AR\\nKNOWN-LINE\\n')\n"
             "            sys.stderr.flush()\n"
             "            sys.stderr.write('y' * 9000 +\n"
             "                             'MORE\\nWIRE-MARKER\\n')\n"
@@ -1255,13 +1270,16 @@ class SolTurn2DetectorTest(unittest.TestCase):
             # recorder keeps a marker sighting and counts only (no
             # chunk retention).
             routed_chunks = []
-            routed_marker = []
+            routed_known = []
+            routed_wire = []
             real_absorb = service._absorb_stderr_chunk
 
             def counting_absorb(chunk, pending):
                 routed_chunks.append(len(chunk))
-                if b"WIRE-MARKER" in chunk or b"KNOWN-LINE" in chunk:
-                    routed_marker.append(True)
+                if b"KNOWN-LINE" in chunk:
+                    routed_known.append(True)
+                if b"WIRE-MARKER" in chunk:
+                    routed_wire.append(True)
                 return real_absorb(chunk, pending)
 
             service._absorb_stderr_chunk = counting_absorb
@@ -1277,7 +1295,9 @@ class SolTurn2DetectorTest(unittest.TestCase):
             self.assertIn("stderr partial line dropped", joined)
             self.assertTrue(routed_chunks,
                             "the drainer must route chunks through the seam")
-            self.assertTrue(routed_marker,
+            self.assertTrue(routed_known,
+                            "the known line's write must run through the seam")
+            self.assertTrue(routed_wire,
                             "the crossing write must run through the seam")
             joined_seen = "".join(seen)
             self.assertEqual(joined_seen.count("KNOWN-LINE\n"), 1,
@@ -1285,9 +1305,9 @@ class SolTurn2DetectorTest(unittest.TestCase):
                              "(occurrence count: glue-immune)")
             self.assertEqual(joined_seen.count("WIRE-MARKER\n"), 1,
                              "the crossing chunk's diagnostic line must land")
-            self.assertEqual(joined_seen.count("PARTIAL\n"), 1,
-                             "the cross-chunk carry must reassemble on the "
-                             "wire path")
+            self.assertEqual(joined_seen.count("P" * 200 + "AR\n"), 1,
+                             "the 200-byte cross-chunk carry must reassemble "
+                             "on the wire path")
             self.assertLessEqual(
                 len(joined), 20 * 8200,
                 "the stderr tail grew without its partial-line bound")
@@ -1337,6 +1357,18 @@ class SolTurn2DetectorTest(unittest.TestCase):
         self.assertEqual(pending, b"x" * 200)
         pending = service._absorb_stderr_chunk(b"\nEND\n", pending)
         self.assertIn("x" * 200 + "\n", service.stderr_tail)
+        # (6) the cap contract itself: a 4000-byte partial is kept,
+        # an 8193-byte one is dropped with the marker (a shrunk cap
+        # loses the 4000-byte case and fails here).
+        kept_tail = service.stderr_tail[:]
+        pending = service._absorb_stderr_chunk(b"k" * 4000, b"")
+        self.assertEqual(pending, b"k" * 4000)
+        service.stderr_tail[:] = kept_tail
+        pending = service._absorb_stderr_chunk(b"d" * 8193, b"")
+        self.assertEqual(pending, b"")
+        self.assertEqual(service.stderr_tail[-1],
+                         "[stderr partial line dropped: over 8 KiB "
+                         "without a newline]\n")
 
     def test_the_drainer_uses_the_pinned_seam_at_the_call_site(self):
         # Call-node pin (r185 operations/parity): the drainer must
