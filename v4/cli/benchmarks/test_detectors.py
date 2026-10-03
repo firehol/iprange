@@ -1059,6 +1059,27 @@ class SolTurn2DetectorTest(unittest.TestCase):
             finally:
                 parallel_feeds.BenchSession = saved
             self.assertIs(box3.get("error"), failure)
+        # The call site carries the custom class too (r191): a
+        # finite-tuple narrowing naming the standard classes must
+        # still fail here.
+        box5 = {}
+
+        class CustomCall:
+            def __init__(self, binary):
+                pass
+
+            def call(self, method, params):
+                raise HarnessBug("call bug")
+
+            def close(self):
+                pass
+
+        parallel_feeds.BenchSession = CustomCall
+        try:
+            parallel_feeds.run_publish("engine", "text", "dest", "feed", box5)
+        finally:
+            parallel_feeds.BenchSession = saved
+        self.assertIsInstance(box5.get("error"), HarnessBug)
         # The constructor is inside the same channel (r189): a spawn
         # failure must not escape the worker unseen either.
         box4 = {}
@@ -1190,7 +1211,13 @@ class SolTurn2DetectorTest(unittest.TestCase):
             "    sent = False\n"
             "    while not os.path.exists(release):\n"
             "        if not sent and os.path.exists(start):\n"
-            "            sys.stderr.write('KNOWN-LINE\\n')\n"
+            "            sys.stderr.write('PAR')\n"
+            "            sys.stderr.flush()\n"
+            "            time.sleep(0.3)\n"
+            "            sys.stderr.write('TIAL\\nKNOWN-LINE\\n')\n"
+            "            sys.stderr.flush()\n"
+            "            sys.stderr.write('y' * 9000 +\n"
+            "                             'MORE\\nWIRE-MARKER\\n')\n"
             "            sys.stderr.flush()\n"
             "            sent = True\n"
             "        sys.stderr.write('y' * 65536)\n"
@@ -1220,14 +1247,21 @@ class SolTurn2DetectorTest(unittest.TestCase):
                     super().append(item)
 
             service.stderr_tail = Recording()
-            # Routing pin (r189): the drainer must invoke the seam —
-            # a dead seam call with inline handling loses the wire
-            # lines while every source-text pin stays green.
-            routed = []
+            # Routing pin (r189/r191): every crossing write must
+            # actually run through the seam — a dead or decorative
+            # call with inline handling, a routed-first/hybrid
+            # drainer, and a call-site carry wipe all lose the wire
+            # lines or the routing sighting and fail here. The
+            # recorder keeps a marker sighting and counts only (no
+            # chunk retention).
+            routed_chunks = []
+            routed_marker = []
             real_absorb = service._absorb_stderr_chunk
 
             def counting_absorb(chunk, pending):
-                routed.append(chunk)
+                routed_chunks.append(len(chunk))
+                if b"WIRE-MARKER" in chunk or b"KNOWN-LINE" in chunk:
+                    routed_marker.append(True)
                 return real_absorb(chunk, pending)
 
             service._absorb_stderr_chunk = counting_absorb
@@ -1241,11 +1275,19 @@ class SolTurn2DetectorTest(unittest.TestCase):
                 service.close(allow_forced=True, broken_exchange=True)
             joined = "".join(service.stderr_tail)
             self.assertIn("stderr partial line dropped", joined)
-            self.assertTrue(routed,
+            self.assertTrue(routed_chunks,
                             "the drainer must route chunks through the seam")
-            self.assertEqual("".join(seen).count("KNOWN-LINE\n"), 1,
+            self.assertTrue(routed_marker,
+                            "the crossing write must run through the seam")
+            joined_seen = "".join(seen)
+            self.assertEqual(joined_seen.count("KNOWN-LINE\n"), 1,
                              "a wire line must be delivered exactly once "
                              "(occurrence count: glue-immune)")
+            self.assertEqual(joined_seen.count("WIRE-MARKER\n"), 1,
+                             "the crossing chunk's diagnostic line must land")
+            self.assertEqual(joined_seen.count("PARTIAL\n"), 1,
+                             "the cross-chunk carry must reassemble on the "
+                             "wire path")
             self.assertLessEqual(
                 len(joined), 20 * 8200,
                 "the stderr tail grew without its partial-line bound")
