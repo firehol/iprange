@@ -22626,8 +22626,8 @@ spread disclosed).
 ### Sol turn-2 repair waves (2026-10-02, recorded before implementation)
 
 The turn-2 cluster (13 P2 + 3 P3 + 1 unrelated P1) is fixed in
-thirteen waves (A-M) [waves A-E were recorded here before their
-implementation; F-L were recorded at their correction entries as
+fourteen waves (A-N) [waves A-E were recorded here before their
+implementation; F-N were recorded at their correction entries as
 the panels demanded them], each with detecting tests, then a
 restage, the approving seven-role re-review of the exact
 revision, sol turn 3, and the full battery:
