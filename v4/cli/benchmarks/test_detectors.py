@@ -1030,27 +1030,49 @@ class SolTurn2DetectorTest(unittest.TestCase):
             parallel_feeds.BenchSession = saved
         self.assertEqual(str(box2.get("error")), "'id'")
         # The teardown site carries the same breadth (r187
-        # operations): a close failure outside the pair lands in the
-        # channel too — narrowing it makes prove() accept a peer
-        # whose teardown failed.
-        box3 = {}
+        # operations, r189): any finite-tuple narrowing must fail —
+        # ValueError, KeyError and a custom class each land in the
+        # channel; narrowing it makes prove() accept a peer whose
+        # teardown failed.
+        class HarnessBug(Exception):
+            pass
 
-        class Closing:
+        for failure in (ValueError("teardown exploded"),
+                        KeyError("teardown key"),
+                        HarnessBug("teardown bug")):
+            box3 = {}
+
+            class Closing:
+                def __init__(self, binary):
+                    pass
+
+                def call(self, method, params):
+                    return {"report": {"addresses": 1}}
+
+                def close(self):
+                    raise failure
+
+            parallel_feeds.BenchSession = Closing
+            try:
+                parallel_feeds.run_publish("engine", "text", "dest",
+                                           "feed", box3)
+            finally:
+                parallel_feeds.BenchSession = saved
+            self.assertIs(box3.get("error"), failure)
+        # The constructor is inside the same channel (r189): a spawn
+        # failure must not escape the worker unseen either.
+        box4 = {}
+
+        class CannotSpawn:
             def __init__(self, binary):
-                pass
+                raise OSError("spawn refused")
 
-            def call(self, method, params):
-                return {"report": {"addresses": 1}}
-
-            def close(self):
-                raise ValueError("teardown exploded")
-
-        parallel_feeds.BenchSession = Closing
+        parallel_feeds.BenchSession = CannotSpawn
         try:
-            parallel_feeds.run_publish("engine", "text", "dest", "feed", box3)
+            parallel_feeds.run_publish("engine", "text", "dest", "feed", box4)
         finally:
             parallel_feeds.BenchSession = saved
-        self.assertEqual(str(box3.get("error")), "teardown exploded")
+        self.assertEqual(str(box4.get("error")), "spawn refused")
 
     def test_the_trailing_drain_requires_observed_eof(self):
         # A peer that exits zero while a descendant retains stdout
@@ -1198,6 +1220,17 @@ class SolTurn2DetectorTest(unittest.TestCase):
                     super().append(item)
 
             service.stderr_tail = Recording()
+            # Routing pin (r189): the drainer must invoke the seam —
+            # a dead seam call with inline handling loses the wire
+            # lines while every source-text pin stays green.
+            routed = []
+            real_absorb = service._absorb_stderr_chunk
+
+            def counting_absorb(chunk, pending):
+                routed.append(chunk)
+                return real_absorb(chunk, pending)
+
+            service._absorb_stderr_chunk = counting_absorb
             try:
                 service.call("s1", "iprange.v1.system.describe", {})
                 open(start, "w").close()
@@ -1208,8 +1241,11 @@ class SolTurn2DetectorTest(unittest.TestCase):
                 service.close(allow_forced=True, broken_exchange=True)
             joined = "".join(service.stderr_tail)
             self.assertIn("stderr partial line dropped", joined)
-            self.assertEqual(seen.count("KNOWN-LINE\n"), 1,
-                             "a wire line must be delivered exactly once")
+            self.assertTrue(routed,
+                            "the drainer must route chunks through the seam")
+            self.assertEqual("".join(seen).count("KNOWN-LINE\n"), 1,
+                             "a wire line must be delivered exactly once "
+                             "(occurrence count: glue-immune)")
             self.assertLessEqual(
                 len(joined), 20 * 8200,
                 "the stderr tail grew without its partial-line bound")
@@ -1252,10 +1288,12 @@ class SolTurn2DetectorTest(unittest.TestCase):
         pending = service._absorb_stderr_chunk(b"tial\n", pending)
         self.assertIn("partial\n", service.stderr_tail)
         self.assertEqual(pending, b"")
-        # (5) the load-bearing SIZE: a 200-byte partial split across
-        # reads must reassemble — any cap below ~200 destroys it.
-        pending = service._absorb_stderr_chunk(b"x" * 100, b"")
-        pending = service._absorb_stderr_chunk(b"x" * 100 + b"\nEND\n", pending)
+        # (5) the load-bearing SIZE: the first fragment alone is
+        # 200 bytes, so any cap below 200 drops it before the
+        # terminator arrives and fails here.
+        pending = service._absorb_stderr_chunk(b"x" * 200, b"")
+        self.assertEqual(pending, b"x" * 200)
+        pending = service._absorb_stderr_chunk(b"\nEND\n", pending)
         self.assertIn("x" * 200 + "\n", service.stderr_tail)
 
     def test_the_drainer_uses_the_pinned_seam_at_the_call_site(self):

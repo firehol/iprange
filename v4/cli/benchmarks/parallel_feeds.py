@@ -48,8 +48,11 @@ def publish_request(text_path, destination, name):
 
 
 def run_publish(binary, text_path, destination, name, box):
-    session = BenchSession(binary)
+    session = None
     try:
+        # Construction is inside the channel (r189): a spawn failure
+        # must not escape the worker thread unseen either.
+        session = BenchSession(binary)
         box["result"] = session.call("iprange.v1.current.publish", publish_request(
             text_path, destination, name)["params"])
     except Exception as exc:
@@ -58,17 +61,18 @@ def run_publish(binary, text_path, destination, name, box):
         # the worker thread unseen.
         box.setdefault("error", exc)
     finally:
-        try:
-            session.close()
-        except Exception as exc:
-            # Teardown is part of the publish (sol turn-2): a peer that
-            # produced the destination and report and then exited
-            # nonzero or left residue must not pass because the close
-            # failure died with this thread — Thread.join propagates
-            # nothing, so the result channel is the only path. An
-            # earlier publish failure is the primary error; the
-            # teardown failure does not overwrite it.
-            box.setdefault("error", exc)
+        if session is not None:
+            try:
+                session.close()
+            except Exception as exc:
+                # Teardown is part of the publish (sol turn-2): a peer
+                # that produced the destination and report and then
+                # exited nonzero or left residue must not pass because
+                # the close failure died with this thread — Thread.join
+                # propagates nothing, so the result channel is the only
+                # path. An earlier publish failure is the primary
+                # error; the teardown failure does not overwrite it.
+                box.setdefault("error", exc)
 
 
 def prove(binary, work):
