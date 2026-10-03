@@ -22350,17 +22350,18 @@ covered per field: a forged key is refused by the disagreement
 rule, while forged bookkeeping (the _started flag) lands in the
 documented amnesty (c); (c) the TID-reuse
 amnesty assumes the def-bound oracle is honest on an exact-class
-thread. Known harness residues (carried, named entry 47): the wire-twin
-failure path can emit a very large single-line AssertionError
-(the gate works; a log-volume nuisance only), and a
-partial-construction failure in the parallel-feed worker records
-its error but reaps no orphan child (fail-closed; residue only).
-The source pins in test_measure.py are regression
+thread. The source pins in test_measure.py are regression
 detectors over enumerated forms, not the boundary; the battery's
 limb attribution is a first-matching-phrase containment check over
 each arm's failure output.
 
 ### Documented residuals (round 18, recorded for the roles)
+
+Known harness residues (carried, named entry 47): the wire-twin
+failure path can emit a very large single-line AssertionError
+(the gate works; a log-volume nuisance only), and a
+partial-construction failure in the parallel-feed worker records
+its error but reaps no orphan child (fail-closed; residue only). [moved entry 48: filed in the Join-contract section in error]
 
 These are properties of the harness that reviewer roles have carried as
 P2 findings. They are recorded here with their rationale so they are
