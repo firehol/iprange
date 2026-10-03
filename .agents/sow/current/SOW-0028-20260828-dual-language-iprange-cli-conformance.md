@@ -22626,7 +22626,7 @@ spread disclosed).
 ### Sol turn-2 repair waves (2026-10-02, recorded before implementation)
 
 The turn-2 cluster (13 P2 + 3 P3 + 1 unrelated P1) is fixed in
-twelve waves (A-L) [waves A-E were recorded here before their
+thirteen waves (A-M) [waves A-E were recorded here before their
 implementation; F-L were recorded at their correction entries as
 the panels demanded them], each with detecting tests, then a
 restage, the approving seven-role re-review of the exact
@@ -22692,6 +22692,12 @@ C corpus attestation on every native leg).
   marker-only recording); the call-site custom-class arm; the
   staging helper's empty/copy-failure refusals; the identity map
   completed.
+- Wave M (r193 panel): the crossing-write sighting split per
+  marker; the 200-byte carry fragment; the cap-contract limbs;
+  the constructor custom-class arm.
+- Wave N (r195 panel): the exact 8 KiB cap pin (keep 8192, drop
+  8193); the full constructor class matrix; the claim-narrowing
+  pass over waves M's record.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The

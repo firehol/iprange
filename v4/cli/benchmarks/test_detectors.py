@@ -1082,30 +1082,23 @@ class SolTurn2DetectorTest(unittest.TestCase):
         self.assertIsInstance(box5.get("error"), HarnessBug)
         # The constructor is inside the same channel (r189): a spawn
         # failure must not escape the worker unseen either.
-        box4 = {}
+        for failure in (OSError("spawn refused"),
+                        ValueError("spawn value"),
+                        KeyError("spawn key"),
+                        HarnessBug("spawn bug")):
+            box4 = {}
 
-        class CannotSpawn:
-            def __init__(self, binary):
-                raise OSError("spawn refused")
+            class CannotSpawn:
+                def __init__(self, binary):
+                    raise failure
 
-        parallel_feeds.BenchSession = CannotSpawn
-        try:
-            parallel_feeds.run_publish("engine", "text", "dest", "feed", box4)
-        finally:
-            parallel_feeds.BenchSession = saved
-        self.assertEqual(str(box4.get("error")), "spawn refused")
-        box6 = {}
-
-        class CustomSpawn:
-            def __init__(self, binary):
-                raise HarnessBug("spawn bug")
-
-        parallel_feeds.BenchSession = CustomSpawn
-        try:
-            parallel_feeds.run_publish("engine", "text", "dest", "feed", box6)
-        finally:
-            parallel_feeds.BenchSession = saved
-        self.assertIsInstance(box6.get("error"), HarnessBug)
+            parallel_feeds.BenchSession = CannotSpawn
+            try:
+                parallel_feeds.run_publish("engine", "text", "dest",
+                                           "feed", box4)
+            finally:
+                parallel_feeds.BenchSession = saved
+            self.assertIs(box4.get("error"), failure)
 
     def test_the_trailing_drain_requires_observed_eof(self):
         # A peer that exits zero while a descendant retains stdout
@@ -1357,12 +1350,13 @@ class SolTurn2DetectorTest(unittest.TestCase):
         self.assertEqual(pending, b"x" * 200)
         pending = service._absorb_stderr_chunk(b"\nEND\n", pending)
         self.assertIn("x" * 200 + "\n", service.stderr_tail)
-        # (6) the cap contract itself: a 4000-byte partial is kept,
-        # an 8193-byte one is dropped with the marker (a shrunk cap
-        # loses the 4000-byte case and fails here).
+        # (6) the cap contract itself, pinned at its exact value: a
+        # partial of exactly 8192 bytes is kept, 8193 is dropped
+        # with the marker (any cap drift in either direction fails
+        # one of the two limbs).
         kept_tail = service.stderr_tail[:]
-        pending = service._absorb_stderr_chunk(b"k" * 4000, b"")
-        self.assertEqual(pending, b"k" * 4000)
+        pending = service._absorb_stderr_chunk(b"k" * 8192, b"")
+        self.assertEqual(pending, b"k" * 8192)
         service.stderr_tail[:] = kept_tail
         pending = service._absorb_stderr_chunk(b"d" * 8193, b"")
         self.assertEqual(pending, b"")
