@@ -923,6 +923,14 @@ class SolTurn2DetectorTest(unittest.TestCase):
                 start=os.path.join(work, "start")))
             stream.write(f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
         os.chmod(wrapper, 0o755)
+        # The knob must survive the writer binding (r187 parity): a
+        # shadowed parameter silently renders stream=True for every
+        # holder.
+        with open(wrapper, encoding="utf-8") as handle:
+            rendered = handle.read()
+        self.assertIn(
+            "if %s and os.path.exists(start)"
+            % ("True" if stream_mode else "False"), rendered)
         return wrapper
 
     def test_the_parallel_feed_proof_cannot_lose_a_close_failure(self):
@@ -1001,6 +1009,48 @@ class SolTurn2DetectorTest(unittest.TestCase):
         finally:
             parallel_feeds.BenchSession = saved
         self.assertEqual(str(box.get("error")), "truncated JSON response")
+        # A second non-pair class (a harness KeyError) lands too —
+        # a half-narrowed catch must fail this limb as well.
+        box2 = {}
+
+        class Keyed:
+            def __init__(self, binary):
+                pass
+
+            def call(self, method, params):
+                raise KeyError("id")
+
+            def close(self):
+                pass
+
+        parallel_feeds.BenchSession = Keyed
+        try:
+            parallel_feeds.run_publish("engine", "text", "dest", "feed", box2)
+        finally:
+            parallel_feeds.BenchSession = saved
+        self.assertEqual(str(box2.get("error")), "'id'")
+        # The teardown site carries the same breadth (r187
+        # operations): a close failure outside the pair lands in the
+        # channel too — narrowing it makes prove() accept a peer
+        # whose teardown failed.
+        box3 = {}
+
+        class Closing:
+            def __init__(self, binary):
+                pass
+
+            def call(self, method, params):
+                return {"report": {"addresses": 1}}
+
+            def close(self):
+                raise ValueError("teardown exploded")
+
+        parallel_feeds.BenchSession = Closing
+        try:
+            parallel_feeds.run_publish("engine", "text", "dest", "feed", box3)
+        finally:
+            parallel_feeds.BenchSession = saved
+        self.assertEqual(str(box3.get("error")), "teardown exploded")
 
     def test_the_trailing_drain_requires_observed_eof(self):
         # A peer that exits zero while a descendant retains stdout
@@ -1114,7 +1164,13 @@ class SolTurn2DetectorTest(unittest.TestCase):
             "pid = os.fork()\n"
             "if pid == 0:\n"
             "    release = {release!r}\n"
+            "    start = {start!r}\n"
+            "    sent = False\n"
             "    while not os.path.exists(release):\n"
+            "        if not sent and os.path.exists(start):\n"
+            "            sys.stderr.write('KNOWN-LINE\\n')\n"
+            "            sys.stderr.flush()\n"
+            "            sent = True\n"
             "        sys.stderr.write('y' * 65536)\n"
             "        sys.stderr.flush()\n"
             "    os._exit(0)\n"
@@ -1124,14 +1180,27 @@ class SolTurn2DetectorTest(unittest.TestCase):
             stub = os.path.join(_HERE, "stub_engine.py")
             wrapper = os.path.join(work, "flood_engine")
             with open(wrapper, "w", encoding="utf-8") as stream:
-                stream.write(flood.format(release=os.path.join(work, "release")))
+                stream.write(flood.format(release=os.path.join(work, "release"),
+                                          start=os.path.join(work, "start")))
                 stream.write(f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
             os.chmod(wrapper, 0o755)
             release = os.path.join(work, "release")
+            start = os.path.join(work, "start")
             service = Service([wrapper, "--jsonrpc"], "flood",
                               read_deadline=5, write_deadline=5)
+            # A recorder survives the tail ring's eviction, so
+            # exactly-once delivery is observable under the flood.
+            seen = []
+
+            class Recording(list):
+                def append(self, item):
+                    seen.append(item)
+                    super().append(item)
+
+            service.stderr_tail = Recording()
             try:
                 service.call("s1", "iprange.v1.system.describe", {})
+                open(start, "w").close()
                 import time
                 time.sleep(0.5)  # let the flood fill the tail
             finally:
@@ -1139,6 +1208,8 @@ class SolTurn2DetectorTest(unittest.TestCase):
                 service.close(allow_forced=True, broken_exchange=True)
             joined = "".join(service.stderr_tail)
             self.assertIn("stderr partial line dropped", joined)
+            self.assertEqual(seen.count("KNOWN-LINE\n"), 1,
+                             "a wire line must be delivered exactly once")
             self.assertLessEqual(
                 len(joined), 20 * 8200,
                 "the stderr tail grew without its partial-line bound")
@@ -1155,8 +1226,8 @@ class SolTurn2DetectorTest(unittest.TestCase):
         service = Service.__new__(Service)  # logic seam, no process
         service.stderr_tail = []
         pending = b""
-        # (1) a crossing chunk: completes the partial line, carries a
-        # diagnostic line, then overruns the cap in the same chunk.
+        # (1) one chunk carrying a diagnostic line and then an
+        # overrun of the cap in the same chunk.
         pending = service._absorb_stderr_chunk(
             b"MORE\nMARKER-LINE\n" + b"y" * 9000, pending)
         self.assertIn("MARKER-LINE\n", service.stderr_tail)
@@ -1181,6 +1252,11 @@ class SolTurn2DetectorTest(unittest.TestCase):
         pending = service._absorb_stderr_chunk(b"tial\n", pending)
         self.assertIn("partial\n", service.stderr_tail)
         self.assertEqual(pending, b"")
+        # (5) the load-bearing SIZE: a 200-byte partial split across
+        # reads must reassemble — any cap below ~200 destroys it.
+        pending = service._absorb_stderr_chunk(b"x" * 100, b"")
+        pending = service._absorb_stderr_chunk(b"x" * 100 + b"\nEND\n", pending)
+        self.assertIn("x" * 200 + "\n", service.stderr_tail)
 
     def test_the_drainer_uses_the_pinned_seam_at_the_call_site(self):
         # Call-node pin (r185 operations/parity): the drainer must
@@ -1190,8 +1266,10 @@ class SolTurn2DetectorTest(unittest.TestCase):
         import inspect
         from run import JsonRpcService as Service
         source = inspect.getsource(Service.__init__)
-        self.assertIn("self._absorb_stderr_chunk(chunk, pending)", source,
-                      "the stderr drainer must call the pinned seam")
+        self.assertIn("pending = self._absorb_stderr_chunk(chunk, pending)",
+                      source,
+                      "the drainer must route its pending buffer through "
+                      "the pinned seam (the assignment, not a bare call)")
 
     def test_a_quiet_reservation_watch_stops_at_close(self):
         # A quiet watch (no reservation ever appears) must stop its

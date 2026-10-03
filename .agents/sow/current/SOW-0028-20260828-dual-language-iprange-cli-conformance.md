@@ -22626,8 +22626,8 @@ spread disclosed).
 ### Sol turn-2 repair waves (2026-10-02, recorded before implementation)
 
 The turn-2 cluster (13 P2 + 3 P3 + 1 unrelated P1) is fixed in
-eight waves (A-H) [waves A-E were recorded here before their
-implementation; F-H were recorded at their correction entries as
+ten waves (A-J) [waves A-E were recorded here before their
+implementation; F-J were recorded at their correction entries as
 the panels demanded them], each with detecting tests, then a
 restage, the approving seven-role re-review of the exact
 revision, sol turn 3, and the full battery:
@@ -22676,6 +22676,14 @@ C corpus attestation on every native leg).
 - Wave H (r183 panel): the stderr seam detector (crossing-chunk
   line delivery, pending reset, ring cap — one seam pinning all
   three limbs) and the parallel_feeds escape-limb closure.
+- Wave I (r185 panel): the escape-breadth pin (a non-pair class
+  lands in the result channel), the drainer's call-node pin, the
+  seam limb completion (keep-shape, cross-chunk reassembly,
+  exact ring), and the decoder boundary cases.
+- Wave J (r187 panel): the escape breadth pinned at the call and
+  teardown sites for two classes; the seam's size limb; the
+  assignment-shape call pin and the exactly-once wire delivery
+  pin; the holder-knob pin; the role-report staging helper.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
