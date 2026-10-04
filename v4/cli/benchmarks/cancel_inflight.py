@@ -34,6 +34,59 @@ PUBLISH_ID = "cancel-inflight-1"
 PROBE_ID = "cancel-probe-1"
 
 
+def _factual_shape(details):
+    """The factual-result shape of a `details` object (sol turn-3):
+
+    publication -> a factual PublicationResult (attempt/publication/
+    destination_content); preparation -> a factual
+    PublicationPreparationFailure (publication_attempt_id/cause);
+    commit -> a factual CommitResult (attempted_database_id/
+    attempted_transaction_id/durability)."""
+    if not isinstance(details, dict):
+        return None
+    keys = set(details)
+    if {"attempt", "publication", "destination_content"} <= keys:
+        return "publication"
+    if {"publication_attempt_id", "cause"} <= keys:
+        return "preparation"
+    if {"attempted_database_id", "attempted_transaction_id",
+        "durability"} <= keys:
+        return "commit"
+    return None
+
+
+class FrameAccumulator:
+    """LF-terminated frames over non-blocking readline results (sol
+    turn-3): readline may return a partial line without its newline,
+    so frames are complete only at LF — and every complete frame
+    routes through the shared bounded frame owner
+    (JsonRpcService.decode_response_line: LF/CRLF/UTF-8/envelope/
+    object-size checks) instead of a bare json.loads."""
+
+    def __init__(self, service, read_chunk, limit=1_048_578):
+        self._service = service
+        self._read_chunk = read_chunk
+        self._limit = limit
+        self._pending = b""
+        self.chunk_count = 0
+
+    def read_response(self):
+        chunk = self._read_chunk()
+        if not chunk:
+            return None
+        self.chunk_count += 1
+        if isinstance(chunk, str):
+            chunk = chunk.encode("utf-8")
+        if len(self._pending) + len(chunk) > self._limit:
+            raise AssertionError("frame exceeds the aggregate byte ceiling")
+        self._pending += chunk
+        if not self._pending.endswith(b"\n"):
+            return None  # partial: keep accumulating
+        frame = self._pending
+        self._pending = b""
+        return self._service.decode_response_line(frame, None)
+
+
 def cancelled_result(response, destination_exists):
     """Reason the cancelled request is not a pass, or "" if it is fine.
 
@@ -91,6 +144,32 @@ def cancelled_result(response, destination_exists):
         # read_only outcome here is a method-outcome forgery.
         return ("cancelled publish claimed read_only_failure, but a "
                 f"publish is never a read-only operation: {data!r}")
+    # Sol turn-3: the spec owes the complete factual result whenever
+    # an attempt began (iprange-jsonrpc-v1.md); an outcome carrying
+    # no factual details is a half-truth the proof must refuse.
+    details = data.get("details")
+    if details is None:
+        details = {}  # a pre-attempt outcome may omit details entirely
+    if not isinstance(details, dict):
+        return f"cancelled outcome lost its factual details: {data!r}"
+    shape = _factual_shape(details)
+    if outcome == "not_started":
+        # A failure before any durable SDK attempt owes no factual
+        # result (empty details are legitimate); a preparation
+        # failure carries its PublicationPreparationFailure facts.
+        if details and shape != "preparation":
+            return (f"pre-attempt outcome carries non-preparation "
+                    f"details: {data!r}")
+    elif outcome in ("published", "not_published"):
+        # The spec: these come ONLY from a factual PublicationResult.
+        if shape != "publication":
+            return (f"publication outcome carries no factual "
+                    f"PublicationResult: {data!r}")
+    elif shape not in ("publication", "preparation"):
+        # outcome_unknown: an unknown publication whose attempt may
+        # have begun — the factual result is the publication record
+        # or the preparation-failure record, both legitimate.
+        return (f"cancelled outcome carries no factual result: {data!r}")
     return ""
 
 
@@ -131,14 +210,19 @@ def drain_terminal_answers(service, seen, read_line, *,
     """
     quiet = time.monotonic() + quiet_window
     hard_stop = time.monotonic() + aggregate_cap
+    frames = FrameAccumulator(service, read_line)
     while time.monotonic() < quiet:
         if time.monotonic() >= hard_stop:
             raise AssertionError(
                 f"duplicate-drain window exceeded its aggregate bound "
                 f"({aggregate_cap:.0f} s)")
-        extra = read_line()
-        if extra:
-            record_answer(seen, json.loads(extra))
+        before = frames.chunk_count
+        extra = frames.read_response()
+        if extra is not None:
+            record_answer(seen, extra)
+            quiet = time.monotonic() + quiet_window
+            continue
+        if frames.chunk_count != before:
             quiet = time.monotonic() + quiet_window
             continue
         if service.proc.poll() is not None:
@@ -217,13 +301,10 @@ def prove(binary, work):
         os.set_blocking(service.proc.stdout.fileno(), False)
         deadline = time.monotonic() + 60
         probe_at = None
+        frames = FrameAccumulator(service, lambda: _read_service_line(service))
         while time.monotonic() < deadline:
-            try:
-                line = service.proc.stdout.readline(1_048_578)
-            except (BlockingIOError, OSError):
-                line = ""
-            if line:
-                response = json.loads(line)
+            response = frames.read_response()
+            if response is not None:
                 record_answer(seen, response)
                 if PROBE_ID in seen and probe_at is None:
                     probe_at = time.monotonic()

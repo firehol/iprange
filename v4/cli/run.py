@@ -1540,6 +1540,7 @@ class JsonRpcService:
         # Worker threads of deadline-bounded threaded I/O (Windows);
         # close() joins them under a bound after the peer is gone.
         self._io_threads = []
+        self._stdin_writers = []
         self.lock = threading.Lock()
         self.stderr_tail = []
         self._drain_stop = threading.Event()
@@ -1571,6 +1572,13 @@ class JsonRpcService:
                     except OSError:
                         return
                     if not chunk:
+                        # Sol turn-3 P3: a final diagnostic without a
+                        # trailing newline is still a diagnostic.
+                        if pending:
+                            self.stderr_tail.append(
+                                pending.decode("utf-8", "replace"))
+                            if len(self.stderr_tail) > 20:
+                                self.stderr_tail.pop(0)
                         return
                     pending = self._absorb_stderr_chunk(chunk, pending)
             finally:
@@ -1745,6 +1753,10 @@ class JsonRpcService:
             record_frame_size(method, request_bytes)
 
     def decode_response_line(self, line, request_id):
+        """The shared bounded frame owner (sol turn-3): every response
+        path routes through the LF/CRLF/UTF-8/envelope/object-size
+        checks here. request_id may be None for multi-response
+        streams (the caller dispatches on the returned id)."""
         if not line.endswith(b"\n"):
             raise frame.FrameError(frame.STD_PARSE_ERROR, "response frame is not LF terminated")
         encoded = line[:-1]
@@ -1755,7 +1767,7 @@ class JsonRpcService:
         if len(text.encode("utf-8")) > frame.RESPONSE_OBJECT_LIMIT:
             raise frame.FrameError(
                 frame.TRANSPORT_FRAME_TOO_LARGE, "response object exceeds 65000 bytes")
-        if response.get("id") != request_id:
+        if request_id is not None and response.get("id") != request_id:
             raise frame.FrameError(
                 frame.STD_INVALID_REQUEST,
                 f"response id {response.get('id')!r} != request id {request_id!r}")
@@ -1786,6 +1798,9 @@ class JsonRpcService:
 
         thread = threading.Thread(target=worker, daemon=True)
         self._io_threads.append(thread)
+        # Sol turn-3: the writer is tracked so close() can verify its
+        # termination before closing the buffered stdin wrapper.
+        self._stdin_writers.append(thread)
         thread.start()
         if not done.wait(self.write_deadline):
             self._poisoned = True
@@ -2001,7 +2016,13 @@ class JsonRpcService:
             try:
                 if self._raw_stdin is not None:
                     self._raw_stdin.close()
-                elif self.proc.stdin and not self.proc.stdin.closed:
+                elif self.proc.stdin and not self.proc.stdin.closed \
+                        and not any(writer.is_alive() for writer in
+                                    getattr(self, "_stdin_writers", [])):
+                    # Sol turn-3: a stuck buffered writer owns the
+                    # stdin lock; closing here would wait on it without
+                    # bound. The writer's timeout error is preserved
+                    # above; the wrapper is left to the process.
                     self.proc.stdin.close()
                 if self.read_deadline is None and self.write_deadline is None:
                     self.proc.wait(timeout=30)
@@ -2072,7 +2093,15 @@ class JsonRpcService:
         # did not terminate (a descendant retains the pipe) is left to
         # the process: closing it here could block on the reader.
         buffered_watcher = getattr(self, "_buffered_watcher", None)
+        stdin_writers = getattr(self, "_stdin_writers", [])
         for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+            if stream is self.proc.stdin and any(
+                    writer.is_alive() for writer in stdin_writers):
+                # A blocked buffered writer still owns the stdin lock
+                # (sol turn-3): closing the wrapper waits on it without
+                # bound. Leave it to the process; the original timeout
+                # error is preserved above.
+                continue
             if stream is self.proc.stderr and drainer is not None \
                     and drainer.is_alive():
                 continue

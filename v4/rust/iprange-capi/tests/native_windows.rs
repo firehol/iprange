@@ -103,6 +103,11 @@ fn external_c_caller_reads_the_conformance_cases() {
     install_runtime(&temporary.0);
     let executable = compile_c(&temporary.0, "abi_cases.c");
     let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance");
+    // The C entry acquires the OS wide command line itself (sol
+    // turn-3): std::process passes UTF-16 arguments, and
+    // CommandLineToArgvW inside abi_cases.c consumes them without
+    // the ANSI code-page conversion the CRT's narrow argv would
+    // impose — a checkout path containing non-ASCII survives.
     let output = Command::new(&executable).arg(&corpus).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(

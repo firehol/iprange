@@ -3,6 +3,11 @@
 
 #include "abi_test_support.h"
 
+#if defined(_WIN32)
+#include <shellapi.h>
+#include <windows.h>
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,9 +48,32 @@ typedef struct {
     size_t count;
 } feed_universe;
 
+/* Consistent-UTF-8 file opening (sol turn-3): on Windows the CRT's
+ * narrow fopen re-interprets the path through the ANSI code page,
+ * undoing the wide-argument work below; open through the wide
+ * entry instead. */
+static FILE *fopen_utf8(const char *path, const char *mode)
+{
+#if defined(_WIN32)
+    wchar_t wpath[512];
+    wchar_t wmode[8];
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1,
+                            wpath, (int)(sizeof(wpath) / sizeof(wpath[0]))) <= 0) {
+        return NULL;
+    }
+    if (MultiByteToWideChar(CP_UTF8, 0, mode, -1, wmode,
+                            (int)(sizeof(wmode) / sizeof(wmode[0]))) <= 0) {
+        return NULL;
+    }
+    return _wfopen(wpath, wmode);
+#else
+    return fopen(path, mode);
+#endif
+}
+
 static char *read_file(const char *path, size_t *length)
 {
-    FILE *stream = fopen(path, "rb");
+    FILE *stream = fopen_utf8(path, "rb");
     char *text;
     long size;
     if (stream == NULL) {
@@ -1366,6 +1394,36 @@ static int check_fixture(const char *corpus, const char *slice, const char *slic
 int main(int argc, char **argv)
 {
     char cases_path[512];
+#if defined(_WIN32)
+    /* Native wide arguments (sol turn-3): the narrow argv the CRT
+     * hands main() is code-page dependent — a CP-1252 checkout path
+     * containing U+00E9 arrives as byte 0xE9 and the strict UTF-8
+     * path decoder then refuses it. Acquire the OS wide command line
+     * and convert it to UTF-8 strictly, so every path in this
+     * program is consistent UTF-8 and the product's wide path
+     * surface receives exactly the checkout's characters. */
+    {
+        int wargc = 0;
+        wchar_t **wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+        static char corpus_utf8[512];
+        int written;
+        if (wargv == NULL || wargc != 2) {
+            fprintf(stderr, "usage: abi_cases <conformance-dir>\n");
+            return 1;
+        }
+        written = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                                      wargv[1], -1, corpus_utf8,
+                                      (int)sizeof(corpus_utf8), NULL, NULL);
+        LocalFree(wargv);
+        if (written <= 0) {
+            fprintf(stderr,
+                    "abi_cases: corpus path is not convertible to UTF-8\n");
+            return 1;
+        }
+        argv[1] = corpus_utf8;
+        argc = 2;
+    }
+#endif
     char *text;
     size_t length = 0;
     const char *cursor;

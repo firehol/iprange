@@ -211,10 +211,58 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
     duplicate terminal answers, and checks the outcome against the
     observed publication state."""
 
+    PUBLICATION = {"attempt": {"id": "a"},
+                   "publication": "not_published",
+                   "destination_content": {"present": False}}
+    PREPARATION = {"publication_attempt_id": "b",
+                   "cause": {"problem": "preparation"}}
+
     @staticmethod
-    def cancelled(outcome):
-        return {"error": {"code": -32010,
-                          "data": {"code": "cancelled", "outcome": outcome}}}
+    def cancelled(outcome, details=None):
+        data = {"code": "cancelled", "outcome": outcome}
+        if details is not None:
+            data["details"] = details
+        return {"error": {"code": -32010, "data": data}}
+
+    def test_a_detail_free_terminal_outcome_is_refused(self):
+        # Sol turn-3: the spec owes the complete factual result
+        # whenever an attempt began; a terminal outcome with empty
+        # details is a half-truth.
+        from cancel_inflight import cancelled_result
+        reason = cancelled_result(self.cancelled("not_published"), False)
+        self.assertIn("no factual PublicationResult", reason)
+        # a non-dict details is rejected the same way
+        broken = {"error": {"code": -32010, "data": {
+            "code": "cancelled", "outcome": "not_published",
+            "details": "nonsense"}}}
+        reason = cancelled_result(broken, False)
+        self.assertIn("lost its factual details", reason)
+
+    def test_wrong_shape_details_are_refused(self):
+        from cancel_inflight import cancelled_result
+        reason = cancelled_result(
+            self.cancelled("not_published", self.PREPARATION), False)
+        self.assertIn("no factual PublicationResult", reason)
+
+    def test_factual_details_are_accepted_per_outcome(self):
+        from cancel_inflight import cancelled_result
+        self.assertEqual(
+            cancelled_result(
+                self.cancelled("not_published", self.PUBLICATION), False),
+            "")
+        self.assertEqual(
+            cancelled_result(self.cancelled("not_started"), False), "")
+        self.assertEqual(
+            cancelled_result(
+                self.cancelled("not_started", self.PREPARATION), False), "")
+        self.assertEqual(
+            cancelled_result(
+                self.cancelled("outcome_unknown", self.PUBLICATION), False),
+            "")
+        self.assertEqual(
+            cancelled_result(
+                self.cancelled("outcome_unknown", self.PREPARATION), False),
+            "")
 
     def test_a_forged_outcome_is_refused(self):
         # "banana" is not an outcome the spec names.
@@ -224,22 +272,25 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
 
     def test_published_without_destination_is_refused(self):
         from cancel_inflight import cancelled_result
-        reason = cancelled_result(self.cancelled("published"), False)
+        published = dict(self.PUBLICATION, publication="published")
+        reason = cancelled_result(self.cancelled("published", published), False)
         self.assertIn("destination is absent", reason)
 
     def test_not_published_with_destination_is_refused(self):
         from cancel_inflight import cancelled_result
-        reason = cancelled_result(self.cancelled("not_published"), True)
+        reason = cancelled_result(
+            self.cancelled("not_published", self.PUBLICATION), True)
         self.assertIn("destination exists", reason)
 
     def test_a_state_consistent_outcome_passes(self):
         from cancel_inflight import cancelled_result
-        for outcome, exists in (("not_published", False),
-                                ("not_started", False),
-                                ("outcome_unknown", False)):
+        for outcome, exists, details in (
+                ("not_published", False, self.PUBLICATION),
+                ("not_started", False, None),
+                ("outcome_unknown", False, self.PUBLICATION)):
             self.assertEqual(
-                cancelled_result(self.cancelled(outcome), exists), "",
-                outcome)
+                cancelled_result(self.cancelled(outcome, details), exists),
+                "", outcome)
 
     def test_commit_outcomes_are_refused_for_a_publish(self):
         # current.publish is a publication operation; committed /
@@ -762,6 +813,111 @@ class DuplicateAnswerTest(unittest.TestCase):
 
 
 
+class SolTurn3DetectorTest(unittest.TestCase):
+    """Sol turn-3 repairs: the shared frame owner owns every response
+    path (partial reads accumulate; unterminated JSON is refused),
+    the raw reader has an aggregate ceiling, and a stuck stdin
+    writer cannot block the close."""
+
+    class _Owner:
+        @staticmethod
+        def decode_response_line(line, request_id):
+            import json as _json
+            if not line.endswith(b"\n"):
+                raise AssertionError("response frame is not LF terminated")
+            return _json.loads(line)
+
+    def test_partial_reads_accumulate_and_unterminated_json_is_refused(self):
+        from cancel_inflight import FrameAccumulator
+        chunks = [b'{"jsonrpc":"2.0","id":', b'"a","result":{}}', b"\n"]
+        state = {"n": 0}
+
+        def read():
+            if state["n"] >= len(chunks):
+                return b""
+            chunk = chunks[state["n"]]
+            state["n"] += 1
+            return chunk
+
+        frames = FrameAccumulator(self._Owner(), read)
+        self.assertIsNone(frames.read_response())  # partial
+        self.assertIsNone(frames.read_response())  # still partial
+        response = frames.read_response()
+        self.assertEqual(response["id"], "a")
+        # complete JSON WITHOUT its LF is not a frame
+        frames = FrameAccumulator(self._Owner(), lambda: b'{"id":"b"}')
+        self.assertIsNone(frames.read_response())
+
+    def test_the_raw_reader_has_an_aggregate_ceiling(self):
+        import importlib.util as _ilu
+        import os as _os
+        spec = _ilu.spec_from_file_location(
+            "benchmarks_run", os.path.join(_HERE, "run.py"))
+        _bench_run = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(_bench_run)
+        readline_bounded = _bench_run.readline_bounded
+        read_fd, write_fd = _os.pipe()
+        reader = _os.fdopen(read_fd, "rb", buffering=0)
+        try:
+            _os.write(write_fd, b"x" * 40 + b"\n")
+            with self.assertRaisesRegex(AssertionError, "aggregate byte ceiling"):
+                readline_bounded(reader, limit=16, seconds=1.0)
+        finally:
+            reader.close()
+            _os.close(write_fd)
+
+    def test_a_stuck_stdin_writer_cannot_block_close(self):
+        # Sol turn-3: the buffered stdin close waits on the writer's
+        # lock; a writer that never terminates must be left to the
+        # process, with the original error preserved.
+        import threading
+        import time as _time
+        from run import JsonRpcService as Service
+        service = Service.__new__(Service)
+        closed = []
+
+        class Stream:
+            closed = False
+
+            def close(self):
+                closed.append(self)
+
+        class Proc:
+            def __init__(self):
+                self.stdin = Stream()
+                self.stdout = Stream()
+                self.stderr = Stream()
+
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        service.proc = Proc()
+        service._io_threads = []
+        service._poisoned = False
+        service._use_threads = False
+        service._raw_stdin = None
+        service._raw_stdout = None
+        service._read_buf = b""
+        service.read_deadline = None
+        service.write_deadline = None
+        service.stderr_tail = []
+        service.drainer = None
+        stuck = threading.Thread(target=_time.sleep, args=(30,), daemon=True)
+        service._stdin_writers = [stuck]
+        stuck.start()
+        service._drain_stop = threading.Event()
+        service._buffered_watcher = None
+        service._close_impl(allow_forced=True, broken_exchange=True)
+        self.assertNotIn(service.proc.stdin, closed,
+                         "the stuck writer's wrapper must be left alone")
+        self.assertIn(service.proc.stdout, closed)
+
+
 class CancelDrainBoundsTest(unittest.TestCase):
     """r99: the cancel duplicate-drain is bounded both ways — a trickle
     forger (one frame per 0.4 s) cannot stretch the 0.5 s quiet window
@@ -779,6 +935,12 @@ class CancelDrainBoundsTest(unittest.TestCase):
 
         class FakeService:
             proc = FakeProc()
+
+            @staticmethod
+            def decode_response_line(line, request_id):
+                import json as _json
+                assert line.endswith(b"\n"), "frame must be LF terminated"
+                return _json.loads(line)
 
         frames = [{"jsonrpc": "2.0", "id": f"trickle-{n}", "result": {}} for n in range(64)]
         state = {"next": 0, "last": _time.monotonic()}
@@ -814,6 +976,12 @@ class CancelDrainBoundsTest(unittest.TestCase):
         class FakeService:
             proc = FakeProc()
 
+            @staticmethod
+            def decode_response_line(line, request_id):
+                import json as _json
+                assert line.endswith(b"\n"), "frame must be LF terminated"
+                return _json.loads(line)
+
         counter = {"n": 0}
 
         def busy_read():
@@ -836,6 +1004,12 @@ class CancelDrainBoundsTest(unittest.TestCase):
 
         class FakeService:
             proc = FakeProc()
+
+            @staticmethod
+            def decode_response_line(line, request_id):
+                import json as _json
+                assert line.endswith(b"\n"), "frame must be LF terminated"
+                return _json.loads(line)
 
         started = _time.monotonic()
         drain_terminal_answers(FakeService(), {}, lambda: "",

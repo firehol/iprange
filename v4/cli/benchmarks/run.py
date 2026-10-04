@@ -56,6 +56,12 @@ def readline_bounded(pipe, limit=1_048_578, seconds=120.0):
             except (BlockingIOError, OSError):
                 chunk = b""
             if chunk:
+                # Sol turn-3: the bound is aggregate — per-readline
+                # limits alone let a frame assembled from permitted
+                # chunks grow without ceiling.
+                if len(pending) + len(chunk) > limit:
+                    raise AssertionError(
+                        "frame exceeds the aggregate byte ceiling")
                 if chunk.endswith(b"\n"):
                     return pending + chunk
                 pending += chunk

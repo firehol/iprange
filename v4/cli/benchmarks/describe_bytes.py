@@ -35,7 +35,12 @@ def main():
             service.proc.stdin.write(
                 b'{"jsonrpc":"2.0","id":"1","method":"iprange.v1.system.describe","params":{}}\n')
             service.proc.stdin.flush()
-            frames[label] = readline_bounded(service.proc.stdout)
+            frame = readline_bounded(service.proc.stdout)
+            # Sol turn-3: the raw-size measurement retains the
+            # transport's limits — the completed frame goes through
+            # the shared bounded frame owner.
+            service.decode_response_line(frame, "1")
+            frames[label] = frame
         finally:
             service.close()
     rust, go = frames["rust"], frames["go"]
