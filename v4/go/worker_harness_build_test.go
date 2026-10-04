@@ -60,7 +60,10 @@ func workerHarnessBinary() string {
 // directory (the same go -C module-root build the internal worker
 // tests use).
 func buildWorkerHarness(directory string) error {
-	command := exec.Command("go", "-C", workerModuleRoot(), "build", "-o", workerHarnessBinary(), "./cmd/iprange-v4-worker")
+	// -buildvcs=false: coverage measures a copied tree, not a checkout.
+	// A bare go build there asks git for VCS status and exits 128.
+	command := exec.Command("go", "-C", workerModuleRoot(), "build",
+		"-buildvcs=false", "-o", workerHarnessBinary(), "./cmd/iprange-v4-worker")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("build worker: %v\n%s", err, output)
