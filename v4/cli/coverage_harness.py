@@ -488,6 +488,11 @@ def build_covered(module_dir, staging, go):
         destination = os.path.join(staging, target)
         env = dict(os.environ)
         env["CGO_ENABLED"] = CANONICAL_CGO_ENABLED
+        # The worker harness this package builds shells out to `go build`
+        # itself. That child inherits the environment and runs inside the
+        # copied tree, which is not a checkout. Without this, that inner
+        # build asks git for VCS status and exits 128.
+        env["GOFLAGS"] = (env.get("GOFLAGS", "") + " -buildvcs=false").strip()
         rc, out, err = run([go, "build", "-cover",
                            f"-covermode={COVERMODE}", "-trimpath",
                            "-buildvcs=false", "-o", destination, package],

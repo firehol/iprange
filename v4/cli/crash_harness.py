@@ -796,6 +796,9 @@ class ReservationWatch:
             if magic == RESERVATION_MAGIC:
                 if not self.fired.is_set():
                     self.fired.set()
+                    # Kill from this wake. The poll loop samples every
+                    # millisecond and can miss a reservation that exists
+                    # for less than that under load.
                     if self._on_magic is not None:
                         self._on_magic()
                 return True
