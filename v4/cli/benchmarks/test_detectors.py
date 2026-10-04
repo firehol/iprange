@@ -289,6 +289,14 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
                     True),
                 "", content)
 
+    def test_not_started_with_junk_details_is_refused(self):
+        # Wave MAJ: the non-preparation-details limb of the
+        # pre-attempt rule (a deletion used to keep the suite green).
+        from cancel_inflight import cancelled_result
+        reason = cancelled_result(
+            self.cancelled("not_started", {"nonsense": 1}), False)
+        self.assertIn("non-preparation details", reason)
+
     def test_the_vocabulary_and_record_object_refusals_are_detected(self):
         # Tester r249 P2-1: negative controls for the two limbs
         # whose deletion used to keep the suite green.
@@ -808,6 +816,62 @@ class SilentPeerTest(unittest.TestCase):
                     service.call("w2", "iprange.v1.system.describe", {})
             finally:
                 service.close(allow_forced=True, broken_exchange=True)
+
+
+class DescribeBytesWiringTest(unittest.TestCase):
+    """Wave MAJ: main()'s measurement call site is wired through the
+    shared owner AND measures the raw frame. The unit test pins
+    measure_frame; this pins the wiring — reverting the call site to
+    `frames[label] = frame` (validation bypassed) or to storing the
+    validated return (the wave-MAH measurement regression, parity's
+    P1) fails here while the unit test greens."""
+
+    def test_main_measures_raw_frames_through_the_owner(self):
+        import contextlib
+        import io
+        import sys as _sys
+        import types
+        import describe_bytes
+
+        raw = b'{"jsonrpc":"2.0","id":"1","result":{"x":1}}\n'
+        calls = {"decode": 0, "closed": 0}
+
+        class FakeProc:
+            stdin = types.SimpleNamespace(
+                write=lambda payload: None, flush=lambda: None)
+            stdout = object()
+
+        class FakeService:
+            def __init__(self, argv, name):
+                self.proc = FakeProc()
+
+            def decode_response_line(self, frame, request_id):
+                calls["decode"] += 1
+                if not frame.endswith(b"\n"):
+                    raise AssertionError("response frame is not LF terminated")
+                return {"parsed": True}
+
+            def close(self):
+                calls["closed"] += 1
+
+        saved_service = describe_bytes.JsonRpcService
+        saved_reader = describe_bytes.readline_bounded
+        saved_argv = _sys.argv
+        describe_bytes.JsonRpcService = FakeService
+        describe_bytes.readline_bounded = lambda stream: raw
+        _sys.argv = ["describe_bytes.py", "--rust", "r", "--go", "g"]
+        output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output):
+                describe_bytes.main()
+        finally:
+            describe_bytes.JsonRpcService = saved_service
+            describe_bytes.readline_bounded = saved_reader
+            _sys.argv = saved_argv
+        printed = output.getvalue()
+        self.assertIn(f"rust {len(raw)} bytes", printed)
+        self.assertIn(f"go {len(raw)} bytes", printed)
+        self.assertEqual(calls["decode"], 2, "both legs must route through the owner")
 
 
 class CallPathWiringTest(unittest.TestCase):

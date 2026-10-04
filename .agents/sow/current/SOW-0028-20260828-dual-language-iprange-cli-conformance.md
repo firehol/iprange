@@ -22629,7 +22629,7 @@ undecoded Windows corpus paths, a live thread abandoned at
 reservation-watch close, silent omission of turn-1 findings, and
 more; raw staged at the kit's evidence/m5-sol/). The milestone
 remains OPEN pending that cluster, sol turn 3, and the full
-battery. SOW-0030 owns the <=1.3x acceptance verdict (74
+battery. SOW-0030 owns the <=1.3x acceptance verdict (77
 recorded ceiling sessions; run-condition-dominated wall-clock
 spread disclosed).
 
