@@ -514,7 +514,10 @@ def measure_unit(module_dir, coverdir, go):
     # green run and an empty directory.  The harness therefore names the
     # destination explicitly as a test flag, and the empty-directory check
     # below is what catches any future drift in that recipe.
-    command = [go, "test", "-count=1", "-cover",
+    # The measured tree is a copy, not a checkout. Without this flag
+    # `go test` asks git for VCS status, gets exit 128, and the
+    # coverage step fails before it measures anything.
+    command = [go, "test", "-count=1", "-cover", "-buildvcs=false",
                f"-covermode={COVERMODE}", "./...", "-args",
                f"-test.gocoverdir={coverdir}"]
     rc, out, err = run(command, cwd=module_dir, env=env, timeout=7200)
