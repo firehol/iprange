@@ -245,9 +245,17 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
             "visible_housekeeping": [],
         },
     }
-    PREPARATION = {"output": {"publication_attempt_id": "b"},
-                   "cleanup": {}, "coordination_cleanup": {},
-                   "housekeeping": {}, "visible_housekeeping": []}
+    PREPARATION = {
+        "output": {
+            "publication_attempt_id": _HEX,
+            "directory_identity": {"volume": "1", "file": "2"},
+            "basename_encoding": 1,
+            "basename": "ZmVlZA==",
+            "creation_security": {"kind": 1, "commitment": "ab" * 32},
+        },
+        "cleanup": {}, "coordination_cleanup": {},
+        "housekeeping": {}, "visible_housekeeping": [],
+    }
 
     @classmethod
     def publication_for(cls, outcome, content="absent"):
@@ -335,6 +343,51 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
             "publication": "not_published", "destination_content": "absent"}}
         reason = cancelled_result(self.cancelled("not_published", sketch), False)
         self.assertIn("not the complete factual record", reason)
+
+    def test_a_scalar_preparation_output_is_refused(self):
+        # Sol turn-5: truthiness is not a private-output attempt.
+        from cancel_inflight import cancelled_result
+        details = dict(self.PREPARATION, output=1)
+        reason = cancelled_result(self.cancelled("not_published", details), False)
+        self.assertIn("not an attempt record", reason)
+        garbage = dict(self.PREPARATION, output=None,
+                       cleanup={"artifacts": "garbage"})
+        reason = cancelled_result(self.cancelled("not_published", garbage), False)
+        self.assertIn("not a list", reason)
+
+    def test_a_complete_unsolicited_frame_is_refused(self):
+        # Sol turn-5: an LF-terminated frame for an id never issued
+        # fails, even when the envelope is valid.
+        import json as _json
+        from cancel_inflight import drain_terminal_answers
+
+        class FakeProc:
+            def poll(self):
+                return 0
+
+        class FakeService:
+            proc = FakeProc()
+
+            @staticmethod
+            def decode_response_line(line, request_id):
+                assert line.endswith(b"\n")
+                return _json.loads(line)
+
+        frame = _json.dumps(
+            {"jsonrpc": "2.0", "id": "unsolicited", "result": {}}).encode() + b"\n"
+        state = {"n": 0}
+
+        def read():
+            if state["n"]:
+                return b""
+            state["n"] = 1
+            return frame
+
+        with self.assertRaisesRegex(AssertionError, "unsolicited answer"):
+            drain_terminal_answers(
+                FakeService(), {}, read,
+                quiet_window=0.05, aggregate_cap=2.0,
+                issued=("cancel-inflight-1", "cancel-probe-1"))
 
     def test_coordination_residue_alone_is_not_not_published(self):
         # Both engines map not_published only from an output attempt or

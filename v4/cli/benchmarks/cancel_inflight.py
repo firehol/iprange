@@ -36,6 +36,32 @@ PUBLISH_ID = "cancel-inflight-1"
 PROBE_ID = "cancel-probe-1"
 
 
+def _preparation_facts(details):
+    """Refuse a preparation record whose nested facts are not the
+    builders' wire (sol turn-5). Absent output is legitimate; a
+    present output must carry the private-output attempt fields
+    (publish.rs:245). Nonempty cleanup must be typed artifacts.
+    """
+    output = details.get("output")
+    if output is not None:
+        if not isinstance(output, dict):
+            return "preparation output is not an attempt record"
+        required = ("publication_attempt_id", "directory_identity",
+                    "basename_encoding", "basename", "creation_security")
+        missing = [name for name in required if name not in output]
+        if missing:
+            return f"preparation output lacks {missing}"
+    cleanup = details.get("cleanup")
+    if isinstance(cleanup, dict) and cleanup.get("artifacts") is not None:
+        artifacts = cleanup.get("artifacts")
+        if not isinstance(artifacts, list):
+            return "preparation cleanup artifacts are not a list"
+        for artifact in artifacts:
+            if not isinstance(artifact, dict) or "kind" not in artifact:
+                return "preparation cleanup artifact is not typed"
+    return ""
+
+
 def _factual_shape(details):
     """The factual-result shape of a `details` object (sol turn-3),
     calibrated on the engines' own wire builders (publish.rs):
@@ -223,12 +249,18 @@ def cancelled_result(response, destination_exists):
             return (f"publication record claims {content} content "
                     f"while the destination is absent: {data!r}")
     elif shape == "preparation":
-        # Sol turn-4: not_published comes only from an output attempt
-        # or nonempty publication cleanup (publish.rs:217,
-        # publish.go). Coordination residue alone does not qualify.
+        # Sol turn-5: the five keys are not a factual record. Output,
+        # when present, is the private-output attempt the builders
+        # emit; cleanup, when nonempty, is a typed artifact list.
+        reason = _preparation_facts(details)
+        if reason:
+            return f"{reason}: {data!r}"
         output = details.get("output")
-        cleanup = details.get("cleanup")
-        cleanup_facts = isinstance(cleanup, dict) and bool(cleanup.get("artifacts"))
+        cleanup = details.get("cleanup") or {}
+        cleanup_facts = bool(cleanup.get("artifacts"))
+        # not_published comes only from an output attempt or nonempty
+        # publication cleanup (publish.rs:217, publish.go).
+        # Coordination residue alone does not qualify.
         if outcome == "not_published" and not (output or cleanup_facts):
             return (f"not_published preparation record has no output "
                     f"or cleanup facts: {data!r}")
@@ -239,14 +271,18 @@ def cancelled_result(response, destination_exists):
     return ""
 
 
-def record_answer(seen, response):
-    """File one response under its id, refusing a duplicate answer.
+def record_answer(seen, response, issued=None):
+    """File one response under its id.
 
-    The spec answers every request exactly once: a second terminal
-    frame for the same id cannot silently replace the first — that
-    would hide an exactly-once violation from the proof.
+    The spec answers every request exactly once, and only a request
+    this proof issued. A second frame for the same id, or a frame for
+    an id never issued, is a failure (sol turn-5).
     """
     identifier = response.get("id")
+    if issued is not None and identifier not in issued:
+        raise AssertionError(
+            f"unsolicited answer for {identifier!r}: the proof issued "
+            f"only {issued}")
     if identifier in seen:
         raise AssertionError(
             f"duplicate answer for {identifier!r}: the spec answers "
@@ -267,7 +303,7 @@ def _read_service_line(service):
 
 def drain_terminal_answers(service, seen, read_line, *,
                            quiet_window=0.5, aggregate_cap=10.0,
-                           poll_interval=0.01):
+                           poll_interval=0.01, issued=None):
     """Drain remaining frames after the terminal pair, both bounds:
 
     0.5 s of quiet resets on each frame (a busy forger cannot stretch
@@ -285,7 +321,7 @@ def drain_terminal_answers(service, seen, read_line, *,
         before = frames.chunk_count
         extra = frames.read_response()
         if extra is not None:
-            record_answer(seen, extra)
+            record_answer(seen, extra, issued=issued)
             quiet = time.monotonic() + quiet_window
             continue
         if frames.chunk_count != before:
@@ -308,10 +344,10 @@ def drain_terminal_answers(service, seen, read_line, *,
             forged = None
         # Sol turn-4: an unterminated frame always fails the LF
         # contract. A duplicate of an id already answered is still
-        # attributed first. Any other unterminated object — including
-        # a distinct unsolicited id — is refused, not recorded.
+        # attributed first. An unsolicited id is attributed too, so
+        # that failure is named, then the LF failure is raised.
         if isinstance(forged, dict) and forged.get("id") in seen:
-            record_answer(seen, forged)
+            record_answer(seen, forged, issued=issued)
         raise AssertionError(
             f"trailing unterminated frame bytes at end of drain: "
             f"{residue[:200]!r}")
@@ -392,7 +428,7 @@ def prove(binary, work):
         while time.monotonic() < deadline:
             response = frames.read_response()
             if response is not None:
-                record_answer(seen, response)
+                record_answer(seen, response, issued=(PUBLISH_ID, PROBE_ID))
                 if PROBE_ID in seen and probe_at is None:
                     probe_at = time.monotonic()
                 if probe_at is not None and PUBLISH_ID in seen:
@@ -405,7 +441,8 @@ def prove(binary, work):
                     # used to escape with the forced teardown).
                     drain_terminal_answers(
                         service, seen,
-                        read_line=lambda: _read_service_line(service))
+                        read_line=lambda: _read_service_line(service),
+                        issued=(PUBLISH_ID, PROBE_ID))
                     break
 
             else:
