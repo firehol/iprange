@@ -22667,11 +22667,17 @@ Carried P3s stay named OPEN.
 default pool of 12 on this 24-core host exhausts the descriptor
 budget: Rust then dies in the dynamic loader (exit 127, EMFILE)
 before product code runs, and the parity gate correctly records
-that as a failed cell. Width 4 stays inside the budget. The two
-Windows evidence files still name revision `4b42cc0b`; the battery
-defers them because this host did not author them. A Windows
-re-qualification at this revision remains an open validation item.
-It is not a Linux-battery failure.
+that as a failed cell. Width 4 stays inside the budget. The two Windows evidence files named revision `4b42cc0b` at that
+run. They were re-authored on the authorized Windows host at
+`90d75864` (mingw64 CPython 3.14.6, rustc 1.97.1
+`x86_64-pc-windows-msvc`, go1.26.5 windows/amd64). Native `go test
+./... -count=1` was 24 ok / 8 empty / 0 failures. Native `cargo test
+-p iprange-cli --no-fail-fast` was 355 library tests plus 1
+discipline test, 0 failed, with the release worker copied beside the
+debug test binary. Both product proofs passed and `--verify-report`
+accepted them against the staged `win/` ledger. A full battery at
+this tree is still required so the Linux reports and the Windows
+reports name one revision.
 
 Earlier reds, fixed before this green run:
 
