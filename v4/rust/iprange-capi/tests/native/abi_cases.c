@@ -4,8 +4,8 @@
 #include "abi_test_support.h"
 
 #if defined(_WIN32)
-#include <shellapi.h>
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 #include <stdio.h>

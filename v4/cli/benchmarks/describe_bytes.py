@@ -26,9 +26,16 @@ readline_bounded = _bench.readline_bounded
 def validated_frame(service, frame, request_id="1"):
     """The completed frame goes through the shared bounded frame
     owner (sol turn-3): the raw-size measurement retains the
-    transport's LF/UTF-8/envelope/object-size limits. Kept as a
-    named entry point so a detecting test can pin the routing."""
+    transport's LF/UTF-8/envelope/object-size limits."""
     return service.decode_response_line(frame, request_id)
+
+
+def measure_frame(service, frame):
+    """Validate the frame, then return it RAW — the measurement is
+    the frame's byte length, not the parsed object's (wave MAI: the
+    validated return value must never be what gets measured)."""
+    validated_frame(service, frame)
+    return frame
 
 
 def main():
@@ -44,7 +51,7 @@ def main():
                 b'{"jsonrpc":"2.0","id":"1","method":"iprange.v1.system.describe","params":{}}\n')
             service.proc.stdin.flush()
             frame = readline_bounded(service.proc.stdout)
-            frames[label] = validated_frame(service, frame)
+            frames[label] = measure_frame(service, frame)
         finally:
             service.close()
     rust, go = frames["rust"], frames["go"]

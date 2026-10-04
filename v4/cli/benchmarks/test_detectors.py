@@ -265,6 +265,99 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
             self.cancelled("published", self.PREPARATION), True)
         self.assertIn("no factual PublicationResult", reason)
 
+    def test_content_claims_contradicting_the_observed_state_are_refused(self):
+        # Operations r249 F1: the record's destination_content must
+        # agree with the state the proof observed.
+        from cancel_inflight import cancelled_result
+        reason = cancelled_result(
+            self.cancelled("not_published",
+                           self.publication_for("not_published", "desired")),
+            False)
+        self.assertIn("while the destination is absent", reason)
+        reason = cancelled_result(
+            self.cancelled("published",
+                           self.publication_for("published", "absent")),
+            True)
+        self.assertIn("while the destination exists", reason)
+        # exempt pairs pass
+        for content in ("other", "unclassified"):
+            self.assertEqual(
+                cancelled_result(
+                    self.cancelled(
+                        "outcome_unknown",
+                        self.publication_for("outcome_unknown", content)),
+                    True),
+                "", content)
+
+    def test_the_vocabulary_and_record_object_refusals_are_detected(self):
+        # Tester r249 P2-1: negative controls for the two limbs
+        # whose deletion used to keep the suite green.
+        from cancel_inflight import cancelled_result
+        bogus = self.publication_for("not_published", "bogus")
+        reason = cancelled_result(self.cancelled("not_published", bogus), False)
+        self.assertIn("no factual destination_content", reason)
+        string_record = {"report": {"addresses": "1"},
+                         "publication": "published"}
+        reason = cancelled_result(
+            self.cancelled("published", string_record), True)
+        self.assertIn("publication record is not an object", reason)
+
+    def test_unparseable_trailing_residue_fails_the_proof(self):
+        # Tester r249 P2-2b: the unparseable-residue limb needs its
+        # own negative control.
+        import json as _json
+        from cancel_inflight import drain_terminal_answers
+
+        class FakeProc:
+            def poll(self):
+                return 0
+
+        class FakeService:
+            proc = FakeProc()
+
+            @staticmethod
+            def decode_response_line(line, request_id):
+                assert line.endswith(b"\n")
+                return _json.loads(line)
+
+        chunks = [b'{"jsonrpc":"2.0","id":"a","result":{}}\n',
+                  b'{"id":"a","resu']
+        state = {"n": 0}
+
+        def read():
+            if state["n"] >= len(chunks):
+                return b""
+            chunk = chunks[state["n"]]
+            state["n"] += 1
+            return chunk
+
+        with self.assertRaisesRegex(AssertionError,
+                                    "trailing unterminated frame bytes"):
+            drain_terminal_answers(FakeService(), {}, read,
+                                   quiet_window=0.05, aggregate_cap=2.0)
+
+    def test_measure_frame_returns_the_raw_frame_and_routes(self):
+        # Tester r249 P2-2a: the measurement unit must store the RAW
+        # frame (parity's r249 P1: a parsed dict is not bytes) and
+        # route through the shared owner.
+        from describe_bytes import measure_frame
+
+        class Owner:
+            @staticmethod
+            def decode_response_line(line, request_id):
+                return {"parsed": True}
+
+        raw = b'{"jsonrpc":"2.0","id":"1","result":{}}\n'
+        self.assertEqual(measure_frame(Owner(), raw), raw)
+
+        class Raising:
+            @staticmethod
+            def decode_response_line(line, request_id):
+                raise AssertionError("routed through the owner")
+
+        with self.assertRaisesRegex(AssertionError, "routed through"):
+            measure_frame(Raising(), raw)
+
     def test_a_contradicting_inner_record_is_refused(self):
         # Sol turn-3 wave MAH: shaped-but-contradictory forgeries —
         # the record's facts must agree with the outcome.
@@ -279,10 +372,12 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
         reason = cancelled_result(
             self.cancelled("not_published", empty), False)
         self.assertIn("no output or cleanup facts", reason)
-        # and a pre-attempt outcome cannot carry attempt facts
-        reason = cancelled_result(
-            self.cancelled("not_started", self.PREPARATION), False)
-        self.assertIn("pre-attempt outcome carries attempt facts", reason)
+        # not_started accepts the preparation record WITH facts —
+        # both engines' source-error branch emits that wire state
+        # (wave MAI calibration; refusing it would be a false refusal)
+        self.assertEqual(
+            cancelled_result(
+                self.cancelled("not_started", self.PREPARATION), False), "")
 
     def test_a_trailing_unterminated_duplicate_is_detected(self):
         # The exactly-once gate a silent residue drop would bypass.

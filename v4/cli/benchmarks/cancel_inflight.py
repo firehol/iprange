@@ -204,15 +204,25 @@ def cancelled_result(response, destination_exists):
                            "other", "unclassified"):
             return (f"publication record carries no factual "
                     f"destination_content: {data!r}")
+        # Wave MAI: the record's content claim must agree with the
+        # state the proof observed — a shaped-but-contradictory
+        # record is a forgery (operations r249 F1).
+        if content == "absent" and destination_exists:
+            return (f"publication record claims absent content while "
+                    f"the destination exists: {data!r}")
+        if content in ("desired", "previous") and not destination_exists:
+            return (f"publication record claims {content} content "
+                    f"while the destination is absent: {data!r}")
     elif shape == "preparation":
         facts = details.get("output") or details.get("cleanup") \
             or details.get("coordination_cleanup")
         if outcome == "not_published" and not facts:
             return (f"not_published preparation record has no output "
                     f"or cleanup facts: {data!r}")
-        if outcome == "not_started" and facts:
-            return (f"pre-attempt outcome carries attempt facts: "
-                    f"{data!r}")
+        # not_started accepts the preparation record as-is: both
+        # engines' source-error branch emits not_started WITH facts
+        # (publish.rs / publish.go), so attempt facts here are
+        # legitimate (wave MAI calibration).
     return ""
 
 
