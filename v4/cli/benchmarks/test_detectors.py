@@ -345,6 +345,22 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
         reason = cancelled_result(self.cancelled("not_published", sketch), False)
         self.assertIn("not the complete factual record", reason)
 
+    def test_null_containers_and_a_garbage_visible_list_are_refused(self):
+        # Sol turn-7: cleanup, coordination, and housekeeping are
+        # objects in every emitter. Null is not an omission, and
+        # visible_housekeeping is a typed array.
+        from cancel_inflight import cancelled_result
+        for name in ("cleanup", "coordination_cleanup", "housekeeping"):
+            reason = cancelled_result(
+                self.cancelled("not_published", dict(self.PREPARATION, **{name: None})),
+                False)
+            self.assertIn(f"{name} is not the builders' wire", reason, name)
+        reason = cancelled_result(
+            self.cancelled("not_published",
+                           dict(self.PREPARATION, visible_housekeeping="garbage")),
+            False)
+        self.assertIn("visible_housekeeping is not the builders' wire", reason)
+
     def test_null_attempt_fields_and_kind_only_cleanup_are_refused(self):
         # Sol turn-6: key presence with null values is not an attempt,
         # and a kind-only cleanup entry is not a CLEANUP_ARTIFACT.

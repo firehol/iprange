@@ -31,8 +31,8 @@ from generate import generate, write_text
 from measure import child_cpu_seconds
 from schema.engine import ValidationError, validate
 from schema.results import (
-    CLEANUP, COORDINATION_CLEANUP, HOUSEKEEPING, IMMUTABLE_FEED_REPORT,
-    PRIVATE_OUTPUT_ATTEMPT, PUBLICATION_RESULT,
+    CLEANUP, COORDINATION_CLEANUP, HOUSEKEEPING, HOUSEKEEPING_ARTIFACT,
+    IMMUTABLE_FEED_REPORT, PRIVATE_OUTPUT_ATTEMPT, PUBLICATION_RESULT,
 )
 
 PUBLISH_ID = "cancel-inflight-1"
@@ -52,17 +52,24 @@ def _preparation_facts(details):
             validate(output, PRIVATE_OUTPUT_ATTEMPT, "$.output")
         except ValidationError as exc:
             return f"preparation output is not an attempt record ({exc})"
+    # These containers are objects in every emitter (publish.rs:226).
+    # Null is not a legitimate omission; only output may be null.
     for name, schema in (
             ("cleanup", CLEANUP),
             ("coordination_cleanup", COORDINATION_CLEANUP),
             ("housekeeping", HOUSEKEEPING)):
-        value = details.get(name)
-        if value is None:
-            continue
         try:
-            validate(value, schema, f"$.{name}")
+            validate(details.get(name), schema, f"$.{name}")
         except ValidationError as exc:
             return f"preparation {name} is not the builders' wire ({exc})"
+    visible = {
+        "type": "array", "items": HOUSEKEEPING_ARTIFACT,
+    }
+    try:
+        validate(details.get("visible_housekeeping"), visible,
+                 "$.visible_housekeeping")
+    except ValidationError as exc:
+        return f"preparation visible_housekeeping is not the builders' wire ({exc})"
     return ""
 
 
