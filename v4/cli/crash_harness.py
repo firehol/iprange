@@ -353,12 +353,17 @@ def call_with_worker(service, request_id, method, params, deadline, seen):
     started = time.monotonic()
     thread.start()
     seen_ms = None
-    while time.monotonic() - started < deadline:
+    while time.monotonic() - started < deadline and not worker_done.is_set():
         if seen():
-            seen_ms = (time.monotonic() - started) * 1000
+            # Kill before returning. The caller used to kill after
+            # publish_until_reservation returned, but that return
+            # closes the watch, and the watch's join lets the publish
+            # finish and delete the reservation.
+            if not worker_done.is_set():
+                seen_ms = (time.monotonic() - started) * 1000
+                service.kill_process_group()
             break
-        if worker_done.is_set():
-            break
+        time.sleep(0.001)
     return outcome, seen_ms, thread
 
 
@@ -743,6 +748,9 @@ class ReservationWatch:
             return
         self._fd = fd
         # IN_CREATE | IN_MOVED_TO | IN_CLOSE_WRITE | IN_MODIFY
+        # The reservation magic is written by an mmap flush, not a
+        # close. IN_MODIFY is the wake; IN_CLOSE_WRITE never comes
+        # for that file.
         mask = 0x100 | 0x80 | 0x8 | 0x2
         if libc.inotify_add_watch(fd, os.fsencode(self._directory), mask) < 0:
             self._ready.set()
@@ -791,6 +799,11 @@ class ReservationWatch:
                     if self._on_magic is not None:
                         self._on_magic()
                 return True
+            # The magic is one flush after create. A miss here means
+            # the file was replaced or removed; do not spend the
+            # reservation-to-rename window rereading it.
+            if magic:
+                return False
             time.sleep(0.0002)
         return False
 
