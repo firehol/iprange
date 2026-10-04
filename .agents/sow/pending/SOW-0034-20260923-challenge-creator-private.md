@@ -4,9 +4,9 @@
 
 Status: open
 
-Sub-state: recorded, not started. The current serial fix pass continues to
-implement the existing rule. This SOW does not authorize removing or weakening
-that rule.
+Sub-state: decision recorded 2026-10-05. The user selected option 3.
+Implementation has not started. This file does not authorize editing the
+engines until the plan gate returns GOOD TO IMPLEMENT.
 
 ## Requirements
 
@@ -193,26 +193,81 @@ Open decisions:
    - Risk: medium. The current fix pass would need to be reverted for CLI
      outputs only.
 
-Recommendation: option 1, long-term-best, until a real caller shows the proof
-is too strict. The machinery is already implemented and the failure is
-explicit. Option 3 is the one this challenge is really testing, and it should
-not be chosen without naming the caller that needs a shared file before
-publication.
+Recommendation recorded before the decision: option 1. The user rejected
+that recommendation.
 
-No option is selected. Implementation is blocked.
+## Decision (2026-10-05)
+
+The user selected **option 3**.
+
+The user's words, recorded as the decision and not softened: these files
+are IP and security feeds, not sensitive data, and in most cases they
+describe bad actors. The SDK must not add protection on top of what the
+operating system does by default. The extra proof will confuse operators.
+
+What this means:
+
+- New artifacts are created with the process umask and the directory's
+  default ACL or DACL. The SDK does not chmod to `0600`, does not strip
+  an inherited ACL, and does not install a protected Windows DACL.
+- The SDK does not refuse creation or publication because it cannot
+  prove creator-only access.
+- Close-on-exec and non-inheritable descriptors stay. Those are process
+  hygiene, not a privacy policy.
+- Existing files are opened as they are. A file another user can already
+  read stays readable. The SDK does not tighten it and does not reject
+  it for being readable.
+
+Why the earlier recommendation does not override this: the recommendation
+optimized for a threat this product does not have. The user named the
+actual content and the actual operator cost. That is the product decision.
+
+## What option 3 actually removes
+
+This is not a mode constant. The proof is stored and checked again.
+
+- `design-iprange-engine.md:408-410` requires every engine-created
+  artifact to start creator-private, independent of process defaults.
+- `binary-format-v4.md:2359-2400` stores a 32-byte `IPR4PSEC`
+  commitment (POSIX kind 1, Windows kind 2) and requires a resolver to
+  recompute it. A mismatch is `ChangedOrUnproven`.
+- Rust implements the proof in
+  `v4/rust/iprange-livedb/src/publication/security/posix.rs`. Go
+  implements it in `v4/go/internal/security/security.go` and
+  `security_windows.go`. Callers include publication, the live
+  namespace, and the worker control page.
+- The commitment is host-local coordination state. It is not part of
+  the portable database bytes. An old file that carries one must still
+  open after the proof is removed. Silently rejecting those files would
+  be a data-loss bug, not a cleanup.
+
+Implementation does not start in this edit. The plan gate has to return
+GOOD TO IMPLEMENT first. The implementation SOW, if this file is that
+SOW, must cover both engines, the CLI adapters, the specs, and a test
+that an ordinary umask file is accepted and that a pre-decision file
+still opens.
 
 ## Plan
 
-1. Wait for the user decision.
-2. If the decision is option 1, close this SOW with no code change.
-3. If the decision is option 2, 3, or 4, open an implementation SOW and do
-   not change the current fix pass in place.
+1. Decision recorded: option 3 (2026-10-05).
+2. Plan gate: external control reviews this SOW and returns GOOD TO
+   IMPLEMENT before any engine edit. REVIEWS.md requires that gate for
+   a SOW whose milestones were not already approved.
+3. Implement only after that gate. Both engines, the CLI adapters, the
+   specs, and the old-file open test move together. A pre-decision file
+   that still carries an `IPR4PSEC` commitment must open.
 
 ## Execution Log
 
 ### 2026-09-23
 
 - Recorded the challenge and the four options. No code or spec was changed.
+
+### 2026-10-05
+
+- User selected option 3. The decision, the rejected recommendation, and
+  the stored-commitment blast radius are recorded above. No code or spec
+  was changed. Implementation waits for the plan gate.
 
 ## Validation
 
