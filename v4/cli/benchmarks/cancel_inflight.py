@@ -35,19 +35,24 @@ PROBE_ID = "cancel-probe-1"
 
 
 def _factual_shape(details):
-    """The factual-result shape of a `details` object (sol turn-3):
+    """The factual-result shape of a `details` object (sol turn-3),
+    calibrated on the engines' own wire builders (publish.rs):
 
-    publication -> a factual PublicationResult (attempt/publication/
-    destination_content); preparation -> a factual
-    PublicationPreparationFailure (publication_attempt_id/cause);
-    commit -> a factual CommitResult (attempted_database_id/
-    attempted_transaction_id/durability)."""
+    publication -> the factual publication record the error path
+    carries ({report, publication}); preparation -> the factual
+    PublicationPreparationFailure record ({output, cleanup,
+    coordination_cleanup, housekeeping, visible_housekeeping});
+    commit -> a factual CommitResult. The preparation mapping is
+    authoritative for outcomes: it yields only not_started or
+    not_published; published and outcome_unknown come from the
+    publication record."""
     if not isinstance(details, dict):
         return None
     keys = set(details)
-    if {"attempt", "publication", "destination_content"} <= keys:
+    if {"report", "publication"} <= keys:
         return "publication"
-    if {"publication_attempt_id", "cause"} <= keys:
+    if {"output", "cleanup", "coordination_cleanup",
+        "housekeeping", "visible_housekeeping"} <= keys:
         return "preparation"
     if {"attempted_database_id", "attempted_transaction_id",
         "durability"} <= keys:
@@ -153,22 +158,31 @@ def cancelled_result(response, destination_exists):
     if not isinstance(details, dict):
         return f"cancelled outcome lost its factual details: {data!r}"
     shape = _factual_shape(details)
+    if shape == "commit":
+        return (f"publication outcome carries commit facts, not a "
+                f"publication record: {data!r}")
     if outcome == "not_started":
         # A failure before any durable SDK attempt owes no factual
         # result (empty details are legitimate); a preparation
-        # failure carries its PublicationPreparationFailure facts.
+        # failure carries its factual preparation record.
         if details and shape != "preparation":
             return (f"pre-attempt outcome carries non-preparation "
                     f"details: {data!r}")
-    elif outcome in ("published", "not_published"):
-        # The spec: these come ONLY from a factual PublicationResult.
+    elif outcome == "published":
+        # Only the publication record can claim the publication
+        # landed (the preparation mapping never yields published).
         if shape != "publication":
             return (f"publication outcome carries no factual "
                     f"PublicationResult: {data!r}")
-    elif shape not in ("publication", "preparation"):
-        # outcome_unknown: an unknown publication whose attempt may
-        # have begun — the factual result is the publication record
-        # or the preparation-failure record, both legitimate.
+    elif outcome == "not_published":
+        # Either factual record is legitimate here: the publication
+        # record with status not_published, or a preparation failure
+        # whose output/cleanup exist (publish.rs preparation_error).
+        if shape not in ("publication", "preparation"):
+            return (f"publication outcome carries no factual "
+                    f"PublicationResult: {data!r}")
+    elif shape != "publication":
+        # outcome_unknown: only the publication record maps here.
         return (f"cancelled outcome carries no factual result: {data!r}")
     return ""
 

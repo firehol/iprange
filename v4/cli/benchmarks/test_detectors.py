@@ -211,11 +211,15 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
     duplicate terminal answers, and checks the outcome against the
     observed publication state."""
 
-    PUBLICATION = {"attempt": {"id": "a"},
-                   "publication": "not_published",
-                   "destination_content": {"present": False}}
-    PREPARATION = {"publication_attempt_id": "b",
-                   "cause": {"problem": "preparation"}}
+    # The engines' own wire shapes (publish.rs): the publication
+    # record the error path carries, and the preparation record.
+    PUBLICATION = {"report": {"addresses": "1"},
+                   "publication": {"attempt": {"id": "a"},
+                                   "publication": "not_published",
+                                   "destination_content": {"present": False}}}
+    PREPARATION = {"output": {"publication_attempt_id": "b"},
+                   "cleanup": {}, "coordination_cleanup": {},
+                   "housekeeping": {}, "visible_housekeeping": []}
 
     @staticmethod
     def cancelled(outcome, details=None):
@@ -241,7 +245,16 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
     def test_wrong_shape_details_are_refused(self):
         from cancel_inflight import cancelled_result
         reason = cancelled_result(
-            self.cancelled("not_published", self.PREPARATION), False)
+            self.cancelled("not_published", {"nonsense": 1}), False)
+        self.assertIn("no factual PublicationResult", reason)
+        # the preparation mapping never yields outcome_unknown
+        reason = cancelled_result(
+            self.cancelled("outcome_unknown", self.PREPARATION), False)
+        self.assertIn("no factual result", reason)
+        # a published claim needs the publication record (with the
+        # destination present so the facts check is what refuses it)
+        reason = cancelled_result(
+            self.cancelled("published", self.PREPARATION), True)
         self.assertIn("no factual PublicationResult", reason)
 
     def test_factual_details_are_accepted_per_outcome(self):
@@ -249,6 +262,11 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
         self.assertEqual(
             cancelled_result(
                 self.cancelled("not_published", self.PUBLICATION), False),
+            "")
+        # a preparation failure legitimately maps to not_published
+        self.assertEqual(
+            cancelled_result(
+                self.cancelled("not_published", self.PREPARATION), False),
             "")
         self.assertEqual(
             cancelled_result(self.cancelled("not_started"), False), "")
@@ -258,10 +276,6 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
         self.assertEqual(
             cancelled_result(
                 self.cancelled("outcome_unknown", self.PUBLICATION), False),
-            "")
-        self.assertEqual(
-            cancelled_result(
-                self.cancelled("outcome_unknown", self.PREPARATION), False),
             "")
 
     def test_a_forged_outcome_is_refused(self):
