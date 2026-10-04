@@ -1991,7 +1991,11 @@ class JsonRpcService:
 
         In threaded mode (Windows deadlines), a peer poisoned by a
         bounded-I/O timeout is reaped before touching buffered
-        wrappers whose locks a blocked worker may still hold; the
+        wrappers whose locks a blocked worker may still hold. Killing
+        the direct child does not by itself unblock a writer blocked
+        on a descendant that still holds the read end; those sites
+        verify writer termination and leave the wrapper alone while
+        the writer is alive. The
         worker threads are then joined under a bound (external review
         finding).
         """

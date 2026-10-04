@@ -29,6 +29,8 @@ from run import JsonRpcService  # noqa: E402
 
 from generate import generate, write_text
 from measure import child_cpu_seconds
+from schema.engine import ValidationError, validate
+from schema.results import IMMUTABLE_FEED_REPORT, PUBLICATION_RESULT
 
 PUBLISH_ID = "cancel-inflight-1"
 PROBE_ID = "cancel-probe-1"
@@ -192,9 +194,16 @@ def cancelled_result(response, destination_exists):
     # Sol turn-3 wave MAH: the record's own facts must agree with the
     # outcome — a shaped-but-contradictory record is a forgery.
     if shape == "publication":
+        # Sol turn-4: key presence is not a factual result. The
+        # report and the publication record must be the complete
+        # records the schema already requires.
+        try:
+            validate(details.get("report"), IMMUTABLE_FEED_REPORT, "$.report")
+            validate(details.get("publication"), PUBLICATION_RESULT, "$.publication")
+        except ValidationError as exc:
+            return (f"publication details are not the complete factual "
+                    f"record ({exc}): {data!r}")
         record = details["publication"]
-        if not isinstance(record, dict):
-            return f"publication record is not an object: {data!r}"
         if record.get("publication") != outcome:
             return (f"publication record contradicts the outcome "
                     f"({record.get('publication')!r} != {outcome!r}): "
@@ -214,9 +223,13 @@ def cancelled_result(response, destination_exists):
             return (f"publication record claims {content} content "
                     f"while the destination is absent: {data!r}")
     elif shape == "preparation":
-        facts = details.get("output") or details.get("cleanup") \
-            or details.get("coordination_cleanup")
-        if outcome == "not_published" and not facts:
+        # Sol turn-4: not_published comes only from an output attempt
+        # or nonempty publication cleanup (publish.rs:217,
+        # publish.go). Coordination residue alone does not qualify.
+        output = details.get("output")
+        cleanup = details.get("cleanup")
+        cleanup_facts = isinstance(cleanup, dict) and bool(cleanup.get("artifacts"))
+        if outcome == "not_published" and not (output or cleanup_facts):
             return (f"not_published preparation record has no output "
                     f"or cleanup facts: {data!r}")
         # not_started accepts the preparation record as-is: both
@@ -293,12 +306,15 @@ def drain_terminal_answers(service, seen, read_line, *,
             forged = json.loads(residue)
         except ValueError:
             forged = None
-        if isinstance(forged, dict) and "id" in forged:
+        # Sol turn-4: an unterminated frame always fails the LF
+        # contract. A duplicate of an id already answered is still
+        # attributed first. Any other unterminated object — including
+        # a distinct unsolicited id — is refused, not recorded.
+        if isinstance(forged, dict) and forged.get("id") in seen:
             record_answer(seen, forged)
-        else:
-            raise AssertionError(
-                f"trailing unterminated frame bytes at end of drain: "
-                f"{residue[:200]!r}")
+        raise AssertionError(
+            f"trailing unterminated frame bytes at end of drain: "
+            f"{residue[:200]!r}")
 
 
 def prove(binary, work):

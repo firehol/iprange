@@ -211,14 +211,40 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
     duplicate terminal answers, and checks the outcome against the
     observed publication state."""
 
-    # The engines' own wire shapes (publish.rs): the publication
-    # record the error path carries, and the preparation record.
-    # The inner record's status agrees with the outcome and
-    # destination_content is a name string (publication_evidence.rs).
-    PUBLICATION = {"report": {"addresses": "1"},
-                   "publication": {"attempt": {"id": "a"},
-                                   "publication": "not_published",
-                                   "destination_content": "absent"}}
+    # Complete factual records (schema/results.py). A 3-key sketch is
+    # not a PublicationResult; sol turn-4 refused that fixture.
+    _HEX = "ab" * 16
+    _SHA = "cd" * 64
+    _ATTEMPT = {
+        "database_id": _HEX, "transaction_id": "1", "commit_nonce": _HEX,
+        "publication_attempt_id": _HEX,
+        "directory_identity": {"volume": "1", "file": "2"},
+        "destination_basename_encoding": 1,
+        "destination_basename": "ZmVlZA==",
+        "output_identity": {"volume": "1", "file": "3"},
+        "output_byte_length": "4", "output_sha512": _SHA,
+        "publication_policy": "replace_existing",
+        "reservation_identity": {"volume": "1", "file": "4"},
+        "creation_security": {"kind": 1, "commitment": "ab" * 32},
+    }
+    _REPORT = {"input_record_count": "1", "normalized_interval_count": "1",
+               "addresses": "1"}
+    PUBLICATION = {
+        "report": _REPORT,
+        "publication": {
+            "attempt": _ATTEMPT,
+            "main_namespace_may_have_been_attempted": False,
+            "publication": "not_published",
+            "destination_content": "absent",
+            "later_canonical": "none",
+            "main_access_policy": "creator_only",
+            "coordination_access_policy": "creator_only",
+            "cleanup": {},
+            "coordination_cleanup": {},
+            "housekeeping": {"artifacts": []},
+            "visible_housekeeping": [],
+        },
+    }
     PREPARATION = {"output": {"publication_attempt_id": "b"},
                    "cleanup": {}, "coordination_cleanup": {},
                    "housekeeping": {}, "visible_housekeeping": []}
@@ -227,7 +253,7 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
     def publication_for(cls, outcome, content="absent"):
         record = dict(cls.PUBLICATION["publication"],
                       publication=outcome, destination_content=content)
-        return {"report": {"addresses": "1"}, "publication": record}
+        return {"report": dict(cls._REPORT), "publication": record}
 
     @staticmethod
     def cancelled(outcome, details=None):
@@ -302,18 +328,36 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
             self.cancelled("not_started", self.PUBLICATION), False)
         self.assertIn("non-preparation details", reason)
 
+    def test_an_incomplete_publication_record_is_refused(self):
+        # Sol turn-4: key presence is not a complete factual result.
+        from cancel_inflight import cancelled_result
+        sketch = {"report": None, "publication": {
+            "publication": "not_published", "destination_content": "absent"}}
+        reason = cancelled_result(self.cancelled("not_published", sketch), False)
+        self.assertIn("not the complete factual record", reason)
+
+    def test_coordination_residue_alone_is_not_not_published(self):
+        # Both engines map not_published only from an output attempt or
+        # nonempty publication cleanup. Coordination residue does not.
+        from cancel_inflight import cancelled_result
+        details = {"output": None, "cleanup": {},
+                   "coordination_cleanup": {"kind": "cleanup_guard"},
+                   "housekeeping": {}, "visible_housekeeping": []}
+        reason = cancelled_result(self.cancelled("not_published", details), False)
+        self.assertIn("no output or cleanup facts", reason)
+
     def test_the_vocabulary_and_record_object_refusals_are_detected(self):
         # Tester r249 P2-1: negative controls for the two limbs
         # whose deletion used to keep the suite green.
         from cancel_inflight import cancelled_result
         bogus = self.publication_for("not_published", "bogus")
         reason = cancelled_result(self.cancelled("not_published", bogus), False)
-        self.assertIn("no factual destination_content", reason)
+        self.assertIn("not the complete factual record", reason)
         string_record = {"report": {"addresses": "1"},
                          "publication": "published"}
         reason = cancelled_result(
             self.cancelled("published", string_record), True)
-        self.assertIn("publication record is not an object", reason)
+        self.assertIn("not the complete factual record", reason)
 
     def test_unparseable_trailing_residue_fails_the_proof(self):
         # Tester r249 P2-2b: the unparseable-residue limb needs its
@@ -426,6 +470,40 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "duplicate answer"):
             drain_terminal_answers(FakeService(), seen, read,
                                    quiet_window=0.05, aggregate_cap=2.0)
+
+    def test_an_unterminated_unsolicited_id_fails_the_drain(self):
+        # Sol turn-4: a distinct id without LF must not pass. The LF
+        # contract fails even when the bytes parse as an object.
+        import json as _json
+        from cancel_inflight import drain_terminal_answers
+
+        class FakeProc:
+            def poll(self):
+                return 0
+
+        class FakeService:
+            proc = FakeProc()
+
+            @staticmethod
+            def decode_response_line(line, request_id):
+                assert line.endswith(b"\n")
+                return _json.loads(line)
+
+        seen = {"probe": {}, "publish": {}}
+        chunks = [_json.dumps({"id": "unsolicited"}).encode()]
+        state = {"n": 0}
+
+        def read():
+            if state["n"] >= len(chunks):
+                return b""
+            chunk = chunks[state["n"]]
+            state["n"] += 1
+            return chunk
+
+        with self.assertRaisesRegex(AssertionError, "trailing unterminated"):
+            drain_terminal_answers(FakeService(), seen, read,
+                                   quiet_window=0.05, aggregate_cap=2.0)
+        self.assertNotIn("unsolicited", seen)
 
     def test_the_drain_routes_through_the_shared_frame_owner(self):
         # A bypass (a bare json.loads in the drain) keeps this green

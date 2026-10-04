@@ -602,7 +602,8 @@ class PerfModeDetectingTest(unittest.TestCase):
             os.chmod(variant, 0o755)
 
             def sampler(pid):
-                n = int(open(counter).read().strip() or 0)
+                with open(counter) as stream:
+                    n = int(stream.read().strip() or 0)
                 return None if n <= 2 else 5000
 
             scenario = self._scenario(compare=["product"])
