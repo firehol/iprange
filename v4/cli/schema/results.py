@@ -348,6 +348,23 @@ PREVIOUS_DESTINATION = {
     "required": ["identity", "byte_length", "sha512"],
     "additional": False,
 }
+# PrivateOutputAttempt (publish.rs private_output_attempt). Nullable at
+# the preparation record; when present, every emitted field is required.
+PRIVATE_OUTPUT_ATTEMPT = {
+    "type": "object",
+    "properties": {
+        "publication_attempt_id": HEX16,
+        "directory_identity": FILE_IDENTITY,
+        "basename_encoding": U16,
+        "basename": STRING,
+        "identity": FILE_IDENTITY,
+        "creation_security": CREATION_SECURITY,
+    },
+    "required": ["publication_attempt_id", "directory_identity",
+                 "basename_encoding", "basename", "identity",
+                 "creation_security"],
+    "additional": False,
+}
 # PublicationResult nested facts (publication_evidence.rs emitters).
 CLEANUP_ARTIFACT = {
     "type": "object",

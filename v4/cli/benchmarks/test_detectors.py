@@ -251,10 +251,11 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
             "directory_identity": {"volume": "1", "file": "2"},
             "basename_encoding": 1,
             "basename": "ZmVlZA==",
+            "identity": {"volume": "1", "file": "3"},
             "creation_security": {"kind": 1, "commitment": "ab" * 32},
         },
         "cleanup": {}, "coordination_cleanup": {},
-        "housekeeping": {}, "visible_housekeeping": [],
+        "housekeeping": {"artifacts": []}, "visible_housekeeping": [],
     }
 
     @classmethod
@@ -344,6 +345,23 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
         reason = cancelled_result(self.cancelled("not_published", sketch), False)
         self.assertIn("not the complete factual record", reason)
 
+    def test_null_attempt_fields_and_kind_only_cleanup_are_refused(self):
+        # Sol turn-6: key presence with null values is not an attempt,
+        # and a kind-only cleanup entry is not a CLEANUP_ARTIFACT.
+        from cancel_inflight import cancelled_result
+        nulls = {"publication_attempt_id": None, "directory_identity": None,
+                 "basename_encoding": None, "basename": None,
+                 "identity": None, "creation_security": None}
+        reason = cancelled_result(
+            self.cancelled("not_published", dict(self.PREPARATION, output=nulls)),
+            False)
+        self.assertIn("not an attempt record", reason)
+        kind_only = dict(self.PREPARATION, output=None,
+                         cleanup={"artifacts": [{"kind": "private_output"}]})
+        reason = cancelled_result(
+            self.cancelled("not_published", kind_only), False)
+        self.assertIn("cleanup is not the builders' wire", reason)
+
     def test_a_scalar_preparation_output_is_refused(self):
         # Sol turn-5: truthiness is not a private-output attempt.
         from cancel_inflight import cancelled_result
@@ -353,7 +371,7 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
         garbage = dict(self.PREPARATION, output=None,
                        cleanup={"artifacts": "garbage"})
         reason = cancelled_result(self.cancelled("not_published", garbage), False)
-        self.assertIn("not a list", reason)
+        self.assertIn("cleanup is not the builders' wire", reason)
 
     def test_a_complete_unsolicited_frame_is_refused(self):
         # Sol turn-5: an LF-terminated frame for an id never issued
@@ -395,7 +413,7 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
         from cancel_inflight import cancelled_result
         details = {"output": None, "cleanup": {},
                    "coordination_cleanup": {"kind": "cleanup_guard"},
-                   "housekeeping": {}, "visible_housekeeping": []}
+                   "housekeeping": {"artifacts": []}, "visible_housekeeping": []}
         reason = cancelled_result(self.cancelled("not_published", details), False)
         self.assertIn("no output or cleanup facts", reason)
 
@@ -478,7 +496,7 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
         self.assertIn("contradicts the outcome", reason)
         # a preparation record without facts cannot claim not_published
         empty = {"output": None, "cleanup": {}, "coordination_cleanup": {},
-                 "housekeeping": {}, "visible_housekeeping": []}
+                 "housekeeping": {"artifacts": []}, "visible_housekeeping": []}
         reason = cancelled_result(
             self.cancelled("not_published", empty), False)
         self.assertIn("no output or cleanup facts", reason)
@@ -623,7 +641,7 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
         self.assertEqual(
             cancelled_result(self.cancelled("not_started"), False), "")
         empty = {"output": None, "cleanup": {}, "coordination_cleanup": {},
-                 "housekeeping": {}, "visible_housekeeping": []}
+                 "housekeeping": {"artifacts": []}, "visible_housekeeping": []}
         self.assertEqual(
             cancelled_result(
                 self.cancelled("not_started", empty), False), "")

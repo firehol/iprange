@@ -30,7 +30,10 @@ from run import JsonRpcService  # noqa: E402
 from generate import generate, write_text
 from measure import child_cpu_seconds
 from schema.engine import ValidationError, validate
-from schema.results import IMMUTABLE_FEED_REPORT, PUBLICATION_RESULT
+from schema.results import (
+    CLEANUP, COORDINATION_CLEANUP, HOUSEKEEPING, IMMUTABLE_FEED_REPORT,
+    PRIVATE_OUTPUT_ATTEMPT, PUBLICATION_RESULT,
+)
 
 PUBLISH_ID = "cancel-inflight-1"
 PROBE_ID = "cancel-probe-1"
@@ -38,27 +41,28 @@ PROBE_ID = "cancel-probe-1"
 
 def _preparation_facts(details):
     """Refuse a preparation record whose nested facts are not the
-    builders' wire (sol turn-5). Absent output is legitimate; a
-    present output must carry the private-output attempt fields
-    (publish.rs:245). Nonempty cleanup must be typed artifacts.
+    builders' wire (sol turn-6). Values are validated, not just keys.
+    Absent output is legitimate; a present output must be a complete
+    private-output attempt. Cleanup, coordination, and housekeeping
+    must match the schema the engines emit.
     """
     output = details.get("output")
     if output is not None:
-        if not isinstance(output, dict):
-            return "preparation output is not an attempt record"
-        required = ("publication_attempt_id", "directory_identity",
-                    "basename_encoding", "basename", "creation_security")
-        missing = [name for name in required if name not in output]
-        if missing:
-            return f"preparation output lacks {missing}"
-    cleanup = details.get("cleanup")
-    if isinstance(cleanup, dict) and cleanup.get("artifacts") is not None:
-        artifacts = cleanup.get("artifacts")
-        if not isinstance(artifacts, list):
-            return "preparation cleanup artifacts are not a list"
-        for artifact in artifacts:
-            if not isinstance(artifact, dict) or "kind" not in artifact:
-                return "preparation cleanup artifact is not typed"
+        try:
+            validate(output, PRIVATE_OUTPUT_ATTEMPT, "$.output")
+        except ValidationError as exc:
+            return f"preparation output is not an attempt record ({exc})"
+    for name, schema in (
+            ("cleanup", CLEANUP),
+            ("coordination_cleanup", COORDINATION_CLEANUP),
+            ("housekeeping", HOUSEKEEPING)):
+        value = details.get(name)
+        if value is None:
+            continue
+        try:
+            validate(value, schema, f"$.{name}")
+        except ValidationError as exc:
+            return f"preparation {name} is not the builders' wire ({exc})"
     return ""
 
 
