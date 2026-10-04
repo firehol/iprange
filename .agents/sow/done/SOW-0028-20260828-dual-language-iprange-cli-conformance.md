@@ -67,7 +67,7 @@ whole.
 
 ## Status
 
-Status: in-progress
+Status: completed
 
 Wave-19.24 state (2026-09-14): the eight-role adversarial round
 reviewed the wave-19.23 final revision
@@ -2764,11 +2764,29 @@ Follow-up mapping:
 
 ## Outcome
 
-Pending.
+Completed 2026-10-05. Milestone 5 closed. Sol turn 8 is PRODUCTION
+GRADE on the harness delta. The full battery is green at `ba30d50b`
+(width 4, wall 349 s, zero mismatches). Windows housekeeping and
+guard proofs were re-authored at that commit and the kind gate
+PASSed on one revision. Evidence and the close note are in
+`74e0f892`. The <=1.3x engine performance binding remains failed and
+not waived; SOW-0030 owns it. The creator-private challenge remains
+SOW-0034 and was not decided here.
 
 ## Lessons Extracted
 
-Pending implementation and final review.
+- A copied tree is not a checkout. `go build` and `go test` in one ask
+  git for VCS status and exit 128 unless `-buildvcs=false` is on every
+  such command, including the ones tests spawn.
+- MSYS Python is not a Windows qualification. The harness is right to
+  require `platform.system() == "Windows"`, which means mingw64 Python,
+  and native binaries need a drive-letter work directory.
+- The default battery width on this host exhausts descriptors. Width 4
+  is the measured clean configuration. An EMFILE death in the dynamic
+  loader is a host budget failure, not an engine divergence.
+- Re-authoring Windows evidence at commit N, then committing that
+  evidence, moves HEAD. The proofs have to be re-authored at the commit
+  that contains them, or the kind gate still sees two revisions.
 
 ## Followup
 
@@ -22636,10 +22654,10 @@ detecting tests (suite 178; kit restaged at `021df90e`). The
 Sol turn 8 (same session, HEAD `18b4750d`) returned PRODUCTION GRADE
 on the harness delta. Three comment P3s stay named OPEN. The
 unrelated export-creation P1 remains SOW-0034 and does not affect
-this verdict. The full battery is green at `d593f1fa` (width 4, wall 345 s,
-zero mismatches; evidence rotated in `08705e7d`). Windows evidence
-still names `4b42cc0b` and is deferred, not regenerated. That
-re-qualification remains open. It does not fail the Linux battery. SOW-0030 owns the <=1.3x acceptance verdict
+this verdict. The full battery is green at `ba30d50b` (width 4, wall 349 s,
+zero mismatches). Windows evidence was re-authored at that same commit
+and the kind gate PASSed on one revision. The close record is the
+2026-10-05 section below. SOW-0030 owns the <=1.3x acceptance verdict
 (the spread row above enumerates every recorded ceiling session;
 do not carry a second count literal here: it re-stales at every
 session); run-condition-dominated wall-clock spread disclosed).
@@ -22704,15 +22722,11 @@ What is fixed and re-proven:
   (rc=0). Inside the full battery the coverage log was truncated at
   600 characters after rc=1, so the failing package name was not kept.
 
-What is not fixed:
+What was still open when that note was written, and is now closed:
 
-- The full battery's remaining reds (kind gate, forgery, manifest,
-  audits) cascade from a missing coverage report plus the committed
-  Windows evidence files, which still name revision `4b42cc0b` while
-  the Linux reports name the battery's HEAD. Those Windows files are
-  from the authorized Windows host. They cannot be regenerated here.
-- A quiet full battery, and a Windows re-qualification at this
-  revision, are still required before Milestone 5 can close.
+- The coverage report and the Windows revision split were the cascade.
+  Both are closed. The green battery and the Windows re-author are
+  recorded in the 2026-10-05 close section.
 
 ### Sol turn-2 repair waves (2026-10-02, recorded before implementation)
 
@@ -22790,9 +22804,40 @@ C corpus attestation on every native leg).
   8193); the full constructor class matrix; the claim-narrowing
   pass over waves M's record.
 
-**Milestone 5 status: OPEN.** The paragraphs above record what is in
-the tree and what has been measured. They are not a close claim. The
-milestone stays open until the seven-role round approves the exact
-revision, the external control (sol) returns `PRODUCTION GRADE`, and the gate battery is
-recorded at the final revision. Any of those can still fail and send
-the milestone back to implementation.
+**Milestone 5 status: closed 2026-10-05.** The paragraphs above are
+the history of the open period. The close record is the section below.
+
+## Close (2026-10-05)
+
+Milestone 5 is closed. This SOW is completed.
+
+Gate:
+
+- Internal 7/7 at panel r245, HEAD `6a9aad66` (code tree `f74eeb59`).
+  Later records-only rounds did not converge and are not claimed as
+  product approval. User decisions 1B and 2B stand: a wording fix is
+  not a new milestone.
+- Sol turn 8, session `5e89101642d843ca934384e46f0a119b`, PRODUCTION
+  GRADE at `18b4750d` on the harness delta. Three comment P3s stay
+  named OPEN. The export-creation P1 stays SOW-0034.
+- Full battery at `ba30d50b`: `IPRANGE_JOBS=4`, wall 349 s, `ALLDONE`,
+  zero mismatches. Width 12 on this host exhausts descriptors and is
+  not the acceptance run.
+- Windows housekeeping and guard proofs re-authored at `ba30d50b` on
+  the authorized Windows host (mingw64 CPython 3.14.6, rustc 1.97.1
+  `x86_64-pc-windows-msvc`, go1.26.5 windows/amd64). Native Go suite
+  24 ok / 8 empty / 0 failures. Native `cargo test -p iprange-cli`
+  355 library tests plus 1 discipline test, 0 failed. Both
+  `--verify-report` checks passed against the staged `win/` ledger.
+- Kind gate PASS on one revision. Committed-report audit: 0 problems.
+  23 run reports name `ba30d50b`. `known-defects.json` is a defect
+  ledger and has no `git_head`.
+
+Not waived, and not this SOW:
+
+- The <=1.3x elapsed and peak-RSS binding failed and was not waived.
+  SOW-0030 owns it.
+- The creator-private access rule was not decided. SOW-0034 owns that
+  challenge and does not authorize weakening the rule.
+- SOW-0017 (authenticated snapshots) stays paused. SOW-0029 (daemon)
+  and SOW-0031 (history-project report output) stay pending.
