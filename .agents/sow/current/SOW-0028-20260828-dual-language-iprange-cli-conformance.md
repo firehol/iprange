@@ -22636,8 +22636,10 @@ detecting tests (suite 178; kit restaged at `021df90e`). The
 Sol turn 8 (same session, HEAD `18b4750d`) returned PRODUCTION GRADE
 on the harness delta. Three comment P3s stay named OPEN. The
 unrelated export-creation P1 remains SOW-0034 and does not affect
-this verdict. The milestone remains OPEN pending a green full
-battery. SOW-0030 owns the <=1.3x acceptance verdict
+this verdict. The full battery is green at `d593f1fa` (width 4, wall 345 s,
+zero mismatches; evidence rotated in `08705e7d`). Windows evidence
+still names `4b42cc0b` and is deferred, not regenerated. That
+re-qualification remains open. It does not fail the Linux battery. SOW-0030 owns the <=1.3x acceptance verdict
 (the spread row above enumerates every recorded ceiling session;
 do not carry a second count literal here: it re-stales at every
 session); run-condition-dominated wall-clock spread disclosed).
