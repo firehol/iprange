@@ -213,13 +213,21 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
 
     # The engines' own wire shapes (publish.rs): the publication
     # record the error path carries, and the preparation record.
+    # The inner record's status agrees with the outcome and
+    # destination_content is a name string (publication_evidence.rs).
     PUBLICATION = {"report": {"addresses": "1"},
                    "publication": {"attempt": {"id": "a"},
                                    "publication": "not_published",
-                                   "destination_content": {"present": False}}}
+                                   "destination_content": "absent"}}
     PREPARATION = {"output": {"publication_attempt_id": "b"},
                    "cleanup": {}, "coordination_cleanup": {},
                    "housekeeping": {}, "visible_housekeeping": []}
+
+    @classmethod
+    def publication_for(cls, outcome, content="absent"):
+        record = dict(cls.PUBLICATION["publication"],
+                      publication=outcome, destination_content=content)
+        return {"report": {"addresses": "1"}, "publication": record}
 
     @staticmethod
     def cancelled(outcome, details=None):
@@ -257,11 +265,116 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
             self.cancelled("published", self.PREPARATION), True)
         self.assertIn("no factual PublicationResult", reason)
 
+    def test_a_contradicting_inner_record_is_refused(self):
+        # Sol turn-3 wave MAH: shaped-but-contradictory forgeries —
+        # the record's facts must agree with the outcome.
+        from cancel_inflight import cancelled_result
+        forged = self.publication_for("published")
+        reason = cancelled_result(
+            self.cancelled("not_published", forged), False)
+        self.assertIn("contradicts the outcome", reason)
+        # a preparation record without facts cannot claim not_published
+        empty = {"output": None, "cleanup": {}, "coordination_cleanup": {},
+                 "housekeeping": {}, "visible_housekeeping": []}
+        reason = cancelled_result(
+            self.cancelled("not_published", empty), False)
+        self.assertIn("no output or cleanup facts", reason)
+        # and a pre-attempt outcome cannot carry attempt facts
+        reason = cancelled_result(
+            self.cancelled("not_started", self.PREPARATION), False)
+        self.assertIn("pre-attempt outcome carries attempt facts", reason)
+
+    def test_a_trailing_unterminated_duplicate_is_detected(self):
+        # The exactly-once gate a silent residue drop would bypass.
+        import json as _json
+        from cancel_inflight import drain_terminal_answers
+
+        class FakeProc:
+            def poll(self):
+                return 0
+
+        class FakeService:
+            proc = FakeProc()
+
+            @staticmethod
+            def decode_response_line(line, request_id):
+                assert line.endswith(b"\n")
+                return _json.loads(line)
+
+        seen = {}
+        chunks = [
+            _json.dumps({"jsonrpc": "2.0", "id": "a", "result": {}}).encode() + b"\n",
+            _json.dumps({"jsonrpc": "2.0", "id": "a", "result": {}}).encode(),
+        ]
+        state = {"n": 0}
+
+        def read():
+            if state["n"] >= len(chunks):
+                return b""
+            chunk = chunks[state["n"]]
+            state["n"] += 1
+            return chunk
+
+        with self.assertRaisesRegex(AssertionError, "duplicate answer"):
+            drain_terminal_answers(FakeService(), seen, read,
+                                   quiet_window=0.05, aggregate_cap=2.0)
+
+    def test_the_drain_routes_through_the_shared_frame_owner(self):
+        # A bypass (a bare json.loads in the drain) keeps this green
+        # only if the owner is on the path — the owner's refusal must
+        # surface, proving the routing.
+        import json as _json
+        from cancel_inflight import drain_terminal_answers
+
+        class FakeProc:
+            def poll(self):
+                return 0
+
+        class FakeService:
+            proc = FakeProc()
+
+            @staticmethod
+            def decode_response_line(line, request_id):
+                raise AssertionError("routed through the shared owner")
+
+        chunks = [b'{"jsonrpc":"2.0","id":"a","result":{}}\n']
+        state = {"n": 0}
+
+        def read():
+            if state["n"] >= len(chunks):
+                return b""
+            chunk = chunks[state["n"]]
+            state["n"] += 1
+            return chunk
+
+        with self.assertRaisesRegex(AssertionError, "shared owner"):
+            drain_terminal_answers(FakeService(), {}, read,
+                                   quiet_window=0.05, aggregate_cap=2.0)
+
+    def test_a_completed_frame_is_validated_by_the_owner(self):
+        # describe_bytes' limb: the validated_frame helper refuses a
+        # CRLF/oversized/unterminated frame through the shared owner.
+        import json as _json
+        from describe_bytes import validated_frame
+
+        class Owner:
+            @staticmethod
+            def decode_response_line(line, request_id):
+                if not line.endswith(b"\n"):
+                    raise AssertionError("response frame is not LF terminated")
+                return _json.loads(line)
+
+        self.assertEqual(
+            validated_frame(Owner(), b'{"id":"1","result":{}}\n')["id"], "1")
+        with self.assertRaisesRegex(AssertionError, "not LF terminated"):
+            validated_frame(Owner(), b'{"id":"1","result":{}}')
+
     def test_factual_details_are_accepted_per_outcome(self):
         from cancel_inflight import cancelled_result
         self.assertEqual(
             cancelled_result(
-                self.cancelled("not_published", self.PUBLICATION), False),
+                self.cancelled("not_published",
+                               self.publication_for("not_published")), False),
             "")
         # a preparation failure legitimately maps to not_published
         self.assertEqual(
@@ -270,12 +383,16 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
             "")
         self.assertEqual(
             cancelled_result(self.cancelled("not_started"), False), "")
+        empty = {"output": None, "cleanup": {}, "coordination_cleanup": {},
+                 "housekeeping": {}, "visible_housekeeping": []}
         self.assertEqual(
             cancelled_result(
-                self.cancelled("not_started", self.PREPARATION), False), "")
+                self.cancelled("not_started", empty), False), "")
         self.assertEqual(
             cancelled_result(
-                self.cancelled("outcome_unknown", self.PUBLICATION), False),
+                self.cancelled("outcome_unknown",
+                               self.publication_for("outcome_unknown")),
+                False),
             "")
 
     def test_a_forged_outcome_is_refused(self):
@@ -286,7 +403,7 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
 
     def test_published_without_destination_is_refused(self):
         from cancel_inflight import cancelled_result
-        published = dict(self.PUBLICATION, publication="published")
+        published = self.publication_for("published")
         reason = cancelled_result(self.cancelled("published", published), False)
         self.assertIn("destination is absent", reason)
 
@@ -299,9 +416,10 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
     def test_a_state_consistent_outcome_passes(self):
         from cancel_inflight import cancelled_result
         for outcome, exists, details in (
-                ("not_published", False, self.PUBLICATION),
+                ("not_published", False, self.publication_for("not_published")),
                 ("not_started", False, None),
-                ("outcome_unknown", False, self.PUBLICATION)):
+                ("outcome_unknown", False,
+                 self.publication_for("outcome_unknown"))):
             self.assertEqual(
                 cancelled_result(self.cancelled(outcome, details), exists),
                 "", outcome)

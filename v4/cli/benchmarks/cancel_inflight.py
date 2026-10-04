@@ -75,6 +75,11 @@ class FrameAccumulator:
         self._pending = b""
         self.chunk_count = 0
 
+    def residue(self):
+        """Bytes held at end of stream: a trailing frame that never
+        completed. It is evidence, not garbage (sol turn-3 wave MAH)."""
+        return self._pending
+
     def read_response(self):
         chunk = self._read_chunk()
         if not chunk:
@@ -184,6 +189,30 @@ def cancelled_result(response, destination_exists):
     elif shape != "publication":
         # outcome_unknown: only the publication record maps here.
         return (f"cancelled outcome carries no factual result: {data!r}")
+    # Sol turn-3 wave MAH: the record's own facts must agree with the
+    # outcome — a shaped-but-contradictory record is a forgery.
+    if shape == "publication":
+        record = details["publication"]
+        if not isinstance(record, dict):
+            return f"publication record is not an object: {data!r}"
+        if record.get("publication") != outcome:
+            return (f"publication record contradicts the outcome "
+                    f"({record.get('publication')!r} != {outcome!r}): "
+                    f"{data!r}")
+        content = record.get("destination_content")
+        if content not in ("desired", "previous", "absent",
+                           "other", "unclassified"):
+            return (f"publication record carries no factual "
+                    f"destination_content: {data!r}")
+    elif shape == "preparation":
+        facts = details.get("output") or details.get("cleanup") \
+            or details.get("coordination_cleanup")
+        if outcome == "not_published" and not facts:
+            return (f"not_published preparation record has no output "
+                    f"or cleanup facts: {data!r}")
+        if outcome == "not_started" and facts:
+            return (f"pre-attempt outcome carries attempt facts: "
+                    f"{data!r}")
     return ""
 
 
@@ -242,6 +271,24 @@ def drain_terminal_answers(service, seen, read_line, *,
         if service.proc.poll() is not None:
             break
         time.sleep(poll_interval)
+    residue = frames.residue()
+    if residue:
+        # Sol turn-3 wave MAH: a trailing unterminated frame is
+        # adversarial output — pre-delta code parsed it and the
+        # exactly-once check caught a duplicate; dropping it silently
+        # would let a forged second answer escape. File it if it is a
+        # parseable answer (restoring the duplicate discrimination),
+        # and fail on anything else.
+        try:
+            forged = json.loads(residue)
+        except ValueError:
+            forged = None
+        if isinstance(forged, dict) and "id" in forged:
+            record_answer(seen, forged)
+        else:
+            raise AssertionError(
+                f"trailing unterminated frame bytes at end of drain: "
+                f"{residue[:200]!r}")
 
 
 def prove(binary, work):

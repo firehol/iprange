@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <shellapi.h>
+#include <windows.h>
+
 #define CHECK(expression)                                                       \
     do {                                                                        \
         if (!(expression)) {                                                    \
@@ -13,30 +16,38 @@
         }                                                                       \
     } while (0)
 
-static int utf16_path(const char *input, uint16_t *units, uint64_t capacity,
-                      iprange_v4_abi1_path *output)
+/* Native wide arguments (sol turn-3 wave MAH): the narrow argv the
+ * CRT hands main() is code-page dependent and the old converter
+ * refused every non-ASCII byte — a work directory containing U+00E9
+ * failed this test before the product ever ran. The OS wide command
+ * line is consumed directly; no encoding conversion happens at all. */
+static int wide_path(const wchar_t *input, uint16_t *units, uint64_t capacity,
+                     iprange_v4_abi1_path *output)
 {
-    uint64_t length = strlen(input);
-    uint64_t index;
-    if (length == 0 || length > capacity) {
+    uint64_t index = 0;
+    if (input == NULL || input[0] == L'\0') {
         return 1;
     }
-    for (index = 0; index < length; ++index) {
-        unsigned char byte = (unsigned char)input[index];
-        if (byte > 0x7f) {
+    while (input[index] != L'\0') {
+        if (index >= capacity) {
             return 1;
         }
-        units[index] = byte;
+        units[index] = (uint16_t)input[index];
+        ++index;
     }
     memset(output, 0, sizeof(*output));
     output->kind = IPRANGE_V4_ABI1_PATH_WINDOWS_UTF16;
     output->pointer = units;
-    output->length = length;
+    output->length = index;
     return 0;
 }
 
 int main(int argc, char **argv)
 {
+    int wargc = 0;
+    wchar_t **wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    (void)argc;
+    (void)argv;
     static const uint8_t tag_bytes[] = {'a', 's', 'n'};
     static const uint16_t database_name[] = {'\\', 'n', 'a', 't', 'i', 'v', 'e',
                                              '-', 0x03b4, '.', 'i', 'p', 'r'};
@@ -51,7 +62,7 @@ int main(int argc, char **argv)
     uint8_t present = 0xff;
     uint32_t value = UINT32_MAX;
 
-    CHECK(argc == 2);
+    CHECK(wargv != NULL && wargc == 2);
     {
         iprange_v4_abi1_path empty = {0};
         iprange_v4_abi1_reader *opened = NULL;
@@ -80,8 +91,9 @@ int main(int argc, char **argv)
         CHECK(iprange_v4_abi1_error_destroy(error) == IPRANGE_V4_ABI1_STATUS_OK);
         error = NULL;
     }
-    CHECK(utf16_path(argv[1], path_units,
-                     sizeof(path_units) / sizeof(path_units[0]), &path) == 0);
+    CHECK(wide_path(wargv[1], path_units,
+                    sizeof(path_units) / sizeof(path_units[0]), &path) == 0);
+    LocalFree(wargv);
     CHECK(path.length + sizeof(database_name) / sizeof(database_name[0]) <=
           sizeof(path_units) / sizeof(path_units[0]));
     memcpy(path_units + path.length, database_name, sizeof(database_name));
