@@ -22675,9 +22675,14 @@ run. They were re-authored on the authorized Windows host at
 -p iprange-cli --no-fail-fast` was 355 library tests plus 1
 discipline test, 0 failed, with the release worker copied beside the
 debug test binary. Both product proofs passed and `--verify-report`
-accepted them against the staged `win/` ledger. A full battery at
-this tree is still required so the Linux reports and the Windows
-reports name one revision.
+accepted them against the staged `win/` ledger. The full battery at `ba30d50b` (`IPRANGE_JOBS=4`, wall 349 s,
+`ALLDONE`, zero mismatches) rotated the Linux reports onto that
+commit. The Windows proofs were re-authored at the same commit
+(engines unchanged from `90d75864`, so the same binaries) and
+`--verify-report` accepted both. The kind gate then PASSed on one
+revision: 23 evidence files name `ba30d50b`, and the committed-report
+audit reported 0 problems. `known-defects.json` is a defect ledger,
+not a run report, and has no `git_head`.
 
 Earlier reds, fixed before this green run:
 

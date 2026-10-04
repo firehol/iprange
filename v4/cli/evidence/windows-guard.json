@@ -12,7 +12,7 @@
     ],
     "native_cargo_test": "GREEN with the recorded worker-colocation step. nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-fail-fast returned rc=0 after cargo test --no-run and copying the release iprange-v4-worker.exe beside the debug test executable as v4/rust/target/debug/deps/iprange-v4-worker.exe. Tally: 355 passed in the library target, 1 passed in tests/thread_creation_discipline.rs, 0 failed, 0 ignored.",
     "native_go_test": "GREEN. nice go test ./... -count=1 in v4/go on the native Windows host returned rc=0: 32 packages -- 24 ok, 8 with no test files, 0 failures.",
-    "revision": "90d758644bbfd8add5c7f0a9fa0c83ad01a5ccde",
+    "revision": "ba30d50b359f3a3e19b958c9a5a2bedef76ffe9f",
     "toolchain": {
       "date": "2026-10-05",
       "go": "go version go1.26.5 windows/amd64",
@@ -43,7 +43,7 @@
     "sha256": "6def7a5b833055abfb23d811854e1e51b58c93162041f297d0e4939fa382f7b3",
     "size": 16384
   },
-  "git_head": "90d758644bbfd8add5c7f0a9fa0c83ad01a5ccde",
+  "git_head": "ba30d50b359f3a3e19b958c9a5a2bedef76ffe9f",
   "platform": "windows",
   "privacy": {
     "checked_inputs": [
@@ -975,7 +975,7 @@
     ],
     "native_cargo_test": "GREEN with the recorded worker-colocation step. nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-fail-fast returned rc=0 after cargo test --no-run and copying the release iprange-v4-worker.exe beside the debug test executable as v4/rust/target/debug/deps/iprange-v4-worker.exe. Tally: 355 passed in the library target, 1 passed in tests/thread_creation_discipline.rs, 0 failed, 0 ignored.",
     "native_go_test": "GREEN. nice go test ./... -count=1 in v4/go on the native Windows host returned rc=0: 32 packages -- 24 ok, 8 with no test files, 0 failures.",
-    "revision": "90d758644bbfd8add5c7f0a9fa0c83ad01a5ccde",
+    "revision": "ba30d50b359f3a3e19b958c9a5a2bedef76ffe9f",
     "toolchain": {
       "date": "2026-10-05",
       "go": "go version go1.26.5 windows/amd64",

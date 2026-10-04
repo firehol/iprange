@@ -10,11 +10,11 @@
  "command": [
   "v4/cli/command_sanitize.py",
   "--emit-build-ids",
-  "/tmp/iprange-battery.IKpAtg/reports/build-ids.json",
+  "/tmp/iprange-battery.frCfp4/reports/build-ids.json",
   "--built-cli",
-  "/tmp/iprange-battery.IKpAtg/rust-target/release/iprange",
+  "/tmp/iprange-battery.frCfp4/rust-target/release/iprange",
   "--built-worker",
-  "/tmp/iprange-battery.IKpAtg/rust-target/release/iprange-v4-worker"
+  "/tmp/iprange-battery.frCfp4/rust-target/release/iprange-v4-worker"
  ],
  "expected_build_id": {
   "darwin": "fde07eb03d9e2499a553a1d4eef624d976fd52c1b85ce880d8a25456cbb21d4e",
@@ -22,7 +22,7 @@
   "linux": "fde07eb03d9e2499a553a1d4eef624d976fd52c1b85ce880d8a25456cbb21d4e",
   "windows": "fde07eb03d9e2499a553a1d4eef624d976fd52c1b85ce880d8a25456cbb21d4e"
  },
- "git_head": "d593f1fa55fc7b46fc8d46b3b7ca01c21cb685d5",
+ "git_head": "ba30d50b359f3a3e19b958c9a5a2bedef76ffe9f",
  "inputs": {
   "manifest": "Cargo.toml",
   "source_files": 357
@@ -50,7 +50,7 @@
  "schema": "iprange-cli-build-ids-v1",
  "source_state": {
   "note": "the value is a pure function of iprange-livedb's Cargo.toml and src/**.rs content; any change under that package regenerates it. Regenerate this file whenever the package changes and never hand-edit a digest.",
-  "revision": "d593f1fa55fc7b46fc8d46b3b7ca01c21cb685d5"
+  "revision": "ba30d50b359f3a3e19b958c9a5a2bedef76ffe9f"
  },
  "verified_against_built_products": {
   "cli_contains_expected": true,

@@ -3,31 +3,31 @@
  "command": [
   "v4/cli/coverage_harness.py",
   "--work",
-  "/tmp/iprange-battery.IKpAtg/W-cov",
+  "/tmp/iprange-battery.frCfp4/W-cov",
   "--rust",
-  "/tmp/iprange-battery.IKpAtg/bin/rust/iprange",
+  "/tmp/iprange-battery.frCfp4/bin/rust/iprange",
   "--fixture-tool",
-  "/tmp/iprange-battery.IKpAtg/bin/rust/v4-fixture",
+  "/tmp/iprange-battery.frCfp4/bin/rust/v4-fixture",
   "--json-report",
-  "/tmp/iprange-battery.IKpAtg/reports/coverage-go.json"
+  "/tmp/iprange-battery.frCfp4/reports/coverage-go.json"
  ],
  "coverage_dirs": [
-  "/tmp/iprange-battery.IKpAtg/W-cov/cov-unit",
-  "/tmp/iprange-battery.IKpAtg/W-cov/cov-integration"
+  "/tmp/iprange-battery.frCfp4/W-cov/cov-unit",
+  "/tmp/iprange-battery.frCfp4/W-cov/cov-integration"
  ],
- "elapsed_seconds": 74.48,
- "git_head": "d593f1fa55fc7b46fc8d46b3b7ca01c21cb685d5",
+ "elapsed_seconds": 80.54,
+ "git_head": "ba30d50b359f3a3e19b958c9a5a2bedef76ffe9f",
  "instrumented_binaries": {
   "iprange": {
    "covermode": "atomic",
    "instrumented": true,
-   "path": "/tmp/iprange-battery.IKpAtg/W-cov/bin/iprange",
+   "path": "/tmp/iprange-battery.frCfp4/W-cov/bin/iprange",
    "sha256": "5d6a42e3047ca9b13f69f32a7640f430133d1c7fbc9eff050ae092167efce01f"
   },
   "iprange-v4-worker": {
    "covermode": "atomic",
    "instrumented": true,
-   "path": "/tmp/iprange-battery.IKpAtg/W-cov/bin/iprange-v4-worker",
+   "path": "/tmp/iprange-battery.frCfp4/W-cov/bin/iprange-v4-worker",
    "sha256": "d797f41c02525a251acf64388f7e5e17275c0aa57da22a7503ae080602b0b5b7"
   }
  },
@@ -60,17 +60,17 @@
      "/usr/bin/python3.14",
      "v4/cli/run.py",
      "--go",
-     "/tmp/iprange-battery.IKpAtg/W-cov/bin/iprange",
+     "/tmp/iprange-battery.frCfp4/W-cov/bin/iprange",
      "--rust",
-     "/tmp/iprange-battery.IKpAtg/bin/rust/iprange",
+     "/tmp/iprange-battery.frCfp4/bin/rust/iprange",
      "--fixture-tool",
-     "/tmp/iprange-battery.IKpAtg/bin/rust/v4-fixture",
+     "/tmp/iprange-battery.frCfp4/bin/rust/v4-fixture",
      "--matrix",
      "go",
      "--work-dir",
-     "/tmp/iprange-battery.IKpAtg/W-cov/matrix-go",
+     "/tmp/iprange-battery.frCfp4/W-cov/matrix-go",
      "--json-report",
-     "/tmp/iprange-battery.IKpAtg/W-cov/coverage-matrix-go.json"
+     "/tmp/iprange-battery.frCfp4/W-cov/coverage-matrix-go.json"
     ],
     "failed": 0,
     "matrix": "go",
@@ -83,17 +83,17 @@
      "/usr/bin/python3.14",
      "v4/cli/run.py",
      "--go",
-     "/tmp/iprange-battery.IKpAtg/W-cov/bin/iprange",
+     "/tmp/iprange-battery.frCfp4/W-cov/bin/iprange",
      "--rust",
-     "/tmp/iprange-battery.IKpAtg/bin/rust/iprange",
+     "/tmp/iprange-battery.frCfp4/bin/rust/iprange",
      "--fixture-tool",
-     "/tmp/iprange-battery.IKpAtg/bin/rust/v4-fixture",
+     "/tmp/iprange-battery.frCfp4/bin/rust/v4-fixture",
      "--matrix",
      "rust_to_go",
      "--work-dir",
-     "/tmp/iprange-battery.IKpAtg/W-cov/matrix-rust_to_go",
+     "/tmp/iprange-battery.frCfp4/W-cov/matrix-rust_to_go",
      "--json-report",
-     "/tmp/iprange-battery.IKpAtg/W-cov/coverage-matrix-rust_to_go.json"
+     "/tmp/iprange-battery.frCfp4/W-cov/coverage-matrix-rust_to_go.json"
     ],
     "failed": 0,
     "matrix": "rust_to_go",
@@ -106,17 +106,17 @@
      "/usr/bin/python3.14",
      "v4/cli/run.py",
      "--go",
-     "/tmp/iprange-battery.IKpAtg/W-cov/bin/iprange",
+     "/tmp/iprange-battery.frCfp4/W-cov/bin/iprange",
      "--rust",
-     "/tmp/iprange-battery.IKpAtg/bin/rust/iprange",
+     "/tmp/iprange-battery.frCfp4/bin/rust/iprange",
      "--fixture-tool",
-     "/tmp/iprange-battery.IKpAtg/bin/rust/v4-fixture",
+     "/tmp/iprange-battery.frCfp4/bin/rust/v4-fixture",
      "--matrix",
      "go_to_rust",
      "--work-dir",
-     "/tmp/iprange-battery.IKpAtg/W-cov/matrix-go_to_rust",
+     "/tmp/iprange-battery.frCfp4/W-cov/matrix-go_to_rust",
      "--json-report",
-     "/tmp/iprange-battery.IKpAtg/W-cov/coverage-matrix-go_to_rust.json"
+     "/tmp/iprange-battery.frCfp4/W-cov/coverage-matrix-go_to_rust.json"
     ],
     "failed": 0,
     "matrix": "go_to_rust",
@@ -126,7 +126,7 @@
    }
   ]
  },
- "measured_git_head": "d593f1fa55fc7b46fc8d46b3b7ca01c21cb685d5",
+ "measured_git_head": "ba30d50b359f3a3e19b958c9a5a2bedef76ffe9f",
  "merged": {
   "measured": {
    "blocks": 42121,
@@ -549,8 +549,8 @@
   "mode": "working-tree",
   "v4_tree": "v4"
  },
- "staged_tree": "/tmp/iprange-battery.IKpAtg/W-cov/v4",
- "staging": "/tmp/iprange-battery.IKpAtg/W-cov/bin",
+ "staged_tree": "/tmp/iprange-battery.frCfp4/W-cov/v4",
+ "staging": "/tmp/iprange-battery.frCfp4/W-cov/bin",
  "toolchain": {
   "covdata": "go tool covdata",
   "go_version": "go version go1.27.0 linux/amd64"
@@ -565,10 +565,10 @@
    "-covermode=atomic",
    "...",
    "-args",
-   "-test.gocoverdir=/tmp/iprange-battery.IKpAtg/W-cov/cov-unit"
+   "-test.gocoverdir=/tmp/iprange-battery.frCfp4/W-cov/cov-unit"
   ],
   "cover_files": 50,
-  "coverdir": "/tmp/iprange-battery.IKpAtg/W-cov/cov-unit",
+  "coverdir": "/tmp/iprange-battery.frCfp4/W-cov/cov-unit",
   "covermode": "atomic",
   "measured": {
    "blocks": 42114,
