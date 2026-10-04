@@ -22655,8 +22655,38 @@ parity-r251), named in the kit map's GONE list. User decision 1B
 amended `REVIEWS.md`: records-only chunks close at 5/7 with every
 finding dispositioned, so a wording fix is not a new milestone.
 User decision 2B: this note is the close record of that fact. Sol
-turn 4 is pointed at the harness delta and the logs, not asked to
-certify the ledger. Carried P3s stay named OPEN.
+turn 8 is PRODUCTION GRADE on the harness delta (HEAD `18b4750d`).
+Carried P3s stay named OPEN.
+
+### Battery (2026-10-04, not closed)
+
+`v4/cli/battery.sh --tier full` was run five times at the sol-graded
+tree and the crash-gate repair. It is not green.
+
+What is fixed and re-proven:
+
+- Crash scenarios A1–A3 both directions left no reservation because
+  the harness treated a finished publish as the crash marker, then
+  closed the watch before killing. The kill now happens in the same
+  tick as the marker. Alone, 16/16 PASS both directions. Inside two
+  full batteries, 16/16 and then one A3 miss under load (the marker
+  window is shorter than the poll interval when the host is busy).
+- Go coverage failed before measuring: the worker test harness ran
+  `go build` in a copied tree and git VCS stamping exited 128.
+  `-buildvcs=false` is now on that build and on the coverage `go test`.
+  The same copied tree's `go test -cover ./...` then passed alone
+  (rc=0). Inside the full battery the coverage log was truncated at
+  600 characters after rc=1, so the failing package name was not kept.
+
+What is not fixed:
+
+- The full battery's remaining reds (kind gate, forgery, manifest,
+  audits) cascade from a missing coverage report plus the committed
+  Windows evidence files, which still name revision `4b42cc0b` while
+  the Linux reports name the battery's HEAD. Those Windows files are
+  from the authorized Windows host. They cannot be regenerated here.
+- A quiet full battery, and a Windows re-qualification at this
+  revision, are still required before Milestone 5 can close.
 
 ### Sol turn-2 repair waves (2026-10-02, recorded before implementation)
 
