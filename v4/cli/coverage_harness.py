@@ -44,6 +44,7 @@ import ast
 import hashlib
 import json
 import os
+import re
 import platform
 import shutil
 import subprocess
@@ -531,11 +532,12 @@ def measure_unit(module_dir, coverdir, go):
         # A red unit suite must not be reported as a coverage number: the
         # percentage would be measured over a build the module itself rejects.
         detail = (err or out).strip()
-        fail_at = detail.find("FAIL\t")
-        if fail_at >= 0:
-            detail = detail[fail_at:fail_at + 800]
+        named = re.findall(r"^--- FAIL: \S+", detail, re.M)
+        if named:
+            detail = "; ".join(named[:8])
         else:
-            detail = detail[-800:]
+            fail_at = detail.find("FAIL\t")
+            detail = detail[fail_at:fail_at + 400] if fail_at >= 0 else detail[-400:]
         raise SystemExit(f"go test -cover failed (rc {rc}): {detail}")
     if files < MIN_COVER_FILES_PER_RUN:
         raise SystemExit(f"unit coverage produced {files} counter files; "
