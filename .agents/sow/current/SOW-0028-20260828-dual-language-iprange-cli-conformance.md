@@ -22633,8 +22633,11 @@ and 2 P3s in the proof harness, plus 1 unrelated P1 owned by
 SOW-0034 (export creation privacy — outside this milestone).
 Those harness P2s were fixed in waves M-sol through MAK with
 detecting tests (suite 178; kit restaged at `021df90e`). The
-milestone remains OPEN pending sol turn 4 on that harness delta
-and the full battery. SOW-0030 owns the <=1.3x acceptance verdict
+Sol turn 8 (same session, HEAD `18b4750d`) returned PRODUCTION GRADE
+on the harness delta. Three comment P3s stay named OPEN. The
+unrelated export-creation P1 remains SOW-0034 and does not affect
+this verdict. The milestone remains OPEN pending a green full
+battery. SOW-0030 owns the <=1.3x acceptance verdict
 (the spread row above enumerates every recorded ceiling session;
 do not carry a second count literal here: it re-stales at every
 session); run-condition-dominated wall-clock spread disclosed).
