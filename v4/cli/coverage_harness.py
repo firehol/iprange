@@ -532,9 +532,10 @@ def measure_unit(module_dir, coverdir, go):
         # A red unit suite must not be reported as a coverage number: the
         # percentage would be measured over a build the module itself rejects.
         detail = (err or out).strip()
-        named = re.findall(r"^--- FAIL: \S+", detail, re.M)
+        named = re.findall(
+            r"^--- FAIL: \S+.*(?:\n\s+\S[^\n]*){0,3}", detail, re.M)
         if named:
-            detail = "; ".join(named[:8])
+            detail = " || ".join(item.replace("\n", " ")[:240] for item in named[:4])
         else:
             fail_at = detail.find("FAIL\t")
             detail = detail[fail_at:fail_at + 400] if fail_at >= 0 else detail[-400:]
