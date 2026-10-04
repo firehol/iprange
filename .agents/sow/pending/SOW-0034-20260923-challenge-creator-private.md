@@ -4,9 +4,10 @@
 
 Status: open
 
-Sub-state: decision recorded 2026-10-05. The user selected option 3.
-Implementation has not started. This file does not authorize editing the
-engines until the plan gate returns GOOD TO IMPLEMENT.
+Sub-state: decision superseded 2026-10-05. The user replaced option 3
+with a create flag. Implementation has not started. This file does not
+authorize editing the engines until the plan gate returns GOOD TO
+IMPLEMENT.
 
 ## Requirements
 
@@ -196,9 +197,11 @@ Open decisions:
 Recommendation recorded before the decision: option 1. The user rejected
 that recommendation.
 
-## Decision (2026-10-05)
+## Decision (2026-10-05, superseded the same day)
 
-The user selected **option 3**.
+The user first selected **option 3**. That selection is not the decision.
+The decision is the flag section below. This paragraph is kept so the
+record shows what was rejected.
 
 The user's words, recorded as the decision and not softened: these files
 are IP and security feeds, not sensitive data, and in most cases they
@@ -241,21 +244,43 @@ This is not a mode constant. The proof is stored and checked again.
   open after the proof is removed. Silently rejecting those files would
   be a data-loss bug, not a cleanup.
 
-Implementation does not start in this edit. The plan gate has to return
-GOOD TO IMPLEMENT first. The implementation SOW, if this file is that
-SOW, must cover both engines, the CLI adapters, the specs, and a test
-that an ordinary umask file is accepted and that a pre-decision file
-still opens.
+The "delete the proof" reading above is not the decision. The flag
+section replaces it.
+
+## Decision (2026-10-05, current)
+
+The user replaced option 3 with a flag. The user's model, recorded as
+the decision:
+
+- The flag is on create. Set: the file is created with the existing
+  creator-only protection. Unset: the file is created without that
+  protection, using what the operating system does by default.
+- Open follows the file. A file created with the protection is checked.
+  A file created without it has the check disabled. The SDK does not
+  infer the choice from the process that happens to be opening it.
+- An optional open flag may require the file to be a protected one.
+  Without that flag, open accepts both kinds. This is the whole
+  feature. No other switch.
+
+Default is unset. The SDK does not add the protection unless the
+caller asks for it on create.
+
+A file that already carries the commitment was created under the old
+mandatory rule. Open treats it as protected and checks it. The flag
+does not rewrite it.
 
 ## Plan
 
-1. Decision recorded: option 3 (2026-10-05).
+1. Decision recorded: create flag, default unset (2026-10-05). Option 3
+   is superseded.
 2. Plan gate: external control reviews this SOW and returns GOOD TO
    IMPLEMENT before any engine edit. REVIEWS.md requires that gate for
    a SOW whose milestones were not already approved.
-3. Implement only after that gate. Both engines, the CLI adapters, the
-   specs, and the old-file open test move together. A pre-decision file
-   that still carries an `IPR4PSEC` commitment must open.
+3. Implement only after that gate. Both engines, the CLI and JSON-RPC
+   create path, the specs, and tests for the four cases: created with
+   the flag and checked on open, created without the flag and not
+   checked, an old commitment-bearing file still checked, and the
+   optional open flag refusing an unprotected file.
 
 ## Execution Log
 
@@ -265,9 +290,10 @@ still opens.
 
 ### 2026-10-05
 
-- User selected option 3. The decision, the rejected recommendation, and
-  the stored-commitment blast radius are recorded above. No code or spec
-  was changed. Implementation waits for the plan gate.
+- User selected option 3, then replaced it the same day with a create
+  flag. Default unset. Open follows the file. An optional open flag may
+  require a protected file. No code or spec was changed. Implementation
+  waits for the plan gate.
 
 ## Validation
 
