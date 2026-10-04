@@ -22658,10 +22658,23 @@ User decision 2B: this note is the close record of that fact. Sol
 turn 8 is PRODUCTION GRADE on the harness delta (HEAD `18b4750d`).
 Carried P3s stay named OPEN.
 
-### Battery (2026-10-04, not closed)
+### Battery (2026-10-04)
 
-`v4/cli/battery.sh --tier full` was run five times at the sol-graded
-tree and the crash-gate repair. It is not green.
+`v4/cli/battery.sh --tier full` is green at HEAD `d593f1fa`
+(`IPRANGE_JOBS=4`, wall 345 s, `ALLDONE`, zero mismatches). The
+default pool of 12 on this 24-core host exhausts the descriptor
+budget: Rust then dies in the dynamic loader (exit 127, EMFILE)
+before product code runs, and the parity gate correctly records
+that as a failed cell. Width 4 stays inside the budget. The two
+Windows evidence files still name revision `4b42cc0b`; the battery
+defers them because this host did not author them. A Windows
+re-qualification at this revision remains an open validation item.
+It is not a Linux-battery failure.
+
+Earlier reds, fixed before this green run:
+
+`v4/cli/battery.sh --tier full` was run several times at the
+sol-graded tree and the crash-gate repair. Those runs were not green.
 
 What is fixed and re-proven:
 
