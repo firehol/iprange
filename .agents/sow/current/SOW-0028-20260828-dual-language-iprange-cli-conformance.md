@@ -22627,13 +22627,33 @@ close, RSS-retry discarding correctness failures, ignored null
 expectations, IPv6 cardinality gaps in the C attestation,
 undecoded Windows corpus paths, a live thread abandoned at
 reservation-watch close, silent omission of turn-1 findings, and
-more; raw staged at the kit's evidence/m5-sol/). The milestone
-remains OPEN pending that cluster, sol turn 3, and the full
-battery. SOW-0030 owns the <=1.3x acceptance verdict (the spread row
-above enumerates every recorded ceiling session — 78 at this
-commit; do not carry a second count literal here: it re-stales
-at every session); run-condition-dominated wall-clock spread
-disclosed).
+more; raw staged at the kit's evidence/m5-sol/). Sol turn 3
+(2026-10-04, same session) returned NEEDS CHANGES: 5 in-scope P2s
+and 2 P3s in the proof harness, plus 1 unrelated P1 owned by
+SOW-0034 (export creation privacy — outside this milestone).
+Those harness P2s were fixed in waves M-sol through MAK with
+detecting tests (suite 178; kit restaged at `021df90e`). The
+milestone remains OPEN pending sol turn 4 on that harness delta
+and the full battery. SOW-0030 owns the <=1.3x acceptance verdict
+(the spread row above enumerates every recorded ceiling session;
+do not carry a second count literal here: it re-stales at every
+session); run-condition-dominated wall-clock spread disclosed).
+
+### Close-note (2026-10-04, user decisions 1B and 2B)
+
+Internal 7/7 approval was achieved at panel r245, HEAD `6a9aad66`
+(code tree `f74eeb59`). Everything after that is either harness
+repair for sol turn 3 (waves M-sol through MAK, committed through
+`021df90e`) or a records loop that did not converge. That loop is
+not claimed as approval of the product. Later panel rounds audited
+the ledger that recorded earlier rounds; three review texts were
+permanently lost to staging gaps (parity-r247, portability-r247,
+parity-r251), named in the kit map's GONE list. User decision 1B
+amended `REVIEWS.md`: records-only chunks close at 5/7 with every
+finding dispositioned, so a wording fix is not a new milestone.
+User decision 2B: this note is the close record of that fact. Sol
+turn 4 is pointed at the harness delta and the logs, not asked to
+certify the ledger. Carried P3s stay named OPEN.
 
 ### Sol turn-2 repair waves (2026-10-02, recorded before implementation)
 

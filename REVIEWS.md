@@ -252,6 +252,15 @@ skips this gate.
      shown wrong or the user rules. The lead does not silently discard a
      role finding.
    - Loop until **all 7 roles approve** the chunk.
+   - **Records-only exception** (user decision 2026-10-04, after the
+     SOW-0028 Milestone 5 ledger loop): a chunk that changes no product
+     code, tests, or specs — only kit narrative, census wording, or
+     mark placement — closes when **5 of 7** roles approve **and** every
+     finding from the withholding roles is dispositioned in the record
+     (fixed at its locus, or named OPEN with the reason). Do not open
+     another 7-role round solely to re-approve the sentence that recorded
+     the previous round. A wording fix is not a new milestone. Product
+     and test changes keep the 7/7 bar.
 5. **Commit per step** locally once the chunk is approved (bisectable
    history; do not push yet).
 
