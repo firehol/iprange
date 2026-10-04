@@ -2213,7 +2213,12 @@ autosubmit golden                track_golden
 autosubmit sensitivity           track_sensitivity
 autosubmit schema-self-test      track_schema_selftest
 autosubmit coverage-self-test    track_coverage_selftest
-autosubmit forgery-self-test     track_forgery_selftest
+if [ "$RUN_ROTATION" = 0 ]; then
+  # The self-test reads the committed evidence files. During a rotating
+  # tier those files are being replaced, so an early read can see an
+  # empty file. The full and gate tiers run it after rotation instead.
+  autosubmit forgery-self-test   track_forgery_selftest
+fi
 autosubmit privacy-self-test     track_privacy_selftest
 autosubmit fd-pressure-routine   track_fd_pressure_routine
 if [ "$NEED_COVERAGE" = 1 ]; then
@@ -2536,6 +2541,10 @@ tail -2 "$R/reports/log-forgery.txt" 2>/dev/null
 if [ "${PIPESTATUS[*]:-}" != "" ] && [ ! -s "$R/reports/log-forgery.txt" ]; then
   echo "  (the forgery battery wrote no log at all: it cannot have run)"
 fi
+echo "### [16s] forgery battery self-test (after rotation)"
+# The self-test reads the committed evidence. Running it in the pool
+# races the rotation above and can observe a file mid-write.
+track_forgery_selftest
 echo "### [23] committed-report audits, verifier, and the descriptor-pressure profile (after rotation)"
 # These steps judge the artifacts the battery produced, so they run after every
 # rotation above; a writer-side audit that ran earlier would judge the previous

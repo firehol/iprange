@@ -1429,8 +1429,9 @@ COMMITTED_REPORT_WRITERS = {
         # reported as "committed report from an unregistered writer" the moment
         # the wave's integration commit tracked them.
         "artifacts": ("crash.json", "crash-go_to_rust.json",
-                      "crash-negative.json",
-                      "crash-negative-producer-false.json"),
+                      "crash-rust_to_go.json", "crash-negative.json",
+                      "crash-negative-producer-false.json",
+                      "crash-negative-consumer-false.json"),
         "screened": ("--producer", "--consumer", "--fixture-tool",
                      "--work-dir", "--json-report"),
         "tier": SHARED_TIER,
