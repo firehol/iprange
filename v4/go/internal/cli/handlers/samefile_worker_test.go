@@ -54,7 +54,8 @@ func buildExportWorker() string {
 			exportWorkerErr = err
 			return
 		}
-		cmd := exec.Command("go", "-C", root, "build", "-o", exportWorkerPath, "./cmd/iprange-v4-worker")
+		cmd := exec.Command("go", "-C", root, "build", "-buildvcs=false",
+			"-o", exportWorkerPath, "./cmd/iprange-v4-worker")
 		if output, err := cmd.CombinedOutput(); err != nil {
 			exportWorkerErr = fmt.Errorf("build worker: %v\n%s", err, output)
 		}

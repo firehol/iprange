@@ -136,7 +136,8 @@ func TestRoutedRecoverImmutableGuardPendingRetainsCleanup(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		double += ".exe"
 	}
-	command := exec.Command("go", "-C", workerModuleRoot(), "test", "-c", "-o", double, "./internal/worker")
+	command := exec.Command("go", "-C", workerModuleRoot(), "test", "-c",
+		"-buildvcs=false", "-o", double, "./internal/worker")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build worker double: %v\n%s", err, output)
 	}
