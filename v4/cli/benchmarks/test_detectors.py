@@ -296,6 +296,11 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
         reason = cancelled_result(
             self.cancelled("not_started", {"nonsense": 1}), False)
         self.assertIn("non-preparation details", reason)
+        # narrowing the guard to admit shaped records must also fail:
+        # a publication record on a pre-attempt outcome is impossible
+        reason = cancelled_result(
+            self.cancelled("not_started", self.PUBLICATION), False)
+        self.assertIn("non-preparation details", reason)
 
     def test_the_vocabulary_and_record_object_refusals_are_detected(self):
         # Tester r249 P2-1: negative controls for the two limbs
@@ -833,20 +838,28 @@ class DescribeBytesWiringTest(unittest.TestCase):
         import types
         import describe_bytes
 
-        raw = b'{"jsonrpc":"2.0","id":"1","result":{"x":1}}\n'
-        calls = {"decode": 0, "closed": 0}
+        # Distinct per-leg frames (the engines' describe frames differ
+        # by design): a label swap inverts the attribution and fails.
+        raw_rust = (b'{"jsonrpc":"2.0","id":"1","result":{"implementation":'
+                    b'"rust","pad":"rrrrrrrrrr"}}\n')
+        raw_go = (b'{"jsonrpc":"2.0","id":"1","result":{"implementation":'
+                  b'"go"}}\n')
+        calls = {"decode": 0, "closed": 0, "refuse": False}
 
         class FakeProc:
-            stdin = types.SimpleNamespace(
-                write=lambda payload: None, flush=lambda: None)
-            stdout = object()
+            def __init__(self, binary):
+                self.stdin = types.SimpleNamespace(
+                    write=lambda payload: None, flush=lambda: None)
+                self.stdout = binary  # the reader keys the leg on it
 
         class FakeService:
             def __init__(self, argv, name):
-                self.proc = FakeProc()
+                self.proc = FakeProc(argv[0])
 
             def decode_response_line(self, frame, request_id):
                 calls["decode"] += 1
+                if calls.get("refuse"):
+                    raise AssertionError("owner refused the frame")
                 if not frame.endswith(b"\n"):
                     raise AssertionError("response frame is not LF terminated")
                 return {"parsed": True}
@@ -854,24 +867,37 @@ class DescribeBytesWiringTest(unittest.TestCase):
             def close(self):
                 calls["closed"] += 1
 
+        legs = {"r": raw_rust, "g": raw_go}
         saved_service = describe_bytes.JsonRpcService
         saved_reader = describe_bytes.readline_bounded
         saved_argv = _sys.argv
         describe_bytes.JsonRpcService = FakeService
-        describe_bytes.readline_bounded = lambda stream: raw
+        describe_bytes.readline_bounded = lambda stream: legs[stream]
         _sys.argv = ["describe_bytes.py", "--rust", "r", "--go", "g"]
         output = io.StringIO()
         try:
             with contextlib.redirect_stdout(output):
                 describe_bytes.main()
+            printed = output.getvalue()
+            self.assertIn(f"rust {len(raw_rust)} bytes", printed)
+            self.assertIn(f"go {len(raw_go)} bytes", printed)
+            self.assertIn("differ", printed)
+            self.assertEqual(calls["decode"], 2,
+                             "both legs must route through the owner")
+            self.assertEqual(calls["closed"], 2,
+                             "both services must be closed")
+            # Fail-closed limb (parity r253 P2-2): the owner's refusal
+            # must fail main() — an except-fallback that measures the
+            # raw frame anyway is the silent-measurement class this
+            # test exists for.
+            calls["refuse"] = True
+            with contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(AssertionError, "owner refused"):
+                    describe_bytes.main()
         finally:
             describe_bytes.JsonRpcService = saved_service
             describe_bytes.readline_bounded = saved_reader
             _sys.argv = saved_argv
-        printed = output.getvalue()
-        self.assertIn(f"rust {len(raw)} bytes", printed)
-        self.assertIn(f"go {len(raw)} bytes", printed)
-        self.assertEqual(calls["decode"], 2, "both legs must route through the owner")
 
 
 class CallPathWiringTest(unittest.TestCase):

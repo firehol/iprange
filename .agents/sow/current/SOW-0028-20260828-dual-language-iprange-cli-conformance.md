@@ -22426,8 +22426,8 @@ dispositioned, not silently carried:
   it was immediately re-run. The CPU ratio over every session that
   recorded CPU spans 1.820–2.334 (the round-195 panel-load
   restage measured 2.334, the current maximum; the round-137
-  quiet restage 2.276; the round-96 2.001 was the previous
-  maximum) [corrected entry 73: the kit row carried 2.334 since
+  quiet restage measured 2.276; earlier historical maximums:
+  round-96 2.001) [corrected entry 73: the kit row carried 2.334 since
   round 195 while this sentence still read 2.276] — a narrower span than elapsed, which swings by
   more than 70% relative. The verdict owner (SOW-0030) must treat
   elapsed wall-clock as run-condition-dominated: no session's
@@ -22629,9 +22629,11 @@ undecoded Windows corpus paths, a live thread abandoned at
 reservation-watch close, silent omission of turn-1 findings, and
 more; raw staged at the kit's evidence/m5-sol/). The milestone
 remains OPEN pending that cluster, sol turn 3, and the full
-battery. SOW-0030 owns the <=1.3x acceptance verdict (77
-recorded ceiling sessions; run-condition-dominated wall-clock
-spread disclosed).
+battery. SOW-0030 owns the <=1.3x acceptance verdict (the spread row
+above enumerates every recorded ceiling session — 78 at this
+commit; do not carry a second count literal here: it re-stales
+at every session); run-condition-dominated wall-clock spread
+disclosed).
 
 ### Sol turn-2 repair waves (2026-10-02, recorded before implementation)
 
