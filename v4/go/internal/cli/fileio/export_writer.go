@@ -97,6 +97,19 @@ func NewExportWriter(destination string, policy iprangedb.PublicationPolicy, bud
 	return NewExportWriterMode(destination, policy, budget, false)
 }
 
+func NewExportWriterFollowing(destination, source string, policy iprangedb.PublicationPolicy, budget ExportBudget) (*ExportWriter, *rpc.HandlerError) {
+	return NewExportWriterMode(destination, policy, budget, sourceIsCreatorOnly(source))
+}
+
+func sourceIsCreatorOnly(source string) bool {
+	reader, err := iprangedb.OpenLiveReaderPolicy(source, nil, false)
+	if err != nil {
+		return true
+	}
+	defer reader.Close()
+	return reader.CreatorOnly()
+}
+
 func NewExportWriterMode(destination string, policy iprangedb.PublicationPolicy, budget ExportBudget, creatorOnly bool) (*ExportWriter, *rpc.HandlerError) {
 	if budget.MaxOpenFiles == 0 {
 		return nil, rpc.NewHandlerError("invalid_argument", "not_started",

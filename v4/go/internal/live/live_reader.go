@@ -77,6 +77,10 @@ func OpenLiveReaderPolicy(path string, check func() error, requireCreatorOnly bo
 	return openLiveReader(path, check, requireCreatorOnly)
 }
 
+func (r *LiveReader) CreatorOnly() bool {
+	return r.sidecar.header.policy != policyUnprotected
+}
+
 func openLiveReader(path string, check func() error, requireCreatorOnly bool) (*LiveReader, error) {
 	if err := checkpoint(check); err != nil {
 		return nil, err

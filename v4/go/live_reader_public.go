@@ -60,6 +60,12 @@ func OpenLiveReaderPolicy(path string, cancellation *CancellationToken, requireC
 	return &LiveReader{lr: lr, sh: &shared{}}, nil
 }
 
+// CreatorOnly reports the sidecar policy. A pre-decision file is
+// creator-only. An unprotected file is not.
+func (r *LiveReader) CreatorOnly() bool {
+	return r.lr.CreatorOnly()
+}
+
 // checkOpen is the plain closed-state read used by every reader-level
 // operation: zero atomics per call, valid because Close must not race
 // reader work (the same contract as the Rust SDK). The closed mirror is

@@ -604,12 +604,12 @@ func exportWithReader(st *rpc.SessionState, object rawObject, sourcePath, source
 	var facts *fileio.ExportFacts
 	switch format {
 	case "legacy_binary":
-		facts, herr = writeLegacyBinary(destination, policy, budget, reader, view, hostPrefix, token)
+		facts, herr = writeLegacyBinary(destination, sourcePath, policy, budget, reader, view, hostPrefix, token)
 	case "csv", "jsonl":
-		facts, herr = writeRows(destination, policy, budget, reader, view, hostPrefix, token, format == "jsonl")
+		facts, herr = writeRows(destination, sourcePath, policy, budget, reader, view, hostPrefix, token, format == "jsonl")
 	case "ipset":
 		var line []byte
-		facts, herr = writeStreamed(destination, policy, budget, reader, view,
+		facts, herr = writeStreamed(destination, sourcePath, policy, budget, reader, view,
 			func(writer *fileio.ExportWriter, from, to u128) *rpc.HandlerError {
 				return emitIpset(from, to, hostPrefix, &line, func(text []byte) *rpc.HandlerError {
 					if herr := checkCancelled(token); herr != nil {
@@ -620,7 +620,7 @@ func exportWithReader(st *rpc.SessionState, object rawObject, sourcePath, source
 			})
 	case "netset":
 		var line []byte
-		facts, herr = writeStreamed(destination, policy, budget, reader, view,
+		facts, herr = writeStreamed(destination, sourcePath, policy, budget, reader, view,
 			func(writer *fileio.ExportWriter, from, to u128) *rpc.HandlerError {
 				return emitNetset(from, to, filter, &line, func(text []byte, span iprangedb.Cardinality129) *rpc.HandlerError {
 					if herr := checkCancelled(token); herr != nil {
@@ -631,7 +631,7 @@ func exportWithReader(st *rpc.SessionState, object rawObject, sourcePath, source
 			})
 	default: // ranges
 		var line []byte
-		facts, herr = writeStreamed(destination, policy, budget, reader, view,
+		facts, herr = writeStreamed(destination, sourcePath, policy, budget, reader, view,
 			func(writer *fileio.ExportWriter, from, to u128) *rpc.HandlerError {
 				if herr := checkCancelled(token); herr != nil {
 					return herr
@@ -825,10 +825,10 @@ func closeExportSource(live *iprangedb.LiveReader) (map[string]any, *rpc.Handler
 // writeStreamed creates the writer, streams maximal coverage through
 // one format callback, and publishes atomically (Rust export.rs
 // write_streamed).
-func writeStreamed(destination string, policy iprangedb.PublicationPolicy, budget *fileio.ExportBudget,
+func writeStreamed(destination, source string, policy iprangedb.PublicationPolicy, budget *fileio.ExportBudget,
 	reader exportReader, view *exportView,
 	format func(writer *fileio.ExportWriter, from, to u128) *rpc.HandlerError) (*fileio.ExportFacts, *rpc.HandlerError) {
-	writer, herr := fileio.NewExportWriter(destination, policy, *budget)
+	writer, herr := fileio.NewExportWriterFollowing(destination, source, policy, *budget)
 	if herr != nil {
 		return nil, herr
 	}
@@ -845,10 +845,10 @@ func writeStreamed(destination string, policy iprangedb.PublicationPolicy, budge
 // writeRows writes CSV or JSONL rows with their constant semantic
 // values; adjacent equal-value segments become one canonical row
 // without retaining the stream (Rust export.rs write_rows).
-func writeRows(destination string, policy iprangedb.PublicationPolicy, budget *fileio.ExportBudget,
+func writeRows(destination, source string, policy iprangedb.PublicationPolicy, budget *fileio.ExportBudget,
 	reader exportReader, view *exportView, hostPrefix uint32, token *iprangedb.CancellationToken,
 	jsonl bool) (*fileio.ExportFacts, *rpc.HandlerError) {
-	writer, herr := fileio.NewExportWriter(destination, policy, *budget)
+	writer, herr := fileio.NewExportWriterFollowing(destination, source, policy, *budget)
 	if herr != nil {
 		return nil, herr
 	}
@@ -989,7 +989,7 @@ func writeRow(writer *fileio.ExportWriter, hostPrefix uint32, jsonl bool,
 // unique-IP counts before the payload, so the canonical ranges are
 // streamed once to prove the counts and budgets, then streamed again to
 // write (Rust export.rs write_legacy_binary).
-func writeLegacyBinary(destination string, policy iprangedb.PublicationPolicy, budget *fileio.ExportBudget,
+func writeLegacyBinary(destination, source string, policy iprangedb.PublicationPolicy, budget *fileio.ExportBudget,
 	reader exportReader, view *exportView, hostPrefix uint32, token *iprangedb.CancellationToken) (*fileio.ExportFacts, *rpc.HandlerError) {
 	ipv6 := hostPrefix == 128
 	recordSize := uint64(8)
@@ -1031,7 +1031,7 @@ func writeLegacyBinary(destination string, policy iprangedb.PublicationPolicy, b
 	if records == 0 {
 		// The released writer emits nothing for an empty set; the
 		// destination is still atomically published as an empty file.
-		writer, herr := fileio.NewExportWriter(destination, policy, *budget)
+		writer, herr := fileio.NewExportWriterFollowing(destination, source, policy, *budget)
 		if herr != nil {
 			return nil, herr
 		}
@@ -1051,7 +1051,7 @@ func writeLegacyBinary(destination string, policy iprangedb.PublicationPolicy, b
 		return nil, rpc.NewHandlerError("output_limit", "not_started",
 			fmt.Sprintf("export refused before exceeding budget: byte %d exceeds max_output_bytes (limit %d)", exactBytes, budget.MaxOutputBytes))
 	}
-	writer, herr := fileio.NewExportWriter(destination, policy, *budget)
+	writer, herr := fileio.NewExportWriterFollowing(destination, source, policy, *budget)
 	if herr != nil {
 		return nil, herr
 	}
