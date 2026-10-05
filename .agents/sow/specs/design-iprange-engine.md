@@ -405,9 +405,13 @@ progress. Reader lookups and independent scans may run concurrently without a
 per-call mutex, atomic, or active counter; Go/C callers must not race `Close`
 with reader work.
 
-Every engine-created artifact starts creator-private (`0600` on POSIX and the
-equivalent protected user-only Windows DACL), independent of process defaults.
-Applications deliberately widen or change ownership only after publication.
+Creator-only access is opt-in at live create. The default leaves the
+file to the process umask and the directory default. A caller that sets
+the flag gets mode `0600` on POSIX and the protected user-only Windows
+DACL, and the sidecar records that choice. Open follows the record: a
+protected file is checked, an unprotected file is not, and a file
+created before the flag existed is still checked. Close-on-exec stays
+in both modes.
 
 Go does not abandon a prepared operation when its handle becomes unreachable.
 Rust does, because dropping the handle runs cleanup. Go has no destructor.

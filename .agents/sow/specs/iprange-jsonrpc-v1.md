@@ -584,12 +584,15 @@ Params:
   "value_kind":"direct|membership|structured",
   "structure_kind":"none|network_enrichment_v1",
   "value_tag":VALUE_TAG,
-  "reader_capacity":256
+  "reader_capacity":256,
+  "creator_only":false
 }
 ```
 
 `structure_kind` must be `network_enrichment_v1` only with structured values
-and `none` otherwise. Creation uses the SDK's fixed creator-only security,
+and `none` otherwise. `creator_only` defaults to false when omitted. True
+requests the creator-only proof. False leaves permissions to the process.
+Creation no longer always uses creator-only security,
 creates an empty database, and leaves metadata absent. A client that needs
 initial metadata calls `database.metadata.replace` after successful creation.
 Result is the complete `CreateResult` plus `method`.

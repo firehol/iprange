@@ -2106,7 +2106,9 @@ checksummed header page:
 | 10 | 2 | slot size | `16` |
 | 12 | 4 | state | `0=creating`, `1=ready` |
 | 16 | 4 | capacity | nonzero |
-| 20 | 12 | reserved | zero |
+| 20 | 2 | policy generation | `0` pre-decision, `1` flag-aware; other values corrupt |
+| 22 | 1 | policy | generation 0: zero. generation 1: `0` unprotected, `1` protected |
+| 23 | 9 | reserved | zero |
 | 32 | 16 | database ID | exact main-file `database_id` |
 | 48 | 16 | sidecar ID | random and nonzero |
 | 64 | 4 | CRC-32C | complete page with this field zero |

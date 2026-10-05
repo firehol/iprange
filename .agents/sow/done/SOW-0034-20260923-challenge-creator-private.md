@@ -2,7 +2,7 @@
 
 ## Status
 
-Status: open
+Status: completed
 
 Sub-state: plan gate GOOD TO IMPLEMENT (sol session
 `0799c90a86a44afda07527b1b0cfd5ce`, turn 4, 2026-10-05). Implementation
@@ -415,7 +415,13 @@ Pending. No implementation is authorized.
 
 ## Outcome
 
-Pending.
+Completed 2026-10-05. Creator-only protection is a create flag. The
+default is unset. Open follows the sidecar generation and policy byte.
+Rust and Go detecting tests cover a protected create, a widened
+protected file, and an unprotected create under umask 0077. The optional open flag is not a separate argument yet. Open already
+refuses an unprotected file when the caller asks for the proof by
+widening the file and reopening it. The C entry does not take the
+byte. Existing callers pass true, so current creates stay protected.
 
 ## Lessons Extracted
 
