@@ -110,6 +110,7 @@ pub(crate) fn open_rw(path: &Path) -> Result<File> {
 
 pub(crate) fn create_private(
     path: &Path,
+    creator_only: bool,
     authority: CleanupAuthority,
 ) -> core::result::Result<CreatedPrivate, PrivateCreationFailure> {
     let failure = |cause| PrivateCreationFailure {
@@ -134,12 +135,14 @@ pub(crate) fn create_private(
             })
         }
     };
-    if let Err(error) = security::secure_creator_only(&file, &profile) {
-        return Err(PrivateCreationFailure {
-            cause: namespace_error(error),
-            cleanup: live_cleanup::remove(path, &file, identity, authority),
-            identity: Some(identity),
-        });
+    if creator_only {
+        if let Err(error) = security::secure_creator_only(&file, &profile) {
+            return Err(PrivateCreationFailure {
+                cause: namespace_error(error),
+                cleanup: live_cleanup::remove(path, &file, identity, authority),
+                identity: Some(identity),
+            });
+        }
     }
     Ok(CreatedPrivate { file, identity })
 }
@@ -148,6 +151,7 @@ pub(crate) fn create_private(
 pub(crate) fn create_private_for_test(path: &Path) -> Result<File> {
     create_private(
         path,
+        true,
         CleanupAuthority {
             attempt_id: crate::random::nonzero_128()?,
             ordinal: 0,

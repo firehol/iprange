@@ -98,7 +98,7 @@ fn point_names_and_all_pair_aggregation_are_exact() {
         ValueTag::new(b"feeds").unwrap(),
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
     let mut writer = LiveWriter::open(&file.main, transaction_budget(), &cancellation).unwrap();
     create_feed_v4(
@@ -223,7 +223,7 @@ fn named_target_and_selected_pair_modes_keep_indexes_inside_the_sdk() {
         ValueTag::new(b"feeds").unwrap(),
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
     let mut writer = LiveWriter::open(&file.main, transaction_budget(), &cancellation).unwrap();
     create_feed_v4(
@@ -333,7 +333,7 @@ fn full_ipv6_cardinality_and_overlap_do_not_wrap() {
         ValueTag::new(b"feeds").unwrap(),
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
     let mut writer = LiveWriter::open(&file.main, transaction_budget(), &cancellation).unwrap();
     for name in ["all-a", "all-b"] {

@@ -65,7 +65,7 @@ fn global_algebra_counts_and_publishes_the_full_ipv6_space_exactly() {
             ValueTag::new(b"feeds").unwrap(),
             1,
             &cancellation,
-        )
+        , true)
         .unwrap();
     }
     let mut left_writer =

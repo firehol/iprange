@@ -53,7 +53,7 @@ fn empty_immutable_database_validates_explicitly() {
         ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
     assert_eq!(created.state, CreationState::Created);
     fs::copy(&paths.live, &paths.snapshot).unwrap();
@@ -88,7 +88,7 @@ fn populated_direct_database_validates_explicitly() {
         ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
     let mut writer =
         LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();
@@ -118,7 +118,7 @@ fn populated_membership_database_validates_all_indexes() {
         ValueTag::new(b"membership").unwrap(),
         2,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
     let mut writer =
         LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();
@@ -168,7 +168,7 @@ fn page_crc_damage_is_a_factual_invalid_report() {
         ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
     let mut writer =
         LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();
@@ -223,7 +223,7 @@ fn live_current_validation_pins_and_releases_its_reader_slot() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
     let mut writer =
         LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();
@@ -266,7 +266,7 @@ fn live_validation_checks_cancellation_across_reader_capacity() {
         ValueTag::FIRST_SEEN,
         64,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
     let polls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&polls);
@@ -365,7 +365,7 @@ fn terminal_sink_result_wins_over_a_later_sidecar_sigbus() {
             ValueTag::FIRST_SEEN,
             1,
             &CancellationToken::new(),
-        )
+        , true)
         .unwrap();
         let mut writer =
             LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();
@@ -452,7 +452,7 @@ fn bound_live_database_can_report_an_unselectable_bootstrap() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
     let mut file = OpenOptions::new()
         .read(true)

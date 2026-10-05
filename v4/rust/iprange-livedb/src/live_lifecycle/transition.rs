@@ -69,7 +69,8 @@ pub fn initialize_live(
         attempt.database_id,
         attempt.sidecar_id,
         reader_capacity,
-    ) {
+        true,
+    , true) {
         Ok(sidecar) => sidecar,
         Err(cause) => return Ok(attempt.reservation_failure(cause)),
     };
@@ -127,7 +128,8 @@ pub fn reset_live_coordination(
         attempt.database_id,
         attempt.sidecar_id,
         reader_capacity,
-    ) {
+        true,
+    , true) {
         Ok(sidecar) => sidecar,
         Err(cause) => return Ok(attempt.reservation_failure(cause)),
     };

@@ -68,6 +68,7 @@ pub(crate) fn create_live(
     value_tag: ValueTag,
     reader_capacity: u32,
     cancellation: &CancellationToken,
+    creator_only: bool,
 ) -> Result<CreateResult> {
     crate::live_lock::require_live_supported()?;
     let path = path.as_ref();
@@ -92,7 +93,7 @@ pub(crate) fn create_live(
     if let Err(cause) = cancellation.check() {
         return Ok(attempt.not_created(cause));
     }
-    let sidecar = match reserve_sidecar(path, attempt) {
+    let sidecar = match reserve_sidecar(path, attempt, creator_only) {
         Ok(sidecar) => sidecar,
         Err(failure) => return Ok(attempt.reservation_failure(failure)),
     };
@@ -108,6 +109,7 @@ pub(crate) fn create_live(
 
     let created_main = match crate::live_namespace::create_private(
         path,
+        creator_only,
         CleanupAuthority {
             attempt_id: attempt.database_id,
             ordinal: 0,
@@ -137,12 +139,14 @@ pub(crate) fn create_live(
 fn reserve_sidecar(
     path: &Path,
     attempt: Attempt,
+    creator_only: bool,
 ) -> core::result::Result<Sidecar, crate::live_namespace::PrivateCreationFailure> {
     Sidecar::reserve(
         path,
         attempt.database_id,
         attempt.sidecar_id,
         attempt.reader_capacity,
+        creator_only,
     )
 }
 

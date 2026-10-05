@@ -731,7 +731,7 @@ mod tests {
             ValueTag::new(b"membership").unwrap(),
             1,
             &CancellationToken::new(),
-        )
+        , true)
         .unwrap();
         path
     }

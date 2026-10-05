@@ -211,7 +211,7 @@ fn create_structured(path: &std::path::Path) {
         ValueTag::new(b"enrichment").unwrap(),
         64,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
 }
 
@@ -226,7 +226,7 @@ fn typed_structure_and_lazy_membership_round_trip() {
         ValueTag::new(b"enrichment").unwrap(),
         4,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
 
     let cancellation = CancellationToken::new();

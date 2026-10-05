@@ -9,6 +9,10 @@ use crate::error::Result;
 pub use crate::live_lifecycle::creation::{CreateResult, CreationState};
 
 /// Create an empty transaction-1 live database and reader table.
+///
+/// `creator_only` is the create flag. False leaves permissions to the
+/// process and the directory. True runs the existing creator-only
+/// proof. Open follows the sidecar, not this argument.
 pub fn create_live(
     path: impl AsRef<Path>,
     address_family: AddressFamily,
@@ -17,6 +21,7 @@ pub fn create_live(
     value_tag: ValueTag,
     reader_capacity: u32,
     cancellation: &CancellationToken,
+    creator_only: bool,
 ) -> Result<CreateResult> {
     crate::live_lifecycle::creation::create_live(
         path.as_ref(),
@@ -26,5 +31,6 @@ pub fn create_live(
         value_tag,
         reader_capacity,
         cancellation,
+        creator_only,
     )
 }

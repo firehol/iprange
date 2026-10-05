@@ -45,7 +45,7 @@ fn failed_live_release_returns_one_retryable_cleanup_guard() {
         ValueTag::FIRST_SEEN,
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
     let LiveOpened::Selected(source) = LiveSource::open(&file.main, &cancellation).unwrap() else {
         panic!("new live database must select a generation");

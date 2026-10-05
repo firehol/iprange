@@ -43,7 +43,7 @@ pub unsafe extern "C" fn iprange_v4_abi1_create_live(
             value_tag,
             reader_capacity,
             &cancellation,
-        )?;
+        , true)?;
         *output = Box::into_raw(Box::new(ReportHandle::create(result, false)));
         Ok::<_, CallError>(())
     })

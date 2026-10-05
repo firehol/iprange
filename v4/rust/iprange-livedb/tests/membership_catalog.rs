@@ -72,7 +72,7 @@ fn transaction_builds_splits_renames_and_reopens_catalog() {
         ValueTag::new(b"membership").unwrap(),
         2,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
 
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
@@ -123,7 +123,7 @@ fn dropped_transaction_requires_explicit_writer_abort() {
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
 
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
@@ -158,7 +158,7 @@ fn unused_membership_builder_commit_cleans_the_draft() {
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
 
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();

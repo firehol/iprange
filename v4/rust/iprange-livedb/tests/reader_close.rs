@@ -32,7 +32,7 @@ impl TestPair {
             ValueTag::new(b"asn").unwrap(),
             1,
             &CancellationToken::new(),
-        )
+        , true)
         .unwrap();
         Self { main }
     }

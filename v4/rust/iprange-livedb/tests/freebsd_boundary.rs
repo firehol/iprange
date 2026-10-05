@@ -193,7 +193,7 @@ fn every_constructible_live_entry_rejects_before_mutation() {
         ValueTag::FIRST_SEEN,
         1,
         &cancellation,
-    ));
+    , true));
     assert!(!created.exists());
     assert!(!sidecar(&created).exists());
 

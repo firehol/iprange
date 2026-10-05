@@ -1639,7 +1639,7 @@ mod live_source_tests {
             ValueTag::new(b"export-live").unwrap(),
             2,
             &token,
-        )
+        , true)
         .unwrap();
         let budget = TransactionBudget {
             max_heap_bytes: 2 * 1024 * 1024,
@@ -1693,7 +1693,7 @@ mod live_source_tests {
             ValueTag::new(b"export-struct").unwrap(),
             2,
             &token,
-        )
+        , true)
         .unwrap();
         let budget = TransactionBudget {
             max_heap_bytes: 2 * 1024 * 1024,
@@ -1772,7 +1772,7 @@ mod live_source_tests {
             ValueTag::new(b"export-live").unwrap(),
             2,
             &token,
-        )
+        , true)
         .unwrap();
         let budget = TransactionBudget {
             max_heap_bytes: 2 * 1024 * 1024,

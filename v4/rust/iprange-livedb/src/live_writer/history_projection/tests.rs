@@ -56,7 +56,7 @@ fn one_source_pass_and_only_window_proportional_allocations() {
         ValueTag::LAST_SEEN,
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
     create_live(
         &files.destination,
@@ -66,7 +66,7 @@ fn one_source_pass_and_only_window_proportional_allocations() {
         ValueTag::new(b"feeds").unwrap(),
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
     let ranges: Vec<_> = (0..1_000)
         .map(|index| DirectRange {
@@ -155,7 +155,7 @@ fn unused_history_prefixes_are_not_interned() {
         ValueTag::LAST_SEEN,
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
     create_live(
         &files.destination,
@@ -165,7 +165,7 @@ fn unused_history_prefixes_are_not_interned() {
         ValueTag::new(b"feeds").unwrap(),
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
     let windows: Vec<_> = (0..64)
         .map(|index| HistoryWindow {
@@ -205,7 +205,7 @@ fn streamed_window_preparation_failure_aborts_the_entire_draft() {
         ValueTag::LAST_SEEN,
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
     create_live(
         &files.destination,
@@ -215,7 +215,7 @@ fn streamed_window_preparation_failure_aborts_the_entire_draft() {
         ValueTag::new(b"feeds").unwrap(),
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
 
     let mut source = LiveReader::open(&files.source, &cancellation).unwrap();

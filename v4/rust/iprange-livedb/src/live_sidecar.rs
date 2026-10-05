@@ -62,13 +62,14 @@ impl Sidecar {
         database_id: [u8; 16],
         sidecar_id: [u8; 16],
         capacity: u32,
+        creator_only: bool,
     ) -> core::result::Result<Self, PrivateCreationFailure> {
         let path = path::canonical_sidecar(main).map_err(|cause| PrivateCreationFailure {
             cause,
             cleanup: live_cleanup::Outcome::clean(),
             identity: None,
         })?;
-        Self::reserve_at(path, database_id, sidecar_id, capacity)
+        Self::reserve_at(path, database_id, sidecar_id, capacity, creator_only)
     }
 
     pub(crate) fn reserve_at(
@@ -76,6 +77,7 @@ impl Sidecar {
         database_id: [u8; 16],
         sidecar_id: [u8; 16],
         capacity: u32,
+        creator_only: bool,
     ) -> core::result::Result<Self, PrivateCreationFailure> {
         if capacity == 0 {
             return Err(PrivateCreationFailure {
@@ -86,6 +88,7 @@ impl Sidecar {
         }
         let created = live_namespace::create_private(
             &path,
+            creator_only,
             CleanupAuthority {
                 attempt_id: sidecar_id,
                 ordinal: 1,
@@ -100,10 +103,11 @@ impl Sidecar {
                 capacity,
                 database_id,
                 sidecar_id,
-                // The create flag is not threaded yet. Until it is, every
-                // new sidecar records the historical mandatory proof so
-                // open keeps checking files this function just created.
-                policy: Policy::Protected,
+                policy: if creator_only {
+                    Policy::Protected
+                } else {
+                    Policy::Unprotected
+                },
             },
             identity: created.identity,
             mapping: Mutex::new(None),
@@ -117,7 +121,7 @@ impl Sidecar {
         sidecar_id: [u8; 16],
         capacity: u32,
     ) -> Result<Self> {
-        let sidecar = Self::reserve(main, database_id, sidecar_id, capacity)
+        let sidecar = Self::reserve(main, database_id, sidecar_id, capacity, true)
             .map_err(PrivateCreationFailure::into_error)?;
         sidecar.initialize_creating()?;
         Ok(sidecar)

@@ -64,7 +64,7 @@ fn randomized_direct_replacement_matches_scalar_state_and_report() {
         ValueTag::new(b"direct").unwrap(),
         1,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
@@ -117,7 +117,7 @@ fn randomized_first_seen_refresh_matches_full_delta_semantics() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
@@ -176,7 +176,7 @@ fn randomized_last_seen_refresh_matches_cutoff_and_monotonic_time() {
         ValueTag::LAST_SEEN,
         1,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &cancellation).unwrap();

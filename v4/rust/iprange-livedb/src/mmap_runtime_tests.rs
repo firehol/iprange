@@ -40,7 +40,7 @@ fn persistent_storage_uses_mappings_only() {
         ValueTag::FIRST_SEEN,
         4,
         &cancellation,
-    )
+    , true)
     .unwrap();
     assert_eq!(created.state, CreationState::Created);
 

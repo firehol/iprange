@@ -92,7 +92,7 @@ fn maximum_metadata_uses_the_exact_minimum_heap_budget() {
         ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
     let payload = pseudo_random(LIMIT);
     let mut writer =
@@ -205,7 +205,7 @@ fn oversized_input_is_a_precondition_error_and_preserves_the_draft() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
     let mut writer = LiveWriter::open(
         &files.main,

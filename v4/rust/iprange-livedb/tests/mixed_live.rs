@@ -66,7 +66,7 @@ fn create(main: &Path) {
         ValueTag::new(b"asn").unwrap(),
         4,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
 }
 

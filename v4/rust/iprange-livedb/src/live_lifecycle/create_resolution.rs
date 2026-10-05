@@ -130,7 +130,8 @@ fn complete(
                 supplied.database_id,
                 supplied.sidecar_id,
                 supplied.reader_capacity,
-            ) {
+                true,
+            , true) {
                 Ok(sidecar) => sidecar,
                 Err(failure) => {
                     let sidecar_identity =
@@ -166,6 +167,7 @@ fn complete(
         Main::Absent => {
             let created = match crate::live_namespace::create_private(
                 path,
+                true,
                 CleanupAuthority {
                     attempt_id: supplied.database_id,
                     ordinal: 0,

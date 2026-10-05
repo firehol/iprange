@@ -77,7 +77,7 @@ fn open_import_processing_allocates_no_heap() {
             ValueTag::new(b"membership").unwrap(),
             4,
             &crate::CancellationToken::new(),
-        )
+        , true)
         .unwrap();
     }
 

@@ -1369,7 +1369,7 @@ pub(crate) mod test_support {
             ValueTag::new(b"reader-test").unwrap(),
             2,
             &token,
-        )
+        , true)
         .unwrap();
         let budget = TransactionBudget {
             max_heap_bytes: 2 * 1024 * 1024,

@@ -95,7 +95,7 @@ fn randomized_global_algebra_matches_a_scalar_address_model() {
             ValueTag::new(b"feeds").unwrap(),
             1,
             &cancellation,
-        )
+        , true)
         .unwrap();
         let mut writer = LiveWriter::open(path, transaction_budget(), &cancellation).unwrap();
         for (feed, coverage) in source_model[source_index].iter().enumerate() {

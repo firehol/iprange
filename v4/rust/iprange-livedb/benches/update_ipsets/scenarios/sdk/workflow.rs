@@ -475,7 +475,7 @@ fn create_live_file(path: &Path, kind: ValueKind, tag: ValueTag) -> Result<(), S
         tag,
         1,
         &CancellationToken::new(),
-    )
+    , true)
     .map_err(display)?;
     Ok(())
 }

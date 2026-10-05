@@ -130,7 +130,7 @@ fn run_seed(seed_index: usize, seed: u64) {
         ValueTag::new(b"enrichment").unwrap(),
         8,
         &cancellation,
-    )
+    , true)
     .unwrap();
 
     let mut writer = LiveWriter::open(&files.main, budget(), &cancellation).unwrap();

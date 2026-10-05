@@ -406,7 +406,7 @@ mod tests {
             iprange_livedb::ValueTag::new(b"direct").unwrap(),
             8,
             &token,
-        )
+        , true)
         .unwrap();
         let budget = TransactionBudget {
             max_heap_bytes: 16 * 1024 * 1024,

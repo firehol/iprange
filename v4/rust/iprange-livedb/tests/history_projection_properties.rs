@@ -95,7 +95,7 @@ fn randomized_projection_matches_independent_scalar_model() {
         ValueTag::LAST_SEEN,
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
     create_live(
         &files.destination,
@@ -105,7 +105,7 @@ fn randomized_projection_matches_independent_scalar_model() {
         ValueTag::new(b"feeds").unwrap(),
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
 
     let mut destination = LiveWriter::open(&files.destination, budget(), &cancellation).unwrap();

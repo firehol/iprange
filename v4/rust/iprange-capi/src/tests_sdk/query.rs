@@ -251,7 +251,7 @@ fn create_direct(path: &std::path::Path) {
         ValueTag::new(b"asn").unwrap(),
         1,
         &cancellation,
-    )
+    , true)
     .unwrap();
     let mut writer = LiveWriter::open(path, transaction_budget(), &cancellation).unwrap();
     let mut operation = writer.begin_direct_replacement(&cancellation).unwrap();

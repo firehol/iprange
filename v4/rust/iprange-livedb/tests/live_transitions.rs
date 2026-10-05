@@ -52,7 +52,7 @@ fn create(files: &TestPair, capacity: u32) {
         ValueTag::new(b"asn").unwrap(),
         capacity,
         &CancellationToken::new(),
-    )
+    , true)
     .unwrap();
 }
 
@@ -262,7 +262,7 @@ fn cancelled_creation_and_open_change_nothing() {
             ValueTag::new(b"asn").unwrap(),
             2,
             &cancelled,
-        ),
+        , true),
         Err(Error::Cancelled)
     ));
     assert!(!absent.main.exists());

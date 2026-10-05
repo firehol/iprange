@@ -37,7 +37,7 @@ impl Files {
             ValueTag::new(b"asn").unwrap(),
             1,
             &crate::CancellationToken::new(),
-        )
+        , true)
         .unwrap();
     }
 }
@@ -103,7 +103,7 @@ fn prepared_reset_over_corrupt_coordination_can_be_completed() {
         main.bootstrap.meta.database_id,
         files.attempt_id,
         2,
-    )
+    , true)
     .unwrap();
     sidecar.initialize_creating().unwrap();
     sidecar.publish_ready().unwrap();
@@ -151,7 +151,7 @@ fn exchanged_reset_cleans_the_exact_previous_sidecar() {
         main.bootstrap.meta.database_id,
         files.attempt_id,
         2,
-    )
+    , true)
     .unwrap();
     sidecar.initialize_creating().unwrap();
     sidecar.publish_ready().unwrap();
@@ -201,7 +201,7 @@ fn prepare_initialize(files: &Files) -> LiveTransitionResult {
         &files.main,
         main.bootstrap.meta.database_id,
         files.attempt_id,
-        2,
+   , true     2,
     )
     .unwrap();
     sidecar.initialize_creating().unwrap();

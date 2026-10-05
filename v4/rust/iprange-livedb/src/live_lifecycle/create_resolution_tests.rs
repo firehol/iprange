@@ -27,7 +27,7 @@ impl Files {
             ValueTag::new(b"asn").unwrap(),
             2,
             &crate::CancellationToken::new(),
-        )
+        , true)
         .unwrap()
     }
 
@@ -40,7 +40,7 @@ impl Files {
             result.database_id,
             result.sidecar_id,
             result.reader_capacity,
-        )
+        , true)
         .unwrap();
         sidecar.initialize_creating().unwrap();
         crate::live_namespace::sync_parent(&sidecar.path).unwrap();
