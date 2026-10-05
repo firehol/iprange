@@ -49,7 +49,7 @@ func TestPublicValidateLiveCleanSweep(t *testing.T) {
 	requireLiveCreation(t)
 	installWorkerForTest(t)
 	main := filepath.Join(t.TempDir(), "db.iprdb")
-	created, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 1, nil)
+	created, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 1, nil, true)
 	if err != nil {
 		t.Fatalf("CreateLive: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestPublicValidateLiveAfterRetainedCapacity(t *testing.T) {
 		main string
 	}
 	main := filepath.Join(t.TempDir(), "db.iprdb")
-	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 2, nil); err != nil {
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 2, nil, true); err != nil {
 		t.Fatalf("CreateLive: %v", err)
 	}
 	pinned, err := OpenLiveReader(main, nil)

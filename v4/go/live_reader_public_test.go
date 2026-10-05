@@ -25,7 +25,7 @@ func createLiveMembershipPair(t *testing.T, capacity uint32) string {
 		t.Fatal(err)
 	}
 	main := filepath.Join(t.TempDir(), "membership.iprdb")
-	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, capacity, nil); err != nil {
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, capacity, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(main, DefaultBudget(), nil)

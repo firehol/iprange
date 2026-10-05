@@ -288,9 +288,18 @@ func DatabaseCreate(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Han
 	if err != nil {
 		return nil, rpc.InvalidParamsError("reader_capacity must be a u32 integer")
 	}
+	// Absent means unprotected. A present non-boolean is a parameter
+	// error, not a silent default.
+	creatorOnly := false
+	if _, present := object["creator_only"]; present {
+		creatorOnly, err = asBool(object, "creator_only")
+		if err != nil {
+			return nil, rpc.InvalidParamsError("creator_only must be a boolean")
+		}
+	}
 
 	result, createErr := iprangedb.CreateLive(path, familyByName(family), valueKindByName(valueKind),
-		structureKindByName(structureKind), tag, readerCapacity, st.Token())
+		structureKindByName(structureKind), tag, readerCapacity, st.Token(), creatorOnly)
 	if createErr != nil {
 		return nil, SDKError(createErr, "not_started")
 	}

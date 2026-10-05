@@ -91,7 +91,7 @@ func TestRandomizedPointAndPairQueriesMatchAScalarModel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
+		if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil, true); err != nil {
 			t.Fatal(err)
 		}
 		writer, err := OpenLiveWriter(path, queryPropertyBudget(), nil)

@@ -32,7 +32,7 @@ func liveRecoveryTestBudget() writer.PageBudget {
 func createLiveRecoveryPair(t *testing.T) string {
 	t.Helper()
 	main := filepath.Join(t.TempDir(), "db.iprdb")
-	if _, err := live.CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 2, nil); err != nil {
+	if _, err := live.CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 2, nil, true); err != nil {
 		t.Fatalf("CreateLive: %v", err)
 	}
 	return main

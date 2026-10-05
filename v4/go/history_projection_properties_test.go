@@ -27,7 +27,7 @@ const historyPropertyWindows = 4
 func histPropertyCreateSource(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "history-property-source.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	return path

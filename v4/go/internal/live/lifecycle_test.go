@@ -48,7 +48,7 @@ func failsAfter(n int) func() error {
 func TestCreateLiveMidFlowCancellationCleansTheSidecar(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
-	result, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, failsAfter(2))
+	result, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, failsAfter(2), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestCreateLiveMidFlowCancellationCleansTheSidecar(t *testing.T) {
 func TestInitializeLiveMidFlowCancellationCleansTheSidecar(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
-	if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck); err != nil {
+	if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(main + ".readers"); err != nil {
@@ -169,7 +169,7 @@ func sidecarStateOf(t *testing.T, main string) int {
 func TestCreateLiveCreatesCompletePair(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
-	result, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 2, neverCheck)
+	result, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 2, neverCheck, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,25 +250,25 @@ func TestCreateLiveHardErrors(t *testing.T) {
 	main := filepath.Join(dir, "db.iprdb")
 
 	// Capacity zero is refused before any path access.
-	_, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 0, neverCheck)
+	_, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 0, neverCheck, true)
 	expectCode(t, err, format.CodeInvalidArgument)
 
 	// Invalid value/kind combinations (Rust validate_kinds).
-	_, err = CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNetworkEnrichmentV1, [16]byte{}, 1, neverCheck)
+	_, err = CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNetworkEnrichmentV1, [16]byte{}, 1, neverCheck, true)
 	expectCode(t, err, format.CodeWrongStructureKind)
-	_, err = CreateLive(main, format.AddressFamilyIPv4, format.ValueKindStructured, format.StructureKindNone, [16]byte{}, 1, neverCheck)
+	_, err = CreateLive(main, format.AddressFamilyIPv4, format.ValueKindStructured, format.StructureKindNone, [16]byte{}, 1, neverCheck, true)
 	expectCode(t, err, format.CodeWrongStructureKind)
-	_, err = CreateLive(main, format.AddressFamilyIPv4, format.ValueKindStructured, 9, [16]byte{}, 1, neverCheck)
+	_, err = CreateLive(main, format.AddressFamilyIPv4, format.ValueKindStructured, 9, [16]byte{}, 1, neverCheck, true)
 	expectCode(t, err, format.CodeWrongStructureKind)
-	_, err = CreateLive(main, 3, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck)
+	_, err = CreateLive(main, 3, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck, true)
 	expectCode(t, err, format.CodeWrongAddressFamily)
 
 	// A reserved coordination name cannot name a main file.
-	_, err = CreateLive(filepath.Join(dir, "db.iprdb.readers"), format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck)
+	_, err = CreateLive(filepath.Join(dir, "db.iprdb.readers"), format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck, true)
 	expectCode(t, err, format.CodeInvalidArgument)
 
 	// A pre-cancelled token aborts before any artifact.
-	_, err = CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, cancelledCheck)
+	_, err = CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, cancelledCheck, true)
 	expectCode(t, err, format.CodeCancelled)
 	if _, err := os.Lstat(main); !os.IsNotExist(err) {
 		t.Fatalf("cancelled create left a main: %v", err)
@@ -281,22 +281,22 @@ func TestCreateLiveHardErrors(t *testing.T) {
 func TestCreateLiveRefusesExistingArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
-	created, failure := createPrivate(main, cleanupAuthority{attemptID: [16]byte{1}, ordinal: 0, kind: ArtifactOwnedMain, directoryRole: DirectoryRoleMainFile})
+	created, failure := createPrivate(main, true, cleanupAuthority{attemptID: [16]byte{1}, ordinal: 0, kind: ArtifactOwnedMain, directoryRole: DirectoryRoleMainFile})
 	if failure != nil {
 		t.Fatal(failure.cause)
 	}
 	created.file.Close()
 
-	_, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck)
+	_, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck, true)
 	expectCode(t, err, format.CodeInvalidArgument)
 
 	main2 := filepath.Join(dir, "db2.iprdb")
-	created, failure = createPrivate(main2+".readers", cleanupAuthority{attemptID: [16]byte{2}, ordinal: 1, kind: ArtifactOwnedCoordination, directoryRole: DirectoryRoleMainFile})
+	created, failure = createPrivate(main2+".readers", true, cleanupAuthority{attemptID: [16]byte{2}, ordinal: 1, kind: ArtifactOwnedCoordination, directoryRole: DirectoryRoleMainFile})
 	if failure != nil {
 		t.Fatal(failure.cause)
 	}
 	created.file.Close()
-	_, err = CreateLive(main2, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck)
+	_, err = CreateLive(main2, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck, true)
 	expectCode(t, err, format.CodeInvalidArgument)
 }
 
@@ -306,7 +306,7 @@ func TestCreateLiveMissingParentIsNotCreatedWithoutResidue(t *testing.T) {
 	// cause with no artifacts and no residue.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "missing", "database.iprdb")
-	result, err := CreateLive(path, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck)
+	result, err := CreateLive(path, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func TestCreateLiveMissingParentIsNotCreatedWithoutResidue(t *testing.T) {
 func TestInitializeLiveConvertsQuiescentMain(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
-	created, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck)
+	created, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +425,7 @@ func TestInitializeLiveHardErrors(t *testing.T) {
 	expectCode(t, err, format.CodeInvalidArgument)
 
 	// Pre-cancelled token aborts before any change.
-	if _, err := CreateLive(filepath.Join(dir, "db2.iprdb"), format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck); err != nil {
+	if _, err := CreateLive(filepath.Join(dir, "db2.iprdb"), format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck, true); err != nil {
 		t.Fatal(err)
 	}
 	main2 := filepath.Join(dir, "db2.iprdb")
@@ -453,7 +453,7 @@ func TestInitializeLiveHardErrors(t *testing.T) {
 func TestInitializeLiveRefusesExistingSidecar(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
-	if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck); err != nil {
+	if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck, true); err != nil {
 		t.Fatal(err)
 	}
 	_, err := InitializeLive(main, 2, neverCheck)
@@ -463,7 +463,7 @@ func TestInitializeLiveRefusesExistingSidecar(t *testing.T) {
 func TestInitializeLiveRequiresExactCommittedLength(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
-	if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck); err != nil {
+	if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(main + ".readers"); err != nil {

@@ -23,7 +23,7 @@ import (
 func importMembershipPair(t *testing.T, label string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "import-"+label+".iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, mustTag(t, "membership"), 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, mustTag(t, "membership"), 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -33,7 +33,7 @@ func importMembershipPair(t *testing.T, label string) string {
 func importMembershipPair6(t *testing.T, label string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "import-"+label+".iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv6, ValueKindMembership, StructureKindNone, mustTag(t, "membership"), 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv6, ValueKindMembership, StructureKindNone, mustTag(t, "membership"), 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -787,7 +787,7 @@ func TestImportPreconditionsCancellationSourceFailureAndBudgetFailureAreAtomic(t
 		{"wrong-kind", AddressFamilyIPv4, ValueKindDirect, "membership", ErrorWrongValueKind},
 	} {
 		path := filepath.Join(t.TempDir(), "incompat-"+test.label+".iprdb")
-		if _, err := CreateLive(path, test.family, test.kind, StructureKindNone, mustTag(t, test.tag), 4, nil); err != nil {
+		if _, err := CreateLive(path, test.family, test.kind, StructureKindNone, mustTag(t, test.tag), 4, nil, true); err != nil {
 			t.Fatal(err)
 		}
 		incompatible, err := OpenLiveReader(path, nil)

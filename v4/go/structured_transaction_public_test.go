@@ -23,7 +23,7 @@ func structuredDB(t *testing.T) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "structured.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag, 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -616,7 +616,7 @@ func TestPublicStructuredTransactionSurface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateLive(directPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(directPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(directPath, DefaultBudget(), nil)

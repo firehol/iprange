@@ -28,7 +28,7 @@ func (f *resolutionFiles) private() string { return f.main + ".readers.reset" }
 
 func (f *resolutionFiles) create(t *testing.T) {
 	t.Helper()
-	if _, err := CreateLive(f.main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck); err != nil {
+	if _, err := CreateLive(f.main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck, true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -79,7 +79,7 @@ func prepareInitialize(t *testing.T, files *resolutionFiles) *LiveTransitionResu
 		t.Fatal(err)
 	}
 	defer main.file.Close()
-	sidecar, failure := reserve(files.main, main.bootstrap.Meta.DatabaseID, files.attemptID, 2)
+	sidecar, failure := reserve(files.main, main.bootstrap.Meta.DatabaseID, files.attemptID, 2, true)
 	if failure != nil {
 		t.Fatal(failure.cause)
 	}
@@ -180,7 +180,7 @@ func TestResolutionResetOverCorruptCoordinationCanBeCompleted(t *testing.T) {
 		main.file.Close()
 		t.Fatal("corrupt sidecar identity missing")
 	}
-	sidecar, failure := reserveAt(files.private(), main.bootstrap.Meta.DatabaseID, files.attemptID, 2)
+	sidecar, failure := reserveAt(files.private(), main.bootstrap.Meta.DatabaseID, files.attemptID, 2, true)
 	if failure != nil {
 		main.file.Close()
 		t.Fatal(failure.cause)
@@ -258,7 +258,7 @@ func TestResolutionExchangedResetCleansTheExactPreviousSidecar(t *testing.T) {
 		main.file.Close()
 		t.Fatal("corrupt sidecar identity missing")
 	}
-	sidecar, failure := reserveAt(files.private(), main.bootstrap.Meta.DatabaseID, files.attemptID, 2)
+	sidecar, failure := reserveAt(files.private(), main.bootstrap.Meta.DatabaseID, files.attemptID, 2, true)
 	if failure != nil {
 		main.file.Close()
 		t.Fatal(failure.cause)

@@ -591,7 +591,7 @@ func TestEmptyDatabaseCursors(t *testing.T) {
 
 	// Direct range cursors in both directions are empty, not corrupt.
 	directPath := filepath.Join(dir, "empty-direct.iprdb")
-	if _, err := CreateLive(directPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 4, nil); err != nil {
+	if _, err := CreateLive(directPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 4, nil, true); err != nil {
 		t.Fatal("create direct:", err)
 	}
 	directDB, err := OpenLiveReader(directPath, nil)
@@ -613,7 +613,7 @@ func TestEmptyDatabaseCursors(t *testing.T) {
 
 	// The membership catalog feed cursor is empty, not corrupt.
 	path := filepath.Join(dir, "empty-membership.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, ValueTag{}, 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, ValueTag{}, 4, nil, true); err != nil {
 		t.Fatal("create:", err)
 	}
 	db, err := OpenLiveReader(path, nil)

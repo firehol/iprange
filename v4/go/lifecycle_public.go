@@ -176,8 +176,8 @@ type LiveTransitionResult struct {
 // when non-nil, is checked between every bounded step. Capacity-zero,
 // invalid-kind, and invalid destination arguments are hard errors;
 // every later failure returns a CreateResult with the factual state.
-func CreateLive(path string, family AddressFamily, kind ValueKind, structure StructureKind, tag ValueTag, readerCapacity uint32, cancellation *CancellationToken) (CreateResult, error) {
-	created, err := live.CreateLive(path, uint8(family), uint8(kind), uint8(structure), tag.Wire(), readerCapacity, cancellation.check)
+func CreateLive(path string, family AddressFamily, kind ValueKind, structure StructureKind, tag ValueTag, readerCapacity uint32, cancellation *CancellationToken, creatorOnly bool) (CreateResult, error) {
+	created, err := live.CreateLive(path, uint8(family), uint8(kind), uint8(structure), tag.Wire(), readerCapacity, cancellation.check, creatorOnly)
 	if err != nil {
 		return CreateResult{}, publicError(err)
 	}

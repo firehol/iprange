@@ -19,7 +19,7 @@ import (
 func liveJoinDirectProvider(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "join-live-provider.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, mustTag(t, "asn"), 2, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, mustTag(t, "asn"), 2, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
@@ -58,7 +58,7 @@ func liveJoinDirectProvider(t *testing.T) string {
 func liveJoinMembershipPair(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "join-live-membership.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, mustTag(t, "providers"), 2, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, mustTag(t, "providers"), 2, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
@@ -102,7 +102,7 @@ func TestJoinDirectContainedFeedStopsAtTheFeed(t *testing.T) {
 	requireLiveCreation(t)
 	requirePublicationSecurity(t)
 	provider := filepath.Join(t.TempDir(), "provider.iprdb")
-	if _, err := CreateLive(provider, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, mustTag(t, "asn"), 2, nil); err != nil {
+	if _, err := CreateLive(provider, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, mustTag(t, "asn"), 2, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	writer, err := OpenLiveWriter(provider, DefaultBudget(), nil)
@@ -128,7 +128,7 @@ func TestJoinDirectContainedFeedStopsAtTheFeed(t *testing.T) {
 	}
 
 	membership := filepath.Join(t.TempDir(), "membership.iprdb")
-	if _, err := CreateLive(membership, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, mustTag(t, "feeds"), 2, nil); err != nil {
+	if _, err := CreateLive(membership, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, mustTag(t, "feeds"), 2, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	writer, err = OpenLiveWriter(membership, DefaultBudget(), nil)

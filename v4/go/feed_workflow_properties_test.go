@@ -163,7 +163,7 @@ func TestRandomizedFeedReplacementMatchesScalarSetsAndPreservesOtherFeed(t *test
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "feed-property.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 

@@ -28,7 +28,7 @@ func testSidecarIdentity() [16]byte  { return [16]byte{2} }
 // authority (Rust create_private_for_test).
 func createTestMain(t *testing.T, path string) {
 	t.Helper()
-	created, failure := createPrivate(path, cleanupAuthority{
+	created, failure := createPrivate(path, true, cleanupAuthority{
 		attemptID:     [16]byte{9},
 		ordinal:       0,
 		kind:          ArtifactOwnedMain,
@@ -46,7 +46,7 @@ func createTestMain(t *testing.T, path string) {
 func createTestReady(t *testing.T, main string, capacity uint32) *Sidecar {
 	t.Helper()
 	createTestMain(t, main)
-	sidecar, failure := reserve(main, testDatabaseIdentity(), testSidecarIdentity(), capacity)
+	sidecar, failure := reserve(main, testDatabaseIdentity(), testSidecarIdentity(), capacity, true)
 	if failure != nil {
 		t.Fatalf("reserve: %v", failure.cause)
 	}
@@ -141,7 +141,7 @@ func TestCreatingAndMalformedSidecarsAreRejected(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "db.iprdb")
 	createTestMain(t, main)
-	sidecar, failure := reserve(main, testDatabaseIdentity(), testSidecarIdentity(), 2)
+	sidecar, failure := reserve(main, testDatabaseIdentity(), testSidecarIdentity(), 2, true)
 	if failure != nil {
 		t.Fatalf("reserve: %v", failure.cause)
 	}
@@ -393,7 +393,7 @@ func TestSidecarLengthGeometry(t *testing.T) {
 	if length != format.PageSize {
 		t.Fatalf("sidecarLength(0) = %d, want %d", length, format.PageSize)
 	}
-	_, failure := reserveAt(filepath.Join(t.TempDir(), "zero.iprdb"), testDatabaseIdentity(), testSidecarIdentity(), 0)
+	_, failure := reserveAt(filepath.Join(t.TempDir(), "zero.iprdb"), testDatabaseIdentity(), testSidecarIdentity(), 0, true)
 	expectCode(t, failure.cause, format.CodeInvalidArgument)
 }
 

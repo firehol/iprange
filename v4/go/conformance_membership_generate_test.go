@@ -27,7 +27,7 @@ func regenMembershipIPv4(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	live := filepath.Join(t.TempDir(), "live-membership-v4")
-	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(live, DefaultBudget(), nil)
@@ -121,7 +121,7 @@ func regenMembershipIPv6(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	live := filepath.Join(t.TempDir(), "live-membership-v6")
-	if _, err := CreateLive(live, AddressFamilyIPv6, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(live, AddressFamilyIPv6, ValueKindMembership, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(live, DefaultBudget(), nil)

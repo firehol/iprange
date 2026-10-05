@@ -33,7 +33,7 @@ func liveValidationTestBudget() writer.PageBudget {
 func createLiveValidationPair(t *testing.T, capacity uint32) string {
 	t.Helper()
 	main := filepath.Join(t.TempDir(), "db.iprdb")
-	if _, err := live.CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, capacity, nil); err != nil {
+	if _, err := live.CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, capacity, nil, true); err != nil {
 		t.Fatalf("CreateLive: %v", err)
 	}
 	return main

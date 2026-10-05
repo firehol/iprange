@@ -18,7 +18,7 @@ import (
 func liveFeedMembership(t *testing.T, readerCapacity uint32) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "live-feed-workflow.iprdb")
-	_, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, mustTag(t, "feeds"), readerCapacity, nil)
+	_, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, mustTag(t, "feeds"), readerCapacity, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func liveFeedMembership(t *testing.T, readerCapacity uint32) string {
 func liveDirectSource(t *testing.T, tag ValueTag, readerCapacity uint32) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "live-direct-workflow.iprdb")
-	_, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, readerCapacity, nil)
+	_, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, readerCapacity, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestPublicLiveStructuredTransaction(t *testing.T) {
 	requireLiveCreation(t)
 	requirePublicationSecurity(t)
 	path := filepath.Join(t.TempDir(), "live-structured.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, mustTag(t, "enrichment"), 2, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, mustTag(t, "enrichment"), 2, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	destination := filepath.Join(t.TempDir(), "live-structured-output.iprdb")

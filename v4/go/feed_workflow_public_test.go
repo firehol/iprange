@@ -34,7 +34,7 @@ func testFeedMembership(t *testing.T) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "feed-workflow.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -462,7 +462,7 @@ func TestPublicFullIPv6FeedWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "feed-ipv6.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv6, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv6, ValueKindMembership, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	cancellation := NewCancellationToken()
@@ -674,7 +674,7 @@ func TestPublicDirectDatabaseRejectsFeedLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "direct.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(path, DefaultBudget(), nil)

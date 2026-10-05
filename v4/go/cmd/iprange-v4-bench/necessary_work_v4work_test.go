@@ -109,7 +109,7 @@ func TestDumpNecessaryWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.cleanup()
-	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 1, nil); err != nil {
+	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 1, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	input, err := newNestedSource(n)

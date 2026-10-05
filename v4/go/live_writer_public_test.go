@@ -19,7 +19,7 @@ func createLivePublicPair(t *testing.T, capacity uint32) (string, CreateResult) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, capacity, nil)
+	created, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, capacity, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}

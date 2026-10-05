@@ -43,7 +43,7 @@ func TestLiveCrashChild(t *testing.T) {
 	}
 	switch action {
 	case "create":
-		if _, err := CreateLive(path, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 2, nil); err != nil {
+		if _, err := CreateLive(path, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 2, nil, true); err != nil {
 			t.Fatal(err)
 		}
 	case "initialize":
@@ -165,7 +165,7 @@ func TestInitializeCrashPointsLeaveExactArtifacts(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.point, func(t *testing.T) {
 			main := filepath.Join(t.TempDir(), "db.iprdb")
-			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil); err != nil {
+			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil, true); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.Remove(main + ".readers"); err != nil {
@@ -211,7 +211,7 @@ func TestLiveWriterCommitCrashPointsSelectOnlyACompleteGeneration(t *testing.T) 
 	for _, tc := range cases {
 		t.Run(tc.point, func(t *testing.T) {
 			main := filepath.Join(t.TempDir(), "db.iprdb")
-			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil); err != nil {
+			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil, true); err != nil {
 				t.Fatal(err)
 			}
 			runCrashChild(t, main, "commit", tc.point)
@@ -297,7 +297,7 @@ func TestLiveWriterMetadataCrashPointsSelectAbsenceOrCompleteValue(t *testing.T)
 	for _, tc := range cases {
 		t.Run(tc.point, func(t *testing.T) {
 			main := filepath.Join(t.TempDir(), "db.iprdb")
-			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil); err != nil {
+			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil, true); err != nil {
 				t.Fatal(err)
 			}
 			runCrashChild(t, main, "metadata", tc.point)
@@ -409,7 +409,7 @@ func TestLiveOutcomeUnknownChild(t *testing.T) {
 	}
 	time.AfterFunc(crashTimeout, func() { os.Exit(1) })
 
-	if _, err := CreateLive(path, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil); err != nil {
+	if _, err := CreateLive(path, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(path, crashWriterBudget(), nil, nil)
@@ -561,7 +561,7 @@ func TestInitializeCrashResiduesRecoverWithoutTheLostResult(t *testing.T) {
 	} {
 		t.Run(point, func(t *testing.T) {
 			main := filepath.Join(t.TempDir(), "db.iprdb")
-			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil); err != nil {
+			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil, true); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.Remove(main + ".readers"); err != nil {
@@ -600,7 +600,7 @@ func TestResetCrashPointsLeaveRetryableOrReadyDatabase(t *testing.T) {
 	} {
 		t.Run(point, func(t *testing.T) {
 			main := filepath.Join(t.TempDir(), "db.iprdb")
-			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil); err != nil {
+			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil, true); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(main+".readers", []byte("corrupt"), 0o600); err != nil {
@@ -631,7 +631,7 @@ func TestResetCrashPointsLeaveRetryableOrReadyDatabase(t *testing.T) {
 	for _, point := range []string{"live_reset.after_replace", "live_reset.after_directory_sync"} {
 		t.Run(point, func(t *testing.T) {
 			main := filepath.Join(t.TempDir(), "db.iprdb")
-			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil); err != nil {
+			if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, nil, true); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(main+".readers", []byte("corrupt"), 0o600); err != nil {

@@ -26,7 +26,7 @@ import (
 func TestValidateLiveSweepAllocationPin(t *testing.T) {
 	liveGate(t)
 	main := filepath.Join(t.TempDir(), "db.iprdb")
-	if _, err := live.CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 2, nil); err != nil {
+	if _, err := live.CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 2, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := live.OpenLiveWriter(main, writer.PageBudget{MaxHeapBytes: 1 << 20, MaxPrivatePages: 4096, MaxGrowthPages: 4096, MaxOpenFiles: 2}, nil, nil)

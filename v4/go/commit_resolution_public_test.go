@@ -19,7 +19,7 @@ import (
 func commitResolutionPair(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "commit-resolution.iprdb")
-	_, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, mustTag(t, "asn"), 1, nil)
+	_, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, mustTag(t, "asn"), 1, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}

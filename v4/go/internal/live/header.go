@@ -207,6 +207,13 @@ func headerShapeValid(page []byte) bool {
 	return allZero(page, headerSize, sidecarPageSize-headerSize)
 }
 
+func creatorPolicy(creatorOnly bool) policy {
+	if creatorOnly {
+		return policyProtected
+	}
+	return policyUnprotected
+}
+
 func encodePolicy(page []byte, value policy) {
 	switch value {
 	case policyUnprotected:

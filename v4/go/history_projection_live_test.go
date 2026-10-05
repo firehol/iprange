@@ -39,7 +39,7 @@ func pubCode(err error) ErrorCode {
 func histCreateLiveSource4(t *testing.T, ranges [][3]uint32) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "history-live-source.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 2, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 2, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
@@ -290,7 +290,7 @@ func TestPublicProjectHistoryLiveSourceValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateLive(nonDirect, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 2, nil); err != nil {
+	if _, err := CreateLive(nonDirect, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 2, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	nonDirectSource, err := OpenLiveReader(nonDirect, nil)
@@ -309,7 +309,7 @@ func TestPublicProjectHistoryLiveSourceValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateLive(notLastSeen, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, plainTag, 2, nil); err != nil {
+	if _, err := CreateLive(notLastSeen, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, plainTag, 2, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	notLastSeenSource, err := OpenLiveReader(notLastSeen, nil)
@@ -324,7 +324,7 @@ func TestPublicProjectHistoryLiveSourceValidation(t *testing.T) {
 	// A live source of the other address family refuses with
 	// WrongAddressFamily.
 	otherFamily := filepath.Join(t.TempDir(), "history-live-v6-source.iprdb")
-	if _, err := CreateLive(otherFamily, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 2, nil); err != nil {
+	if _, err := CreateLive(otherFamily, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 2, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	otherFamilySource, err := OpenLiveReader(otherFamily, nil)

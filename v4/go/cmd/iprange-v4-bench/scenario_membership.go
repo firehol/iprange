@@ -598,7 +598,7 @@ func createMembershipFile(database *testDatabase) error {
 		return err
 	}
 	_, err = iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4,
-		iprangedb.ValueKindMembership, iprangedb.StructureKindNone, tag, 1, nil)
+		iprangedb.ValueKindMembership, iprangedb.StructureKindNone, tag, 1, nil, true)
 	return err
 }
 

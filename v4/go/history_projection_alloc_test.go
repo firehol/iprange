@@ -86,7 +86,7 @@ func TestProjectHistoryCommitAllocCeiling(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
+		if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil, true); err != nil {
 			t.Fatal(err)
 		}
 		w, err := OpenLiveWriter(path, DefaultBudget(), nil)

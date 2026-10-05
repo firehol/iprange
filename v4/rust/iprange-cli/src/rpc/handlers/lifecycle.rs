@@ -87,6 +87,15 @@ pub fn database_create(state: &mut SessionState, params: Value) -> Result<Value,
     let value_tag = value_tag(&object["value_tag"]).map_err(HandlerError::invalid_params)?;
     let reader_capacity = u32_value(object.get("reader_capacity").unwrap_or(&Value::Null))
         .map_err(HandlerError::invalid_params)?;
+    let creator_only = match object.get("creator_only") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => {
+            return Err(HandlerError::invalid_params(
+                "creator_only must be a boolean",
+            ))
+        }
+    };
 
     let mut result = create_live(
         path,
@@ -96,8 +105,8 @@ pub fn database_create(state: &mut SessionState, params: Value) -> Result<Value,
         value_tag,
         reader_capacity,
         &state.token(),
-            true,
-        )
+        creator_only,
+    )
     .map_err(|error| sdk_error(&error, "not_started"))?;
     if result.state != CreationState::Created {
         result = resolve_create_live(

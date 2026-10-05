@@ -152,7 +152,7 @@ func InitializeLive(path string, readerCapacity uint32, check func() error) (*Li
 	if err := checkpoint(check); err != nil {
 		return nil, err
 	}
-	sidecar, failure := reserve(main.path, attempt.databaseID, attempt.sidecarID, readerCapacity)
+	sidecar, failure := reserve(main.path, attempt.databaseID, attempt.sidecarID, readerCapacity, true)
 	if failure != nil {
 		return attempt.reservationFailure(*failure), nil
 	}

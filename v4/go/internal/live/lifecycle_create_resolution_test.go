@@ -24,7 +24,7 @@ func (f *createResolutionFiles) sidecar() string { return f.main + ".readers" }
 
 func (f *createResolutionFiles) create(t *testing.T) *CreateResult {
 	t.Helper()
-	result, err := CreateLive(f.main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 2, neverCheck)
+	result, err := CreateLive(f.main, format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 2, neverCheck, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func (f *createResolutionFiles) interruptedSidecarOnly(t *testing.T, created *Cr
 	if err := os.Remove(f.sidecar()); err != nil {
 		t.Fatal(err)
 	}
-	sidecar, failure := reserve(f.main, created.DatabaseID, created.SidecarID, created.ReaderCapacity)
+	sidecar, failure := reserve(f.main, created.DatabaseID, created.SidecarID, created.ReaderCapacity, true)
 	if failure != nil {
 		t.Fatal(failure.cause)
 	}

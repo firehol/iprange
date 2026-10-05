@@ -151,7 +151,7 @@ func openRw(path string) (*os.File, FileIdentity, error) {
 // non-nil failure reports the exact Rust facts (cause, cleanup outcome,
 // and the identity of the artifact when it was proven and then failed
 // the creator-only proof).
-func createPrivate(path string, authority cleanupAuthority) (createdPrivate, *privateCreationFailure) {
+func createPrivate(path string, creatorOnly bool, authority cleanupAuthority) (createdPrivate, *privateCreationFailure) {
 	cleanFailure := func(cause error) *privateCreationFailure {
 		return &privateCreationFailure{cause: cause}
 	}
@@ -184,12 +184,14 @@ func createPrivate(path string, authority cleanupAuthority) (createdPrivate, *pr
 	// names the created inode; the removal outcome and the proven
 	// identity are retained for the caller fold, exactly like the Rust
 	// and POSIX flows.
-	if err := security.SecureCreatorOnly(f, profile); err != nil {
-		f.Close()
-		return createdPrivate{}, &privateCreationFailure{
-			cause:    liveSecurityError(err),
-			cleanup:  removeCoordinated(path, f, identity, authority),
-			identity: &identity,
+	if creatorOnly {
+		if err := security.SecureCreatorOnly(f, profile); err != nil {
+			f.Close()
+			return createdPrivate{}, &privateCreationFailure{
+				cause:    liveSecurityError(err),
+				cleanup:  removeCoordinated(path, f, identity, authority),
+				identity: &identity,
+			}
 		}
 	}
 	return createdPrivate{file: f, identity: identity}, nil

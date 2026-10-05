@@ -628,7 +628,7 @@ func newLiveFeed(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 	if _, err := iprangedb.CreateLive(path, iprangedb.AddressFamilyIPv4,
-		iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 4, nil); err != nil {
+		iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	writer, err := iprangedb.OpenLiveWriter(path, iprangedb.DefaultBudget(), nil)

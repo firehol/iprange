@@ -573,7 +573,7 @@ func TestCloseAllClosesEveryLiveReader(t *testing.T) {
 		}
 		if _, err := iprangedb.CreateLive(main,
 			iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect,
-			iprangedb.StructureKindNone, tag, 2, nil); err != nil {
+			iprangedb.StructureKindNone, tag, 2, nil, true); err != nil {
 			t.Fatal(err)
 		}
 		reader, err := iprangedb.OpenLiveReader(main, nil)

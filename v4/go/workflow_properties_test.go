@@ -122,7 +122,7 @@ func workflowBooleanCount(desired *[workflowDomain]bool) uint64 {
 func directWorkflowDB(t *testing.T, tag ValueTag) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "workflow-property.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	return path

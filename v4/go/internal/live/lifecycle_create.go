@@ -77,7 +77,7 @@ type createAttempt struct {
 // CancellationToken). Capacity-zero, invalid-kind, and invalid
 // destination arguments are hard errors; every later failure returns a
 // CreateResult with the factual state.
-func CreateLive(path string, addressFamily, valueKind, structureKind uint8, valueTag [16]byte, readerCapacity uint32, check func() error) (*CreateResult, error) {
+func CreateLive(path string, addressFamily, valueKind, structureKind uint8, valueTag [16]byte, readerCapacity uint32, check func() error, creatorOnly bool) (*CreateResult, error) {
 	if err := requireLiveSupported(); err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func CreateLive(path string, addressFamily, valueKind, structureKind uint8, valu
 	if err := checkpoint(check); err != nil {
 		return attempt.notCreated(err), nil
 	}
-	sidecar, failure := reserve(path, attempt.databaseID, attempt.sidecarID, readerCapacity)
+	sidecar, failure := reserve(path, attempt.databaseID, attempt.sidecarID, readerCapacity, creatorOnly)
 	if failure != nil {
 		return attempt.reservationFailure(*failure), nil
 	}
@@ -123,7 +123,7 @@ func CreateLive(path string, addressFamily, valueKind, structureKind uint8, valu
 		return attempt.failed(path, sidecar, nil, nil, err), nil
 	}
 
-	created, failure := createPrivate(path, cleanupAuthority{
+	created, failure := createPrivate(path, creatorOnly, cleanupAuthority{
 		attemptID:     attempt.databaseID,
 		ordinal:       0,
 		kind:          ArtifactOwnedMain,

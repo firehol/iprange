@@ -1200,7 +1200,7 @@ func sdkCommitWorkflow(finished *iprangedb.FinishedWorkflow, err error) (iprange
 }
 
 func sdkCreateLiveFile(path string, kind iprangedb.ValueKind, tag iprangedb.ValueTag) error {
-	_, err := iprangedb.CreateLive(path, iprangedb.AddressFamilyIPv4, kind, iprangedb.StructureKindNone, tag, 1, iprangedb.NewCancellationToken())
+	_, err := iprangedb.CreateLive(path, iprangedb.AddressFamilyIPv4, kind, iprangedb.StructureKindNone, tag, 1, iprangedb.NewCancellationToken(), true)
 	return err
 }
 
@@ -1234,7 +1234,7 @@ func sdkSeededDirectWithTag(label string, size int, readerCapacity uint32, tag i
 	if err != nil {
 		return nil, err
 	}
-	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, readerCapacity, iprangedb.NewCancellationToken()); err != nil {
+	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, readerCapacity, iprangedb.NewCancellationToken(), true); err != nil {
 		return nil, err
 	}
 	if err := sdkApplyDirect(database, size); err != nil {
@@ -1393,7 +1393,7 @@ func sdkCreateMembership(database *testDatabase) error {
 	if err != nil {
 		return err
 	}
-	_, err = iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindMembership, iprangedb.StructureKindNone, tag, 1, iprangedb.NewCancellationToken())
+	_, err = iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindMembership, iprangedb.StructureKindNone, tag, 1, iprangedb.NewCancellationToken(), true)
 	return err
 }
 

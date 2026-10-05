@@ -18,7 +18,7 @@ const timestampAbortTimeout = 60 * time.Second
 func TestTimestampMergeFatalBrandsWriterUnusable(t *testing.T) {
 	requireLiveCreation(t)
 	path := filepath.Join(t.TempDir(), "timestamp-abort.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagFirstSeen(), 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagFirstSeen(), 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	exe, err := os.Executable()

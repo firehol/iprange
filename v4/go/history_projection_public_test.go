@@ -23,7 +23,7 @@ import (
 func histCreateSource4(t *testing.T, ranges [][3]uint32) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "history-source.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
@@ -51,7 +51,7 @@ func histCreateSource4(t *testing.T, ranges [][3]uint32) string {
 func histCreateSource6(t *testing.T, fromHi, fromLo, toHi, toLo uint64, value uint32) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "history-source6.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
@@ -81,7 +81,7 @@ func histCreateMembership(t *testing.T) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "history-dest.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -276,7 +276,7 @@ func TestPublicProjectHistoryFullIPv6Space(t *testing.T) {
 		t.Fatal(err)
 	}
 	destinationPath := filepath.Join(t.TempDir(), "history-dest6.iprdb")
-	if _, err := CreateLive(destinationPath, AddressFamilyIPv6, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(destinationPath, AddressFamilyIPv6, ValueKindMembership, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(destinationPath, DefaultBudget(), nil)
@@ -470,7 +470,7 @@ func TestPublicProjectHistoryInvalidRequests(t *testing.T) {
 
 	// Wrong source semantic: a generic direct tag is not last_seen.
 	genericPath := filepath.Join(t.TempDir(), "generic.iprdb")
-	if _, err := CreateLive(genericPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 4, nil); err != nil {
+	if _, err := CreateLive(genericPath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	generic, err := OpenLiveReader(genericPath, nil)

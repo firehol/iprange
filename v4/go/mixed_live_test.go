@@ -649,7 +649,7 @@ func createDirectLive(t *testing.T, path string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 }

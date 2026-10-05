@@ -46,7 +46,7 @@ func createLiveDatabaseForClassTest(t *testing.T, dir string) string {
 	t.Helper()
 	main := filepath.Join(dir, "db.iprdb")
 	if _, err := CreateLive(main, format.AddressFamilyIPv4, format.ValueKindDirect,
-		format.StructureKindNone, [16]byte{}, 2, nil); err != nil {
+		format.StructureKindNone, [16]byte{}, 2, nil, true); err != nil {
 		t.Fatalf("CreateLive: %v", err)
 	}
 	return main

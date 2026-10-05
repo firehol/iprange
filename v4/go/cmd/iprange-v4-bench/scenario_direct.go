@@ -34,7 +34,7 @@ func directReplace(size int, _ int) (*scenarioResult, error) {
 		return nil, err
 	}
 	defer db.cleanup()
-	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 1, nil); err != nil {
+	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 1, nil, true); err != nil {
 		return nil, err
 	}
 	opErr, measured := operation(func() error {
@@ -64,7 +64,7 @@ func directReplaceV6(size int, _ int) (*scenarioResult, error) {
 		return nil, err
 	}
 	defer db.cleanup()
-	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv6, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 1, nil); err != nil {
+	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv6, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 1, nil, true); err != nil {
 		return nil, err
 	}
 	opErr, measured := operation(func() error {
@@ -92,7 +92,7 @@ func directNested(size int, _ int) (*scenarioResult, error) {
 		return nil, err
 	}
 	defer db.cleanup()
-	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 1, nil); err != nil {
+	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 1, nil, true); err != nil {
 		return nil, err
 	}
 	opErr, measured := operation(func() error {
@@ -122,7 +122,7 @@ func directCommit(size int, _ int) (*scenarioResult, error) {
 		return nil, err
 	}
 	defer db.cleanup()
-	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 1, nil); err != nil {
+	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 1, nil, true); err != nil {
 		return nil, err
 	}
 	writer, err := iprangedb.OpenLiveWriter(db.main, toPageBudget(transactionBudget(size, 1)), nil)
@@ -177,7 +177,7 @@ func directFirstSeen(size int, _ int) (*scenarioResult, error) {
 		return nil, err
 	}
 	defer db.cleanup()
-	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, iprangedb.ValueTagFirstSeen(), 1, nil); err != nil {
+	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, iprangedb.ValueTagFirstSeen(), 1, nil, true); err != nil {
 		return nil, err
 	}
 	seed, err := newAddressSource(size, 0)
@@ -210,7 +210,7 @@ func directLastSeen(size int, _ int) (*scenarioResult, error) {
 		return nil, err
 	}
 	defer db.cleanup()
-	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, iprangedb.ValueTagLastSeen(), 1, nil); err != nil {
+	if _, err := iprangedb.CreateLive(db.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, iprangedb.ValueTagLastSeen(), 1, nil, true); err != nil {
 		return nil, err
 	}
 	seed, err := newAddressSource(size, 0)

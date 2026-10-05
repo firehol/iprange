@@ -52,7 +52,7 @@ func regenDirectIPv4(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	live := filepath.Join(t.TempDir(), "live-direct")
-	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(live, DefaultBudget(), nil)
@@ -111,7 +111,7 @@ func regenFirstSeenIPv6(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	live := filepath.Join(t.TempDir(), "live-first-seen")
-	if _, err := CreateLive(live, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(live, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(live, DefaultBudget(), nil)
@@ -152,7 +152,7 @@ func regenHistoryMembershipIPv4(t *testing.T, dir string) {
 	// exact Rust ranges1000 vector (a temporary input, never a corpus
 	// file).
 	sourcePath := filepath.Join(t.TempDir(), "history-source.iprdb")
-	if _, err := CreateLive(sourcePath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil); err != nil {
+	if _, err := CreateLive(sourcePath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	sourceWriter, err := OpenLiveWriter(sourcePath, DefaultBudget(), nil)
@@ -182,7 +182,7 @@ func regenHistoryMembershipIPv4(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	live := filepath.Join(t.TempDir(), "live-history")
-	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
+	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(live, DefaultBudget(), nil)
@@ -233,7 +233,7 @@ func regenStructuredIPv4(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	live := filepath.Join(t.TempDir(), "live-structured")
-	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag, 4, nil); err != nil {
+	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(live, DefaultBudget(), nil)
@@ -321,7 +321,7 @@ func regenStructuredIPv6(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	live := filepath.Join(t.TempDir(), "live-structured-v6")
-	if _, err := CreateLive(live, AddressFamilyIPv6, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag, 4, nil); err != nil {
+	if _, err := CreateLive(live, AddressFamilyIPv6, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(live, DefaultBudget(), nil)
@@ -406,7 +406,7 @@ func regenStructuredIPv4NoThreat(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	live := filepath.Join(t.TempDir(), "live-structured-nothreat")
-	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag, 4, nil); err != nil {
+	if _, err := CreateLive(live, AddressFamilyIPv4, ValueKindStructured, StructureKindNetworkEnrichmentV1, tag, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(live, DefaultBudget(), nil)

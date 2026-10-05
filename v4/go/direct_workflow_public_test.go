@@ -312,7 +312,7 @@ func TestFirstSeenRefreshRemovalsV4(t *testing.T) {
 func TestFirstSeenRefreshRemovalsV6AndFamilyMismatch(t *testing.T) {
 	requireLiveCreation(t)
 	path := filepath.Join(t.TempDir(), "first-seen-v6.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, ValueTagFirstSeen(), 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv6, ValueKindDirect, StructureKindNone, ValueTagFirstSeen(), 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(path, DefaultBudget(), nil)

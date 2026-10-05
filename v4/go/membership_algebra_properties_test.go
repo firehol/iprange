@@ -219,7 +219,7 @@ func TestRandomizedGlobalAlgebraMatchesAScalarAddressModel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := CreateLive(sourcePaths[source], AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil); err != nil {
+		if _, err := CreateLive(sourcePaths[source], AddressFamilyIPv4, ValueKindMembership, StructureKindNone, tag, 4, nil, true); err != nil {
 			t.Fatal(err)
 		}
 		writer, err := OpenLiveWriter(sourcePaths[source], algebraPropertyTransactionBudget(), nil)

@@ -70,7 +70,7 @@ func TestHistoryProjectionUnusedPrefixesNotInterned(t *testing.T) {
 	// An empty last_seen database: CreateLive alone leaves the empty
 	// txn-1 generation (no transaction is ever committed).
 	sourcePath := filepath.Join(t.TempDir(), "empty-source.iprdb")
-	if _, err := CreateLive(sourcePath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil); err != nil {
+	if _, err := CreateLive(sourcePath, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	destinationPath := histCreateMembership(t)

@@ -47,22 +47,22 @@ type Sidecar struct {
 // PrivateCreationFailure facts (the canonical-sidecar derivation
 // failure has a clean cleanup and no identity, exactly like Rust
 // reserve).
-func reserve(main string, databaseID, sidecarID [16]byte, capacity uint32) (*Sidecar, *privateCreationFailure) {
+func reserve(main string, databaseID, sidecarID [16]byte, capacity uint32, creatorOnly bool) (*Sidecar, *privateCreationFailure) {
 	path, err := canonicalSidecarPath(main)
 	if err != nil {
 		return nil, &privateCreationFailure{cause: err}
 	}
-	return reserveAt(path, databaseID, sidecarID, capacity)
+	return reserveAt(path, databaseID, sidecarID, capacity, creatorOnly)
 }
 
 // reserveAt is reserve at an explicit path (Rust Sidecar::reserve_at).
-func reserveAt(path string, databaseID, sidecarID [16]byte, capacity uint32) (*Sidecar, *privateCreationFailure) {
+func reserveAt(path string, databaseID, sidecarID [16]byte, capacity uint32, creatorOnly bool) (*Sidecar, *privateCreationFailure) {
 	if capacity == 0 {
 		return nil, &privateCreationFailure{
 			cause: &format.Error{Code: format.CodeInvalidArgument, Detail: "reader capacity must be greater than zero"},
 		}
 	}
-	created, failure := createPrivate(path, cleanupAuthority{
+	created, failure := createPrivate(path, creatorOnly, cleanupAuthority{
 		attemptID:     sidecarID,
 		ordinal:       1,
 		kind:          ArtifactOwnedCoordination,
@@ -74,7 +74,10 @@ func reserveAt(path string, databaseID, sidecarID [16]byte, capacity uint32) (*S
 	return &Sidecar{
 		file:     created.file,
 		path:     path,
-		header:   header{capacity: capacity, databaseID: databaseID, sidecarID: sidecarID},
+		header: header{
+			capacity: capacity, databaseID: databaseID, sidecarID: sidecarID,
+			policy: creatorPolicy(creatorOnly),
+		},
 		identity: created.identity,
 	}, nil
 }

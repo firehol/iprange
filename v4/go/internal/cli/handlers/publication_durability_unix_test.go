@@ -229,7 +229,7 @@ func newFirstSeenTarget(t *testing.T, dir, name string) string {
 	path := filepath.Join(dir, name)
 	if _, err := iprangedb.CreateLive(path, iprangedb.AddressFamilyIPv4,
 		iprangedb.ValueKindDirect, iprangedb.StructureKindNone,
-		iprangedb.ValueTagFirstSeen(), 4, nil); err != nil {
+		iprangedb.ValueTagFirstSeen(), 4, nil, true); err != nil {
 		t.Fatalf("create first_seen target: %v", err)
 	}
 	return path
@@ -251,7 +251,7 @@ func newLiveCoverageFeed(t *testing.T, dir, name, feed string, addresses ...ipra
 		t.Fatal(err)
 	}
 	if _, err := iprangedb.CreateLive(path, iprangedb.AddressFamilyIPv4,
-		iprangedb.ValueKindMembership, iprangedb.StructureKindNone, tag, 4, nil); err != nil {
+		iprangedb.ValueKindMembership, iprangedb.StructureKindNone, tag, 4, nil, true); err != nil {
 		t.Fatalf("create coverage source: %v", err)
 	}
 	writer, err := iprangedb.OpenLiveWriter(path, iprangedb.DefaultBudget(), nil)

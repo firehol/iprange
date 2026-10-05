@@ -66,7 +66,7 @@ func TestPublicCreateLiveAndInitializeRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	created, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 2, nil)
+	created, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 2, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestPublicLifecycleCancellation(t *testing.T) {
 	cancelled := NewCancellationToken()
 	cancelled.Cancel()
 
-	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 1, cancelled); err == nil {
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 1, cancelled, true); err == nil {
 		t.Fatal("cancelled create succeeded")
 	} else if lifecycleCode(err) != ErrorCancelled {
 		t.Fatalf("cancelled create: %v, want Cancelled", err)
@@ -184,7 +184,7 @@ func TestPublicLifecycleCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil); err != nil {
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(main + ".readers"); err != nil {
@@ -215,7 +215,7 @@ func TestPublicImmutableMainIsInitializedExplicitly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil); err != nil {
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(main + ".readers"); err != nil {
@@ -296,7 +296,7 @@ func TestPublicInitializationNeverRepairsExistingCoordination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil); err != nil {
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -329,7 +329,7 @@ func TestPublicResetReplacesCorruptCoordinationWithoutChangingTheMain(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil); err != nil {
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(main)
@@ -411,7 +411,7 @@ func TestPublicDiscardingResetReportsPolicyAndCannotRollBackAfterInstallation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil); err != nil {
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(main)
@@ -476,7 +476,7 @@ func TestPublicCancelledTransitionLeavesAnImmutableMainUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil); err != nil {
+	if _, err := CreateLive(main, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 1, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(main + ".readers"); err != nil {

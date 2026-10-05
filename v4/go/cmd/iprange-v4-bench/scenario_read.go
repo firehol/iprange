@@ -54,7 +54,7 @@ func readSeededDirect(label string, size int, readerCapacity uint32) (*testDatab
 	if err != nil {
 		return nil, err
 	}
-	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, readerCapacity, iprangedb.NewCancellationToken()); err != nil {
+	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, readerCapacity, iprangedb.NewCancellationToken(), true); err != nil {
 		return nil, err
 	}
 	cancellation := iprangedb.NewCancellationToken()
@@ -107,7 +107,7 @@ func readSeededDirectV6(label string, size int, readerCapacity uint32) (*testDat
 	if err != nil {
 		return nil, err
 	}
-	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv6, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, readerCapacity, iprangedb.NewCancellationToken()); err != nil {
+	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv6, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, readerCapacity, iprangedb.NewCancellationToken(), true); err != nil {
 		return nil, err
 	}
 	cancellation := iprangedb.NewCancellationToken()
@@ -687,7 +687,7 @@ func readMembershipValidationDatabase(label string, ranges, feeds, width int) (*
 	if err != nil {
 		return nil, err
 	}
-	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindMembership, iprangedb.StructureKindNone, tag, 1, iprangedb.NewCancellationToken()); err != nil {
+	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindMembership, iprangedb.StructureKindNone, tag, 1, iprangedb.NewCancellationToken(), true); err != nil {
 		return nil, err
 	}
 	cancellation := iprangedb.NewCancellationToken()

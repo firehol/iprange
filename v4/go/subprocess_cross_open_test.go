@@ -134,7 +134,7 @@ func TestGoSubprocessChild(t *testing.T) {
 
 	// 3. One full create -> write -> commit -> read-back roundtrip.
 	path := filepath.Join(t.TempDir(), "child-roundtrip.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 4, nil, true); err != nil {
 		t.Fatalf("go child: create: %v", err)
 	}
 	w, err := OpenLiveWriter(path, DefaultBudget(), nil)

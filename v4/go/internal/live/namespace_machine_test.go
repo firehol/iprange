@@ -32,7 +32,7 @@ func testAuthority() cleanupAuthority {
 func TestCreatePrivateRefusesOverlongBasename(t *testing.T) {
 	dir := t.TempDir()
 	name := strings.Repeat("x", 300)
-	created, failure := createPrivate(filepath.Join(dir, name), testAuthority())
+	created, failure := createPrivate(filepath.Join(dir, name), true, testAuthority())
 	if created.file != nil {
 		t.Fatal("overlong basename created an artifact")
 	}
@@ -57,7 +57,7 @@ func TestCreatePrivateRefusesSymlinkedParent(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
-	created, failure := createPrivate(filepath.Join(link, "artifact"), testAuthority())
+	created, failure := createPrivate(filepath.Join(link, "artifact"), true, testAuthority())
 	if created.file != nil {
 		t.Fatal("symlinked parent created an artifact")
 	}
@@ -86,7 +86,7 @@ func TestCreateLiveRelativeSingleComponentRefuses(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
-	result, err := CreateLive("feed.v4", format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck)
+	result, err := CreateLive("feed.v4", format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck, true)
 	if err != nil {
 		t.Fatal(err)
 	}

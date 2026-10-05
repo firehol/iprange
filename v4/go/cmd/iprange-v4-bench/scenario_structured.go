@@ -760,7 +760,7 @@ func structuredCreateDatabase(label string) (*testDatabase, error) {
 		database.cleanup()
 		return nil, fmt.Errorf("invalid enrichment tag: %v", err)
 	}
-	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindStructured, iprangedb.StructureKindNetworkEnrichmentV1, tag, 1, nil); err != nil {
+	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindStructured, iprangedb.StructureKindNetworkEnrichmentV1, tag, 1, nil, true); err != nil {
 		database.cleanup()
 		return nil, err
 	}
@@ -1056,7 +1056,7 @@ func structuredSeededDirect(label string, size int, readerCapacity uint32) (*tes
 	if err != nil {
 		return nil, fmt.Errorf("invalid benchmark value tag: %v", err)
 	}
-	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, readerCapacity, nil); err != nil {
+	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, readerCapacity, nil, true); err != nil {
 		return nil, err
 	}
 	if err := structuredApplyDirect(database, size); err != nil {
@@ -1122,7 +1122,7 @@ func structuredPopulatedThreat(label string, size, feeds int) (*testDatabase, er
 	if err != nil {
 		return nil, fmt.Errorf("invalid threat tag: %v", err)
 	}
-	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindMembership, iprangedb.StructureKindNone, tag, 1, nil); err != nil {
+	if _, err := iprangedb.CreateLive(database.main, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindMembership, iprangedb.StructureKindNone, tag, 1, nil, true); err != nil {
 		return nil, err
 	}
 	writer, err := iprangedb.OpenLiveWriter(database.main, toPageBudget(transactionBudget(size, feeds)), nil)

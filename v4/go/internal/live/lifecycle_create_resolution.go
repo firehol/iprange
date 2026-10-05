@@ -171,7 +171,7 @@ func completeCreate(path string, supplied *CreateResult, main *mainObserved, coo
 		state = coordination.state
 	case coordinationAbsent:
 		var failure *privateCreationFailure
-		sidecar, failure = reserve(path, supplied.DatabaseID, supplied.SidecarID, supplied.ReaderCapacity)
+		sidecar, failure = reserve(path, supplied.DatabaseID, supplied.SidecarID, supplied.ReaderCapacity, true)
 		if failure != nil {
 			var sidecarIdentity *FileIdentity
 			if failure.identity != nil {
@@ -205,7 +205,7 @@ func completeCreate(path string, supplied *CreateResult, main *mainObserved, coo
 		mainFile = main.file
 		publicMain = mainIdentity(main)
 	case mainAbsent:
-		created, failure := createPrivate(path, cleanupAuthority{
+		created, failure := createPrivate(path, true, cleanupAuthority{
 			attemptID:     supplied.DatabaseID,
 			ordinal:       0,
 			kind:          ArtifactOwnedMain,

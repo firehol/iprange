@@ -16,7 +16,7 @@ import (
 func TestWriterSecondCommitSameWriter(t *testing.T) {
 	requireLiveCreation(t)
 	path := filepath.Join(t.TempDir(), "double.iprdb")
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTagLastSeen(), 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(path, DefaultBudget(), nil)

@@ -94,7 +94,7 @@ func TestOutcomeUnknownChild(t *testing.T) {
 
 	path := os.Getenv(outcomeChildPath)
 	action := os.Getenv(outcomeChildAction)
-	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 4, nil); err != nil {
+	if _, err := CreateLive(path, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, ValueTag{}, 4, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	w, err := OpenLiveWriter(path, DefaultBudget(), nil)
