@@ -4,10 +4,9 @@
 
 Status: open
 
-Sub-state: decision superseded 2026-10-05. The user replaced option 3
-with a create flag. Implementation has not started. This file does not
-authorize editing the engines until the plan gate returns GOOD TO
-IMPLEMENT.
+Sub-state: plan gate GOOD TO IMPLEMENT (sol session
+`0799c90a86a44afda07527b1b0cfd5ce`, turn 4, 2026-10-05). Implementation
+may start. The decision is the create flag, default unset.
 
 ## Requirements
 
@@ -273,14 +272,125 @@ does not rewrite it.
 
 1. Decision recorded: create flag, default unset (2026-10-05). Option 3
    is superseded.
-2. Plan gate: external control reviews this SOW and returns GOOD TO
-   IMPLEMENT before any engine edit. REVIEWS.md requires that gate for
-   a SOW whose milestones were not already approved.
-3. Implement only after that gate. Both engines, the CLI and JSON-RPC
-   create path, the specs, and tests for the four cases: created with
-   the flag and checked on open, created without the flag and not
-   checked, an old commitment-bearing file still checked, and the
-   optional open flag refusing an unprotected file.
+2. Plan gate: sol session `0799c90a86a44afda07527b1b0cfd5ce` returned
+   GOOD TO IMPLEMENT on turn 4 (2026-10-05), after three NEEDS CHANGES
+   turns. Turn 1 rejected the publication reservation as storage.
+   Turn 2 rejected a commitment overlapping the database ID, and a
+   mode sniff that would treat an umask-0077 unprotected file as
+   protected. Turn 3 rejected a decoder rule that required the policy
+   byte to be zero. Those three are fixed in the plan below.
+3. Implement in the order below. No engine edit precedes this record.
+
+### Implementation plan (for the plan gate)
+
+One milestone. The flag is a create argument. Open follows the file.
+
+**Where the choice does not live.** The publication reservation
+(`IPR4RSV1`, `publication/reservation.rs`) is temporary. Successful
+publication retires it. `create_live` never writes one. Ordinary live
+open reads the reader-table sidecar, not a reservation
+(`reader_core/live.rs`). Storing the choice only in the reservation
+cannot survive create, close, and reopen. That proposal is rejected.
+
+**Where the choice lives.** The live reader-table sidecar
+(`IPRDRS4`, Rust `live_sidecar/header.rs`, Go `internal/live/header.go`)
+is what open reads. Its header is 68 bytes. Offset 20 is 12 reserved
+zero bytes. Offset 32 is the database ID. A 32-byte commitment does
+not fit at offset 22: it would overwrite the database ID. That
+placement is rejected.
+
+The 12 reserved bytes hold a generation, not the commitment:
+
+- offset 20, `u16`: `policy_generation`. `0` is a pre-decision sidecar.
+  `1` is a sidecar written by this change. Any other value is a damaged
+  header and is refused. Bytes 23 through 31, the remaining 9, stay
+  zero.
+- The commitment is not copied into the sidecar. Kind 1 and kind 2
+  stay the existing `IPR4PSEC` proof, recomputed from the file on open
+  exactly as `creator_only_commitment` does today. The sidecar records
+  only whether this file was created under the flag.
+
+The header size field stays 68. The CRC already covers the page with
+the checksum field zeroed, so the generation is covered without a new
+checksum. Decoder rule: generation 0 requires bytes 22 through 31
+zero. Generation 1 requires the policy byte at offset 22 to be 0 or
+1, and bytes 23 through 31 zero. Anything else in that span is
+corrupt.
+A pre-decision file has generation 0 because those bytes are already
+zero. It is not rewritten.
+
+**How open classifies the file.**
+
+- Generation 1, flag was set: create stored that fact by running the
+  existing proof and recording generation 1 together with a one-byte
+  policy at offset 22 (`1` = protected, `0` = unprotected). Open of a
+  protected file runs `creator_only_commitment` and fails on mismatch.
+  Open of an unprotected file does not run it, even when umask `0077`
+  happened to produce mode `0600`. The generation is what separates
+  that file from a pre-decision file. The mode is not.
+- Generation 0: pre-decision. The file was created when the proof was
+  mandatory, and `create_private` (`live_namespace.rs`) already applied
+  it. Open runs the existing check. The SDK does not rewrite the
+  header. If the operator has since widened the mode, the check fails
+  closed with the same `ChangedOrUnproven` a kind-1 mismatch uses
+  today. Rejecting every existing database is forbidden. Silently
+  treating a widened old file as unprotected is also forbidden: that
+  was the hole in the previous draft, and it is closed by failing the
+  check rather than by sniffing the mode to decide the policy.
+
+Offset 22 in a generation-1 header is that one policy byte. Values
+other than 0 or 1 are corrupt. A generation-0 header must have offset
+22 zero, which every existing file already does.
+
+**Create.** `create_live` and the JSON-RPC `database.create` params gain
+`creator_only` (boolean, default false). True runs the existing
+`secure_creator_only` path and writes generation 1 with policy byte 1.
+False creates the file with the process umask and the directory
+default ACL or DACL, writes generation 1 with policy byte 0, and does
+not chmod, strip ACLs, or install a protected DACL. Close-on-exec stays in both
+modes. Rust is the authority. Go matches it. The C ABI passes the same
+boolean through; it does not grow a second policy.
+
+**Open.** Open reads the sidecar generation and policy byte. It does
+not look at the creating process and it does not read a publication
+reservation. `require_creator_only` refuses a generation-1 unprotected
+file. It accepts a generation-1 protected file and a generation-0 file
+that still proves creator-only. A generation-0 file whose mode was
+widened fails the check, so this flag refuses it too.
+
+**Optional open flag.** `require_creator_only` (boolean, default false)
+on the live open path. True refuses a generation-1 file whose policy
+byte is 0. False accepts both policies. It does not weaken the check
+on a generation-1 protected file or on a generation-0 file.
+
+**Not in this change.** Export, metadata, and removal outputs are not
+given a second flag. They follow the database they belong to: a
+creator-only database keeps creator-only outputs; an ordinary database
+does not. No environment variable. No default-on.
+
+**Tests, both languages.** Each new-file case is create, close, and
+reopen through the public API. Created with the flag: generation 1,
+policy byte 1, mode is creator-only, reopen checks it, and widening
+the mode makes reopen fail. Created without the flag under umask
+`0077`: generation 1, policy byte 0, mode happens to be `0600`, reopen
+does not check it, and `require_creator_only` refuses it. A
+pre-decision sidecar (generation 0, which is what every current file
+already has) whose file is still creator-only is checked on reopen.
+The same sidecar after the mode is widened fails reopen. A generation
+other than 0 or 1, or a policy byte other than 0 or 1, is refused. A
+publication reservation is not the fixture for any of these.
+
+**Specs.** `design-iprange-engine.md:408-410` changes from "every
+artifact starts creator-private" to "creator-only is opt-in at create;
+open follows the stored generation and policy byte, and a pre-decision sidecar is
+checked only while the file still proves creator-only."
+`binary-format-v4.md` section 15.1 replaces the 12 reserved zero bytes
+at offset 20 with `policy_generation` (`u16`) and a one-byte policy,
+and states the generation-0 rule. Section 15.6 stays the proof that
+open runs for a protected file and for a generation-0 file. It is no
+longer mandatory at create. `iprange-jsonrpc-v1.md`
+`database.create` gains the boolean. The C ABI spec gains the same
+boolean on the create and open entries that exist there.
 
 ## Execution Log
 
@@ -292,8 +402,12 @@ does not rewrite it.
 
 - User selected option 3, then replaced it the same day with a create
   flag. Default unset. Open follows the file. An optional open flag may
-  require a protected file. No code or spec was changed. Implementation
-  waits for the plan gate.
+  require a protected file.
+- Plan gate: sol session `0799c90a86a44afda07527b1b0cfd5ce`, turn 4,
+  GOOD TO IMPLEMENT. Three earlier turns rejected the reservation as
+  storage, a commitment overlapping the database ID, and a decoder
+  rule that zeroed the policy byte. Those are fixed in the plan.
+  Implementation may start. No engine edit is in this commit.
 
 ## Validation
 
