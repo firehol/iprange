@@ -94,6 +94,10 @@ type ExportWriter struct {
 // NewExportWriter creates the private temporary and the buffered
 // writer. The caller must call Finish or Abort exactly once.
 func NewExportWriter(destination string, policy iprangedb.PublicationPolicy, budget ExportBudget) (*ExportWriter, *rpc.HandlerError) {
+	return NewExportWriterMode(destination, policy, budget, false)
+}
+
+func NewExportWriterMode(destination string, policy iprangedb.PublicationPolicy, budget ExportBudget, creatorOnly bool) (*ExportWriter, *rpc.HandlerError) {
 	if budget.MaxOpenFiles == 0 {
 		return nil, rpc.NewHandlerError("invalid_argument", "not_started",
 			"export requires at least one open file")
@@ -107,7 +111,11 @@ func NewExportWriter(destination string, policy iprangedb.PublicationPolicy, bud
 	// The owner-side open keeps this create out of the runtime network
 	// poller, whose initialization has no failure path under a low
 	// RLIMIT_NOFILE (wave-19.25 design section 5).
-	raw, err := calleropen.Open(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, 0o600)
+	mode := os.FileMode(0o666)
+	if creatorOnly {
+		mode = 0o600
+	}
+	raw, err := calleropen.Open(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, mode)
 	if err != nil {
 		return nil, fileError(err, "create export output")
 	}

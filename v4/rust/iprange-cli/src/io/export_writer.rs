@@ -27,6 +27,13 @@ use crate::rpc::new_handle;
 /// Make one newly created output creator-private. Windows uses the
 /// process DACL; POSIX must not inherit the umask.
 #[cfg(unix)]
+pub(crate) fn apply_output_mode(file: &File, creator_only: bool) -> Result<(), HandlerError> {
+    if !creator_only {
+        return Ok(());
+    }
+    creator_private(file)
+}
+
 pub(crate) fn creator_private(file: &File) -> Result<(), HandlerError> {
     use std::os::unix::fs::PermissionsExt as _;
     file.set_permissions(fs::Permissions::from_mode(0o600))
@@ -117,7 +124,7 @@ impl ExportWriter {
             .create_new(true)
             .open(&temporary)
             .map_err(|error| file_error(error, "create export output"))?;
-        creator_private(&file)?;
+        apply_output_mode(&file, false)?;
         Ok(Self {
             file: BufWriter::with_capacity(64 * 1024, file),
             temporary,
