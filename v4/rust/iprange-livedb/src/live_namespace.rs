@@ -121,9 +121,15 @@ pub(crate) fn create_private(
     let (directory, name) = bind_path(path).map_err(failure)?;
     let profile = Profile::capture().map_err(|error| failure(namespace_error(error)))?;
     let mode = if creator_only { 0o600 } else { 0o666 };
-    let file = directory
-        .create_with_mode(&name, mode)
-        .map_err(|error| failure(namespace_error(error)))?;
+    let file = if creator_only {
+        directory
+            .create_with_mode(&name, mode)
+            .map_err(|error| failure(namespace_error(error)))?
+    } else {
+        directory
+            .create_unprotected(&name)
+            .map_err(|error| failure(namespace_error(error)))?
+    };
     let identity = match identity(&file) {
         Ok(identity) => identity,
         Err(cause) => {

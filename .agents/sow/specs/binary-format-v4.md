@@ -2358,10 +2358,13 @@ perform no file or namespace I/O. Dropping a reader without explicit close is
 still safe: descriptor close releases the slot lock, and the next exclusive scan
 clears its stale bytes.
 
-Engine-created main and sidecar files use creator-only access. POSIX mode is
-exactly `0600`, independent of umask; Windows uses a protected descriptor for
-the effective user. Opens never silently change existing access. Every
-descriptor is close-on-exec or non-inheritable.
+A live database created with the creator-only flag uses creator-only
+access. POSIX mode is exactly `0600`, independent of umask; Windows uses
+a protected descriptor for the effective user. A live database created
+without the flag uses the process umask and the directory default.
+Publication reservations and recovery scratch remain creator-only.
+Opens never silently change existing access. Every descriptor is
+close-on-exec or non-inheritable.
 
 For POSIX creation-security kind 1, the engine removes an inherited extended
 access ACL, applies mode `0600`, and verifies the retained regular inode is

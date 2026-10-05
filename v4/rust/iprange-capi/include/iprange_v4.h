@@ -1917,6 +1917,7 @@ uint32_t iprange_v4_abi1_create_live(struct iprange_v4_abi1_path destination,
                                      uint32_t structure_kind,
                                      struct iprange_v4_abi1_byte_slice value_tag,
                                      uint32_t reader_capacity,
+                                     uint8_t creator_only,
                                      struct iprange_v4_abi1_cancellation cancellation,
                                      iprange_v4_abi1_report **report_output,
                                      iprange_v4_abi1_error **error_output);

@@ -21,6 +21,7 @@ pub unsafe extern "C" fn iprange_v4_abi1_create_live(
     structure_kind: u32,
     value_tag: ByteSlice,
     reader_capacity: u32,
+    creator_only: u8,
     cancellation: Cancellation,
     report_output: *mut *mut ReportHandle,
     error_output: *mut *mut ErrorHandle,
@@ -43,7 +44,7 @@ pub unsafe extern "C" fn iprange_v4_abi1_create_live(
             value_tag,
             reader_capacity,
             &cancellation,
-            true,
+            creator_only != 0,
         )?;
         *output = Box::into_raw(Box::new(ReportHandle::create(result, false)));
         Ok::<_, CallError>(())

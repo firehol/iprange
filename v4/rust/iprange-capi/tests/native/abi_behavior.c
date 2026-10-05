@@ -346,6 +346,7 @@ int main(int argc, char **argv)
               IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
               value_tag,
               2,
+              1,
               no_cancellation(),
               &report,
               &error) == IPRANGE_V4_ABI1_STATUS_OK);
@@ -448,7 +449,8 @@ int main(int argc, char **argv)
                   IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
                   value_tag,
                   1,
-                  no_cancellation(),
+                  1,
+              no_cancellation(),
                   &report,
                   &error) == IPRANGE_V4_ABI1_STATUS_OK);
         CHECK(destroy_report(report) == 0);

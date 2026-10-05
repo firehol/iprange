@@ -141,6 +141,7 @@ int main(int argc, char **argv)
               IPRANGE_V4_ABI1_STRUCTURE_KIND_NETWORK_ENRICHMENT_V1,
               value_tag,
               4,
+              1,
               no_cancellation(),
               &report,
               &error) == IPRANGE_V4_ABI1_STATUS_ERROR);
@@ -155,6 +156,7 @@ int main(int argc, char **argv)
               IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
               value_tag,
               4,
+              1,
               no_cancellation(),
               &report,
               &error) == IPRANGE_V4_ABI1_STATUS_ERROR);
@@ -169,6 +171,7 @@ int main(int argc, char **argv)
               UINT32_C(255),
               value_tag,
               4,
+              1,
               no_cancellation(),
               &report,
               &error) == IPRANGE_V4_ABI1_STATUS_ERROR);
@@ -183,6 +186,7 @@ int main(int argc, char **argv)
               IPRANGE_V4_ABI1_STRUCTURE_KIND_NETWORK_ENRICHMENT_V1,
               value_tag,
               4,
+              1,
               no_cancellation(),
               &report,
               &error) == IPRANGE_V4_ABI1_STATUS_OK);

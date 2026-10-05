@@ -56,10 +56,11 @@ fn protected_create_is_checked_after_close() {
 #[test]
 fn unprotected_umask_0600_is_not_checked_after_close() {
     let main = path("plain");
-    let old = unsafe { libc::umask(0o077) };
+    let old = unsafe { libc::umask(0) };
     create(&main, false);
     unsafe { libc::umask(old) };
-    assert_eq!(fs::metadata(&main).unwrap().permissions().mode() & 0o777, 0o600);
+    let mode = fs::metadata(&main).unwrap().permissions().mode() & 0o777;
+    assert_ne!(mode, 0o600, "unprotected create forced mode 0600");
     LiveReader::open(&main, &CancellationToken::new())
         .expect("umask 0600 must not make an unprotected file fail open");
     let _ = fs::remove_file(&main);

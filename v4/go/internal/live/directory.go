@@ -113,12 +113,19 @@ func (d *Directory) Entry(name string) (Entry, bool, error) {
 // O_NOFOLLOW and 0600). EEXIST is the Exists class; an overlong name
 // fails the name_max proof as InvalidName before any syscall.
 func (d *Directory) Create(name string) (*os.File, error) {
+	return d.CreateMode(name, security.CreatorMode)
+}
+
+// CreateMode is Create with an explicit permission. Creator-only callers
+// pass 0600 and then prove it. An unprotected live create passes 0666 so
+// the process umask applies. Close-on-exec stays either way.
+func (d *Directory) CreateMode(name string, mode uint32) (*os.File, error) {
 	if err := d.RequireNameLengths(name); err != nil {
 		return nil, err
 	}
 	fd, err := unix.Openat(int(d.file.Fd()), name,
 		unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
-		security.CreatorMode)
+		mode)
 	if err != nil {
 		if errors.Is(err, unix.EEXIST) {
 			return nil, nsExistsError()

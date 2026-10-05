@@ -337,10 +337,10 @@ fn live_creation_is_rejected_before_c_artifacts() {
                 length: tag.len() as u64,
             },
             1,
+            1,
             Cancellation::default(),
             &mut report,
             &mut error,
-            true,
         )
     };
 

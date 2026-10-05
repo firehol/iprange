@@ -73,6 +73,7 @@ static int create_direct(const char *path, iprange_v4_abi1_report **created)
               IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
               value_tag,
               4,
+              1,
               no_cancellation(),
               created,
               &error) == IPRANGE_V4_ABI1_STATUS_OK);

@@ -172,7 +172,27 @@ impl Directory {
         self.identity
     }
 
-    pub(crate) fn create(
+    pub(crate) fn create_unprotected(
+        &self,
+        name: &Name,
+    ) -> Result<File, NamespaceError> {
+        self.check_creator()?;
+        self.require_name_lengths(&[name])?;
+        let path = self.entry_path(name)?;
+        self.create_file(&path, None, true)
+    }
+
+    fn create_file(
+        &self,
+        path: &std::path::Path,
+        profile: Option<&security::Profile>,
+        write_through: bool,
+    ) -> Result<File, NamespaceError> {
+        let created = match profile {
+            Some(profile) => security::create_private(path, profile, write_through),
+            None => security::create_unprotected(path, write_through),
+        };
+        created.map_err(|error| match error {
         &self,
         name: &Name,
         profile: &security::Profile,
@@ -180,7 +200,7 @@ impl Directory {
         self.check_creator()?;
         self.require_name_lengths(&[name])?;
         let path = self.entry_path(name)?;
-        security::create_private(&path, profile, true).map_err(|error| match error {
+        self.create_file(&path, Some(profile), true)
             NamespaceError::IoAt { source, .. }
                 if source.raw_os_error()
                     == Some(windows_sys::Win32::Foundation::ERROR_FILE_EXISTS as i32) =>

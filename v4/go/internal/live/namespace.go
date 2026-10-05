@@ -145,7 +145,11 @@ func createPrivate(path string, creatorOnly bool, authority cleanupAuthority) (c
 	if err != nil {
 		return createdPrivate{}, cleanFailure(err)
 	}
-	f, err := dir.Create(name)
+	mode := uint32(0o666)
+	if creatorOnly {
+		mode = security.CreatorMode
+	}
+	f, err := dir.CreateMode(name, mode)
 	if err != nil {
 		return createdPrivate{}, cleanFailure(nsMap(err))
 	}

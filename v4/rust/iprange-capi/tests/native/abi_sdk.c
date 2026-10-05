@@ -196,6 +196,7 @@ static int create_direct(const char *path)
               IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
               bytes("last_seen"),
               1,
+              1,
               no_cancellation(),
               &report,
               &error) == IPRANGE_V4_ABI1_STATUS_OK);
@@ -222,6 +223,7 @@ static int create_history_destination(const char *path)
               IPRANGE_V4_ABI1_VALUE_KIND_MEMBERSHIP,
               IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
               bytes("history"),
+              1,
               1,
               no_cancellation(),
               &report,

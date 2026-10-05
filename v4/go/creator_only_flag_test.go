@@ -50,7 +50,7 @@ func TestCreatorOnlyFlagCreateCloseReopen(t *testing.T) {
 
 func TestUnprotectedCreateSkipsProofEvenAtMode0600(t *testing.T) {
 	requireLiveCreation(t)
-	old := unix.Umask(0o077)
+	old := unix.Umask(0)
 	defer unix.Umask(old)
 	dir := t.TempDir()
 	main := filepath.Join(dir, "plain.iprdb")
@@ -69,12 +69,15 @@ func TestUnprotectedCreateSkipsProofEvenAtMode0600(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("umask 0077 mode = %o, want 0600", info.Mode().Perm())
+	if info.Mode().Perm() == 0o600 {
+		t.Fatal("unprotected create forced mode 0600; umask 0 must not be overridden")
 	}
 	reader, err := OpenLiveReader(main, nil)
 	if err != nil {
 		t.Fatal("unprotected reopen checked the proof:", err)
 	}
 	reader.Close()
+	if _, err := OpenLiveReaderPolicy(main, nil, true); err == nil {
+		t.Fatal("require_creator_only accepted an unprotected file")
+	}
 }

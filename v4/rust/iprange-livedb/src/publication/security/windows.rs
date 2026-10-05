@@ -64,12 +64,32 @@ pub(crate) fn create_private(
     profile: &Profile,
     write_through: bool,
 ) -> Result<File, NamespaceError> {
+    create_new(path, Some(profile), write_through)
+}
+
+/// Create one exclusive file with the process default descriptor.
+/// Used when the live create flag is unset. No protected DACL is installed.
+pub(crate) fn create_unprotected(
+    path: &Path,
+    write_through: bool,
+) -> Result<File, NamespaceError> {
+    create_new(path, None, write_through)
+}
+
+fn create_new(
+    path: &Path,
+    profile: Option<&Profile>,
+    write_through: bool,
+) -> Result<File, NamespaceError> {
     let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
     if wide.contains(&0) {
         return Err(NamespaceError::InvalidName);
     }
     wide.push(0);
-    let descriptor = Descriptor::new(&profile.sid)?;
+    let descriptor = match profile {
+        Some(profile) => Some(Descriptor::new(&profile.sid)?),
+        None => None,
+    };
     let flags = FILE_ATTRIBUTE_NORMAL
         | FILE_FLAG_OPEN_REPARSE_POINT
         | if write_through {
@@ -82,7 +102,10 @@ pub(crate) fn create_private(
             wide.as_ptr(),
             FILE_ALL_ACCESS,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            &descriptor.attributes,
+            descriptor
+                .as_ref()
+                .map(|item| &item.attributes as *const _)
+                .unwrap_or(std::ptr::null()),
             CREATE_NEW,
             flags,
             null_mut(),

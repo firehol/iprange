@@ -195,6 +195,7 @@ int main(int argc, char **argv)
               IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
               value_tag,
               4,
+              1,
               no_cancellation(),
               &report,
               &error) == IPRANGE_V4_ABI1_STATUS_OK);

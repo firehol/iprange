@@ -57,6 +57,7 @@ static int create_membership(const char *path)
               IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
               value_tag,
               4,
+              1,
               no_cancellation(),
               &report,
               &error) == IPRANGE_V4_ABI1_STATUS_OK);
@@ -79,6 +80,7 @@ static int create_direct(const char *path, const char *tag)
               IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
               value_tag,
               4,
+              1,
               no_cancellation(),
               &report,
               &error) == IPRANGE_V4_ABI1_STATUS_OK);
@@ -424,6 +426,7 @@ static int exercise_direct_advanced(const char *path)
               IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
               value_tag,
               4,
+              1,
               no_cancellation(),
               &report,
               &error) == IPRANGE_V4_ABI1_STATUS_OK);

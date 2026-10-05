@@ -289,9 +289,8 @@ executable; the library does not search `PATH` or accept an environment
 override. This helper is an installation requirement, not a public ABI handle.
 
 `create_live` takes `structure_kind:u32` immediately after `value_kind`.
-The C entry does not yet take a creator-only byte. It passes protected
-to the SDK, which is the historical create. A caller-supplied byte is
-not part of this change. The
+The C entry takes `creator_only` as `uint8_t` after `reader_capacity`.
+Zero is unprotected. Any other value requests the proof. The
 scalar enrichment lookup takes reader, IP, `present:u8*`, typed-value output,
 and typed-error output. Its with-membership variant adds one
 `membership_view**` output, initialized to null. Structured scan and cursor use

@@ -102,7 +102,7 @@ int main(int argc, char **argv)
     CHECK(iprange_v4_abi1_create_live(
               path, IPRANGE_V4_ABI1_ADDRESS_FAMILY_IPV4,
               IPRANGE_V4_ABI1_VALUE_KIND_DIRECT,
-              IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE, tag, 1, cancellation, &report,
+              IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE, tag, 1, 1, cancellation, &report,
               &error) == IPRANGE_V4_ABI1_STATUS_OK);
     CHECK(report != NULL && error == NULL);
     CHECK(iprange_v4_abi1_report_destroy(report, &error) ==

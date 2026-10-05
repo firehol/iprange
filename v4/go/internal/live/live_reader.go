@@ -70,6 +70,14 @@ type LiveReader struct {
 // again. The gate is released before the reader returns; the slot is held
 // until Close. check, when non-nil, runs between every bounded step.
 func OpenLiveReader(path string, check func() error) (*LiveReader, error) {
+	return openLiveReader(path, check, false)
+}
+
+func OpenLiveReaderPolicy(path string, check func() error, requireCreatorOnly bool) (*LiveReader, error) {
+	return openLiveReader(path, check, requireCreatorOnly)
+}
+
+func openLiveReader(path string, check func() error, requireCreatorOnly bool) (*LiveReader, error) {
 	if err := checkpoint(check); err != nil {
 		return nil, err
 	}
@@ -122,6 +130,10 @@ func OpenLiveReader(path string, check func() error) (*LiveReader, error) {
 	sidecar, err := open(path, core.Meta().DatabaseID)
 	if err != nil {
 		return fail(err)
+	}
+	if requireCreatorOnly && sidecar.header.policy == policyUnprotected {
+		sidecar.Close()
+		return fail(&format.Error{Code: format.CodeInvalidArgument, Detail: "database was not created creator-only"})
 	}
 	if err := requireCreatorOnlyIfRecorded(path, sidecar); err != nil {
 		sidecar.Close()

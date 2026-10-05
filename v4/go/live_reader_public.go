@@ -47,7 +47,13 @@ type LiveReader struct {
 // converted by InitializeLive). cancellation, when non-nil, is checked
 // between every bounded step.
 func OpenLiveReader(path string, cancellation *CancellationToken) (*LiveReader, error) {
-	lr, err := live.OpenLiveReader(path, cancellation.check)
+	return OpenLiveReaderPolicy(path, cancellation, false)
+}
+
+// OpenLiveReaderPolicy is OpenLiveReader. requireCreatorOnly refuses a
+// file whose sidecar says the create flag was unset.
+func OpenLiveReaderPolicy(path string, cancellation *CancellationToken, requireCreatorOnly bool) (*LiveReader, error) {
+	lr, err := live.OpenLiveReaderPolicy(path, cancellation.check, requireCreatorOnly)
 	if err != nil {
 		return nil, publicError(err)
 	}

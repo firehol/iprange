@@ -123,6 +123,13 @@ impl Directory {
         self.create_with_mode(name, security::CREATOR_MODE)
     }
 
+    pub(crate) fn create_unprotected(
+        &self,
+        name: &Name,
+    ) -> Result<File, NamespaceError> {
+        self.create_with_mode(name, 0o666)
+    }
+
     pub(crate) fn create_with_mode(
         &self,
         name: &Name,
