@@ -119,6 +119,11 @@ func OpenLiveWriter(path string, budget writer.PageBudget, namespace func(clean 
 		core.Close()
 		return nil, err
 	}
+	if err := requireCreatorOnlyIfRecorded(path, sidecar); err != nil {
+		sidecar.Close()
+		core.Close()
+		return nil, err
+	}
 	fail := func(err error) (*LiveWriter, error) {
 		sidecar.Close()
 		core.Close()

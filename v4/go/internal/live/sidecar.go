@@ -12,6 +12,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/fault"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
 // Sidecar lock ranges (spec 15.2): the gate at offset 0, the
@@ -53,6 +54,24 @@ func reserve(main string, databaseID, sidecarID [16]byte, capacity uint32, creat
 		return nil, &privateCreationFailure{cause: err}
 	}
 	return reserveAt(path, databaseID, sidecarID, capacity, creatorOnly)
+}
+
+// requireCreatorOnlyIfRecorded checks the main file when the sidecar
+// says the proof applies. Unprotected skips it. The error class is the
+// live ownership class, matching Rust access_policy_error.
+func requireCreatorOnlyIfRecorded(path string, sidecar *Sidecar) error {
+	if sidecar.header.policy == policyUnprotected {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := security.CreatorOnlyCommitment(f); err != nil {
+		return liveSecurityError(err)
+	}
+	return nil
 }
 
 // reserveAt is reserve at an explicit path (Rust Sidecar::reserve_at).

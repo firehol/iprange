@@ -123,6 +123,10 @@ func OpenLiveReader(path string, check func() error) (*LiveReader, error) {
 	if err != nil {
 		return fail(err)
 	}
+	if err := requireCreatorOnlyIfRecorded(path, sidecar); err != nil {
+		sidecar.Close()
+		return fail(err)
+	}
 	fail = func(err error) (*LiveReader, error) {
 		sidecar.Close()
 		m.Close()
