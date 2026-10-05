@@ -25,7 +25,7 @@ pub(crate) const MAIN_LIFETIME_LOCK: u64 = 1u64 << 44;
 
 #[cfg(any(unix, windows))]
 pub(crate) use header::has_selectable_header;
-pub(crate) use header::{read_header, Header, State};
+pub(crate) use header::{read_header, Header, Policy, State};
 use header::{read_header_mapping, sidecar_length, write_header_mapping};
 
 #[derive(Debug)]
@@ -100,6 +100,10 @@ impl Sidecar {
                 capacity,
                 database_id,
                 sidecar_id,
+                // The create flag is not threaded yet. Until it is, every
+                // new sidecar records the historical mandatory proof so
+                // open keeps checking files this function just created.
+                policy: Policy::Protected,
             },
             identity: created.identity,
             mapping: Mutex::new(None),
