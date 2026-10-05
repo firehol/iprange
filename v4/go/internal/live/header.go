@@ -21,6 +21,9 @@ const (
 	slotSizeOff     = 10
 	stateOff        = 12
 	capacityOff     = 16
+	policyGenOff    = 20
+	policyOff       = 22
+	policyTailOff   = 23
 	databaseIDOff   = 32
 	sidecarIDOff    = 48
 	headerCRCOff    = 64
@@ -37,11 +40,23 @@ const (
 	stateReady
 )
 
+// policy is the create-flag record (Rust live_sidecar Policy).
+// Legacy is a sidecar written before the flag existed. Unprotected
+// skips the creator-only proof even when umask produced mode 0600.
+type policy uint8
+
+const (
+	policyLegacy policy = iota
+	policyUnprotected
+	policyProtected
+)
+
 // header is the decoded sidecar header (Rust live_sidecar Header).
 type header struct {
 	capacity   uint32
 	databaseID [16]byte
 	sidecarID  [16]byte
+	policy     policy
 }
 
 // sidecarLength is the exact sidecar file length: one header page plus
@@ -69,6 +84,7 @@ func writeHeaderMapping(page []byte, h header, state sidecarState) error {
 	format.PutU16(page[slotSizeOff:], slotSize)
 	format.PutU32(page[stateOff:], uint32(state))
 	format.PutU32(page[capacityOff:], h.capacity)
+	encodePolicy(page, h.policy)
 	copy(page[databaseIDOff:], h.databaseID[:])
 	copy(page[sidecarIDOff:], h.sidecarID[:])
 	crc, ok := format.CRC32CWithZeroed(page, headerCRCOff, headerCRCLen)
@@ -93,6 +109,11 @@ func readHeaderMapping(page []byte) (sidecarState, header, error) {
 	h.capacity = format.U32(page[capacityOff:])
 	copy(h.databaseID[:], page[databaseIDOff:databaseIDOff+16])
 	copy(h.sidecarID[:], page[sidecarIDOff:sidecarIDOff+16])
+	decoded, err := decodePolicy(page)
+	if err != nil {
+		return 0, header{}, err
+	}
+	h.policy = decoded
 	if h.databaseID == [16]byte{} || h.sidecarID == [16]byte{} {
 		return 0, header{}, &format.Error{Code: format.CodeFormatInvalid, Detail: "reader table identity is invalid"}
 	}
@@ -180,10 +201,46 @@ func headerShapeValid(page []byte) bool {
 	if format.U32(page[capacityOff:]) == 0 {
 		return false
 	}
-	if !allZero(page, capacityOff+4, databaseIDOff-capacityOff-4) {
+	if !policySpanCanonical(page) {
 		return false
 	}
 	return allZero(page, headerSize, sidecarPageSize-headerSize)
+}
+
+func encodePolicy(page []byte, value policy) {
+	switch value {
+	case policyUnprotected:
+		format.PutU16(page[policyGenOff:], 1)
+		page[policyOff] = 0
+	case policyProtected:
+		format.PutU16(page[policyGenOff:], 1)
+		page[policyOff] = 1
+	default:
+		format.PutU16(page[policyGenOff:], 0)
+		page[policyOff] = 0
+	}
+}
+
+func decodePolicy(page []byte) (policy, error) {
+	generation := format.U16(page[policyGenOff:])
+	switch {
+	case generation == 0 && page[policyOff] == 0:
+		return policyLegacy, nil
+	case generation == 1 && page[policyOff] == 0:
+		return policyUnprotected, nil
+	case generation == 1 && page[policyOff] == 1:
+		return policyProtected, nil
+	default:
+		return 0, &format.Error{Code: format.CodeFormatInvalid, Detail: "reader table protection policy is invalid"}
+	}
+}
+
+func policySpanCanonical(page []byte) bool {
+	if !allZero(page, policyTailOff, databaseIDOff-policyTailOff) {
+		return false
+	}
+	_, err := decodePolicy(page)
+	return err == nil
 }
 
 func headerChecksumValid(page []byte) bool {
