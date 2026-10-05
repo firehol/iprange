@@ -78,7 +78,8 @@ fn create(path: &Path, capacity: u32) {
         ValueTag::FIRST_SEEN,
         capacity,
         &crate::CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     assert_eq!(result.state, CreationState::Created);
 }
@@ -348,7 +349,8 @@ fn crash_child() {
                 ValueTag::FIRST_SEEN,
                 1,
                 &crate::CancellationToken::new(),
-            , true);
+                true,
+            );
         }
         "commit" => {
             let mut writer =

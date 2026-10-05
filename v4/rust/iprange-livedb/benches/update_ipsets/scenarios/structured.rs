@@ -458,7 +458,7 @@ fn create_structured(label: &str) -> Result<TestDatabase, String> {
         ValueTag::new(b"enrichment").ok_or_else(|| "invalid enrichment tag".to_owned())?,
         1,
         &CancellationToken::new(),
-    , true)
+        )
     .map_err(display)?;
     Ok(database)
 }
@@ -505,7 +505,7 @@ fn populated_threat(label: &str, size: usize, feeds: usize) -> Result<TestDataba
         ValueTag::new(b"threat").ok_or_else(|| "invalid threat tag".to_owned())?,
         1,
         &CancellationToken::new(),
-    , true)
+        )
     .map_err(display)?;
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(

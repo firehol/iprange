@@ -82,7 +82,8 @@ fn create_membership(path: &FsPath, feeds: &[(&str, &[(u32, u32)])]) {
         ValueTag::new(b"feeds").unwrap(),
         1,
         &cancellation,
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(path, transaction_budget(), &cancellation).unwrap();
     for &(name, ranges) in feeds {

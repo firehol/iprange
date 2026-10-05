@@ -644,7 +644,8 @@ fn populated_direct(files: TestFiles) -> TestFiles {
         ValueTag::new(b"timestamp").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer =
         LiveWriter::open(&files.live, transaction_budget(), &CancellationToken::new()).unwrap();
@@ -669,7 +670,8 @@ fn populated_membership(files: TestFiles) -> TestFiles {
         ValueTag::new(b"membership").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer =
         LiveWriter::open(&files.live, transaction_budget(), &CancellationToken::new()).unwrap();
@@ -704,7 +706,8 @@ fn populated_large_direct(files: TestFiles, count: u32) -> TestFiles {
         ValueTag::new(b"timestamp").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let ranges: Vec<_> = (0..count)
         .map(|index| DirectRange {

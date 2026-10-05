@@ -118,7 +118,8 @@ fn randomized_import_matches_named_feed_union_and_exact_report() {
             ValueTag::new(b"membership").unwrap(),
             4,
             &CancellationToken::new(),
-        , true)
+                true,
+            )
         .unwrap();
     }
 
@@ -260,7 +261,8 @@ fn import_translates_sparse_feed_indexes_across_bitmap_words() {
             ValueTag::new(b"membership").unwrap(),
             4,
             &CancellationToken::new(),
-        , true)
+                true,
+            )
         .unwrap();
     }
 

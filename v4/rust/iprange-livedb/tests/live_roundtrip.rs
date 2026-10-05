@@ -63,7 +63,8 @@ fn creation_failure_before_artifacts_is_reported_without_residue() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     assert_eq!(result.state, CreationState::NotCreated);
     assert!(!result.residue_possible);
@@ -82,7 +83,8 @@ fn live_generations_are_atomic_and_old_readers_stay_pinned() {
         ValueTag::new(b"asn").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     assert_eq!(created.state, CreationState::Created);
     assert!(!created.residue_possible);
@@ -135,7 +137,8 @@ fn abort_and_noop_never_publish_a_generation() {
         ValueTag::new(b"").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
 
@@ -171,7 +174,8 @@ fn full_ipv6_space_round_trips_without_endpoint_overflow() {
         ValueTag::new(b"geo").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
@@ -206,7 +210,8 @@ fn reclamation_waits_for_old_readers_then_auto_publishes() {
         ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
@@ -263,7 +268,8 @@ fn safe_reclaimed_pages_are_reused_while_a_newer_reader_is_pinned() {
         ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &cancellation).unwrap();
@@ -324,7 +330,8 @@ fn failed_reclamation_discards_its_complete_private_draft() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
@@ -372,7 +379,8 @@ fn cancelled_reclamation_leaves_the_committed_generation_unchanged() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let token = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &token).unwrap();
@@ -409,7 +417,8 @@ fn metadata_is_atomic_exact_and_visible_to_the_staging_writer() {
         ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut old = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(old.metadata_json_len().unwrap(), None);
@@ -470,7 +479,8 @@ fn equal_replacement_and_clear_have_the_exact_generation_semantics() {
         ValueTag::new(b"asn").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
@@ -539,7 +549,8 @@ fn metadata_resource_failure_aborts_all_earlier_draft_changes() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut tiny = budget();
     tiny.max_heap_bytes = 1;

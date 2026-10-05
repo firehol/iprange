@@ -96,7 +96,8 @@ pub fn database_create(state: &mut SessionState, params: Value) -> Result<Value,
         value_tag,
         reader_capacity,
         &state.token(),
-    , true)
+            true,
+        )
     .map_err(|error| sdk_error(&error, "not_started"))?;
     if result.state != CreationState::Created {
         result = resolve_create_live(
@@ -1120,7 +1121,8 @@ mod tests {
             ValueTag::new(b"tag").unwrap(),
             7,
             &iprange_livedb::CancellationToken::new(),
-        , true)
+                true,
+            )
         .unwrap();
         let value = create_result(&result).unwrap();
         assert_eq!(value["state"], "created");

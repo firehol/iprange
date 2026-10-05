@@ -87,7 +87,8 @@ fn rename_and_delete_preserve_other_feeds_and_reuse_the_committed_index() {
         ValueTag::new(b"membership").unwrap(),
         4,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     {
@@ -233,7 +234,8 @@ fn lifecycle_preconditions_and_precancellation_leave_the_writer_clean() {
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     commit_created_feed(&mut writer, "alpha");
@@ -285,7 +287,8 @@ fn lifecycle_failure_or_dropped_handle_cannot_publish_partial_state() {
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     commit_created_feed(&mut writer, "alpha");
@@ -358,7 +361,8 @@ fn deleting_a_full_ipv6_feed_handles_the_complete_address_space() {
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
@@ -408,7 +412,8 @@ fn direct_database_rejects_named_feed_lifecycle_operations() {
         ValueTag::new(b"timestamp").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();

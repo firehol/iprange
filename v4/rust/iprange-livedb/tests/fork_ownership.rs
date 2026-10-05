@@ -74,7 +74,8 @@ fn inherited_live_handles_are_rejected_child() {
         ValueTag::new(b"membership").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
 
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();

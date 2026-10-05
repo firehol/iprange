@@ -65,7 +65,8 @@ fn membership_algebra_commits_canonical_ranges_and_reclaims_unused_values() {
         ValueTag::new(b"membership").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
 

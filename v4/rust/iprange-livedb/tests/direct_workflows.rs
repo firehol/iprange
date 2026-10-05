@@ -103,7 +103,8 @@ fn direct_replacement_preserves_order_reports_exactly_and_retires_old_tree() {
         ValueTag::new(b"asn").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
@@ -204,7 +205,8 @@ fn first_seen_refresh_keeps_old_values_removes_missing_and_marks_reappearance_ne
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
@@ -295,7 +297,8 @@ fn first_seen_removal_sink_is_batched_exact_and_atomic() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &cancellation).unwrap();
@@ -356,7 +359,8 @@ fn last_seen_refresh_updates_current_retains_recent_absence_and_expires_cutoff()
         ValueTag::LAST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &cancellation).unwrap();
@@ -426,7 +430,8 @@ fn timestamp_refresh_requires_its_exact_direct_semantic() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&first.main, budget(), &cancellation).unwrap();
@@ -445,7 +450,8 @@ fn timestamp_refresh_requires_its_exact_direct_semantic() {
         ValueTag::LAST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&last.main, budget(), &cancellation).unwrap();
     assert!(matches!(
@@ -466,7 +472,8 @@ fn first_seen_merge_reuses_coverage_page_before_expanding_it() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let old: Vec<_> = (0..100)
@@ -546,7 +553,8 @@ fn first_seen_finish_cancellation_discards_the_complete_refresh() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let seed_cancellation = CancellationToken::new();
@@ -588,7 +596,8 @@ fn unfinished_source_failure_and_cancellation_cannot_publish_partial_input() {
         ValueTag::new(b"direct").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
@@ -694,7 +703,8 @@ fn full_ipv6_first_seen_report_is_exact() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
@@ -733,7 +743,8 @@ fn empty_input_retires_and_reclaims_a_multilevel_range_tree() {
         ValueTag::new(b"direct").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
@@ -804,7 +815,8 @@ fn reclaim_refuses_an_open_draft_and_a_zero_page_limit() {
         ValueTag::new(b"direct").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();

@@ -67,7 +67,8 @@ fn create(path: &Path, family: AddressFamily, kind: ValueKind, tag: ValueTag) {
         tag,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
 }
 

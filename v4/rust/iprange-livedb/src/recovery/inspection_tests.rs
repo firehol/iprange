@@ -89,7 +89,8 @@ fn create_source(label: &str) -> TestFile {
         ValueTag::FIRST_SEEN,
         2,
         &crate::CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     source
 }

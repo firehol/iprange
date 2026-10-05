@@ -68,7 +68,8 @@ fn create(pair: &TestPair, reader_capacity: u32) {
         direct_tag(),
         reader_capacity,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
 }
 

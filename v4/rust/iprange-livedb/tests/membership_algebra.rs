@@ -75,7 +75,8 @@ fn create_membership(path: &Path) {
         ValueTag::new(b"feeds").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
 }
 

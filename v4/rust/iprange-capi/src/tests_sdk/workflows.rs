@@ -133,7 +133,8 @@ fn c_history_projection_prepares_exact_windows_for_normal_commit() {
         ValueTag::new(b"history").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
 
     let budget = TransactionBudget {
@@ -270,7 +271,8 @@ fn create_last_seen(path: &std::path::Path) {
         ValueTag::LAST_SEEN,
         1,
         &cancellation,
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(path, transaction_budget(), &cancellation).unwrap();
     let mut replacement = writer.begin_direct_replacement(&cancellation).unwrap();

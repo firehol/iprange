@@ -66,7 +66,8 @@ fn create_membership(files: &TestPair, family: AddressFamily, tag: &[u8]) {
         ValueTag::new(tag).unwrap(),
         4,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     assert_eq!(result.state, iprange_livedb::CreationState::Created);
 }
@@ -466,7 +467,8 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
             ValueTag::new(tag).unwrap(),
             4,
             &CancellationToken::new(),
-        , true)
+                true,
+            )
         .unwrap();
         let mut incompatible =
             LiveReader::open(&incompatible_files.main, &CancellationToken::new()).unwrap();

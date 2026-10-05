@@ -203,7 +203,8 @@ fn exported_direct_workflow_round_trips_through_c_shapes() {
         ValueTag::new(b"asn").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
 
     let budget = TransactionBudget {
@@ -339,6 +340,7 @@ fn live_creation_is_rejected_before_c_artifacts() {
             Cancellation::default(),
             &mut report,
             &mut error,
+            true,
         )
     };
 
@@ -363,7 +365,8 @@ fn reader_close_failure_keeps_the_c_handle_retryable() {
         ValueTag::new(b"asn").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
 
     let mut reader = std::ptr::null_mut();
@@ -499,7 +502,8 @@ fn callbacks_cannot_reenter_the_same_writer() {
         ValueTag::new(b"asn").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let budget = TransactionBudget {
         abi_version: 1,

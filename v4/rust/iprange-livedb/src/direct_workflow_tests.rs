@@ -52,7 +52,8 @@ fn slice_ingestion_and_finish_allocate_nothing_per_record() {
         ValueTag::new(b"direct").unwrap(),
         1,
         &crate::CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let budget = TransactionBudget {
         max_heap_bytes: 1,
@@ -112,7 +113,8 @@ fn first_seen_ingestion_and_merge_allocate_nothing_per_record() {
         ValueTag::FIRST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let budget = TransactionBudget {
         max_heap_bytes: 1,
@@ -182,7 +184,8 @@ fn last_seen_ingestion_and_merge_allocate_nothing_per_record() {
         ValueTag::LAST_SEEN,
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let budget = TransactionBudget {
         max_heap_bytes: 1,
@@ -251,7 +254,8 @@ fn reclamation_counts_each_released_page_once() {
         ValueTag::new(b"direct").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let budget = TransactionBudget {
         max_heap_bytes: 1,

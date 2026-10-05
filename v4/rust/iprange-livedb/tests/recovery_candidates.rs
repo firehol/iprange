@@ -103,7 +103,8 @@ fn live_inspection_checks_cancellation_across_reader_capacity() {
         ValueTag::FIRST_SEEN,
         64,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let sidecar = sidecar_path(&paths.live);
     let before = fs::read(&sidecar).unwrap();
@@ -287,7 +288,8 @@ fn populated(paths: Paths) -> Paths {
         ValueTag::FIRST_SEEN,
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer =
         LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();

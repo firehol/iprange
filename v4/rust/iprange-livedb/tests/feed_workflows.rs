@@ -82,7 +82,8 @@ fn create_feed_normalizes_reports_and_exposes_ordered_projection() {
         ValueTag::new(b"membership").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
@@ -173,7 +174,8 @@ fn replace_feed_preserves_other_feeds_reports_and_detects_no_change() {
         ValueTag::new(b"membership").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     {
@@ -323,7 +325,8 @@ fn feed_input_failures_and_cancellation_abort_the_complete_workflow() {
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
@@ -404,7 +407,8 @@ fn full_ipv6_feed_cardinality_is_exact() {
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();

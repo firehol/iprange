@@ -68,7 +68,8 @@ fn randomized_feed_replacement_matches_scalar_sets_and_preserves_other_feed() {
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();

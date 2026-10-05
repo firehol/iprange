@@ -306,7 +306,8 @@ fn populated_direct(files: TestFiles, reader_capacity: u32) -> TestFiles {
         ValueTag::FIRST_SEEN,
         reader_capacity,
         &CancellationToken::new(),
-    , true)
+        true,
+    )
     .unwrap();
     let mut writer =
         LiveWriter::open(&files.live, transaction_budget(), &CancellationToken::new()).unwrap();
@@ -327,7 +328,8 @@ fn populated_membership(files: TestFiles) -> TestFiles {
         ValueTag::new(b"membership").unwrap(),
         2,
         &CancellationToken::new(),
-    , true)
+        true,
+    )
     .unwrap();
     let mut writer =
         LiveWriter::open(&files.live, transaction_budget(), &CancellationToken::new()).unwrap();

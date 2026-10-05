@@ -408,7 +408,8 @@ fn create_membership(path: &Path, blocks: u32, names: [&str; 2], shifted: bool) 
         ValueTag::new(b"feeds").unwrap(),
         1,
         &cancellation,
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer = LiveWriter::open(path, transaction_budget(), &cancellation).unwrap();
     let first = (0..blocks)
@@ -444,7 +445,8 @@ fn create_uniform_membership(path: &Path, blocks: u32, name: &str, shift: u32) {
         ValueTag::new(b"feeds").unwrap(),
         1,
         &cancellation,
-    , true)
+            true,
+        )
     .unwrap();
     let ranges = (0..blocks)
         .map(|index| AddressRange {
@@ -480,7 +482,8 @@ fn create_direct(path: &Path, blocks: u32) {
         ValueTag::new(b"provider").unwrap(),
         1,
         &cancellation,
-    , true)
+            true,
+        )
     .unwrap();
     let ranges = (0..blocks)
         .flat_map(|index| {

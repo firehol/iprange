@@ -76,7 +76,8 @@ fn randomized_point_and_pair_queries_match_a_scalar_model() {
             ValueTag::new(b"feeds").unwrap(),
             1,
             &cancellation,
-        , true)
+                true,
+            )
         .unwrap();
         let mut writer = LiveWriter::open(&file.0, transaction_budget(), &cancellation).unwrap();
         for (index, values) in model.iter().enumerate() {

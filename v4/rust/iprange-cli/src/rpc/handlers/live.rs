@@ -2085,7 +2085,8 @@ mod tests {
             ValueTag::new(b"membership").unwrap(),
             1,
             &CancellationToken::new(),
-        , true)
+                true,
+            )
         .unwrap();
         let token = CancellationToken::new();
         let budget = iprange_livedb::TransactionBudget {
@@ -2156,7 +2157,8 @@ mod tests {
             ValueTag::FIRST_SEEN,
             1,
             &CancellationToken::new(),
-        , true)
+                true,
+            )
         .unwrap();
         path
     }
@@ -2224,7 +2226,8 @@ mod tests {
             ValueTag::LAST_SEEN,
             1,
             &CancellationToken::new(),
-        , true)
+                true,
+            )
         .unwrap();
         let mut state = SessionState::default();
         let params = serde_json::json!({
@@ -2631,7 +2634,8 @@ mod csv_open_caller_tests {
             ValueTag::new(b"direct").unwrap(),
             1,
             &iprange_livedb::CancellationToken::new(),
-        , true)
+                true,
+            )
         .expect("create the live direct database for the CSV arm pin");
         path
     }

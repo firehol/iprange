@@ -48,7 +48,8 @@ fn generate(scratch: &Path, output: &Path, fixture: &Fixture) {
         ValueTag::new(fixture.tag.as_bytes()).expect("manifest value tag is valid"),
         4,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer =
         LiveWriter::open(&live, transaction_budget(), &CancellationToken::new()).unwrap();

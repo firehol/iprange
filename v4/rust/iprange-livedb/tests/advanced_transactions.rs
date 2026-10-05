@@ -61,7 +61,8 @@ fn create(files: &TestPair) {
         ValueTag::new(b"asn").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
 }
 
@@ -129,7 +130,8 @@ fn stored_cancellation_aborts_the_complete_membership_draft() {
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let token = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
@@ -197,7 +199,8 @@ fn commit_checks_cancellation_across_reader_capacity() {
         ValueTag::new(b"asn").unwrap(),
         64,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let polls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&polls);

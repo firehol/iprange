@@ -52,7 +52,8 @@ fn slice_ingestion_and_feed_comparison_allocate_nothing_per_record() {
         ValueTag::new(b"membership").unwrap(),
         1,
         &crate::CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let mut writer =
         LiveWriter::open(&files.main, budget(), &crate::CancellationToken::new()).unwrap();
@@ -117,7 +118,8 @@ fn second_feed_aggregates_alternating_membership_deltas() {
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let ranges: Vec<_> = (0..1_000)
         .map(|index| AddressRange {
@@ -171,7 +173,8 @@ fn exact_feed_workflows_lookup_each_name_once() {
         ValueTag::new(b"membership").unwrap(),
         1,
         &CancellationToken::new(),
-    , true)
+            true,
+        )
     .unwrap();
     let cancellation = CancellationToken::new();
     let name = FeedName::new("feed").unwrap();
