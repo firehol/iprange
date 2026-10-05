@@ -828,12 +828,17 @@ fn metadata_result(
                 .ok_or_else(|| invalid("delivery.max_open_files must be u32"))?;
             match reader.metadata_json().map_err(read_error)? {
                 Some(bytes) => {
-                    let facts = output::metadata_output(
+                    let facts = output::metadata_output_following(
                         Path::new(path),
                         &bytes,
                         policy,
                         max_output_bytes,
                         max_open_files,
+                        source_identities
+                            .map(|identity| {
+                                crate::io::export_writer::source_is_creator_only(&identity.main.path)
+                            })
+                            .unwrap_or(true),
                     )?;
                     bounded_result(json!({
                         "method": method,

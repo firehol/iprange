@@ -14,6 +14,7 @@ import (
 	"os"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
+	"github.com/firehol/iprange/v4/go/internal/cli/fileio"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 )
 
@@ -484,7 +485,7 @@ func deliverMetadata(method string, reader *rpc.ReaderValue, delivery rawObject)
 		if !present {
 			return boundedResult(map[string]any{"method": method, "present": false})
 		}
-		facts, ferr := MetadataOutput(path, bytes, policy, maxBytes, uint32(maxFiles))
+		facts, ferr := MetadataOutputFollowing(path, bytes, policy, maxBytes, uint32(maxFiles), fileio.SourceIsCreatorOnly(reader.Path))
 		if ferr != nil {
 			return nil, ferr
 		}

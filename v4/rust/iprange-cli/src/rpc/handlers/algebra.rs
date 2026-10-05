@@ -418,7 +418,12 @@ pub fn query_cardinalities(state: &mut SessionState, params: Value) -> Result<Va
     let spec = decode_output(&object["output"])?;
     let mut reader = open_temporary(&path, &mode, state)?;
     let result = (|| -> Result<Value, HandlerError> {
-        let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
+        let mut writer = ExportWriter::create_following(
+            &spec.path,
+            spec.policy,
+            &spec.budget,
+            crate::io::export_writer::source_is_creator_only(Path::new(&path)),
+        )?;
         if !spec.jsonl {
             writer.write_chunk(b"feed,addresses\n", 0, 0)?;
         }
@@ -468,7 +473,12 @@ pub fn query_overlaps(state: &mut SessionState, params: Value) -> Result<Value, 
     let spec = decode_output(&object["output"])?;
     let mut reader = open_temporary(&path, &mode, state)?;
     let result = (|| -> Result<Value, HandlerError> {
-        let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
+        let mut writer = ExportWriter::create_following(
+            &spec.path,
+            spec.policy,
+            &spec.budget,
+            crate::io::export_writer::source_is_creator_only(Path::new(&path)),
+        )?;
         if !spec.jsonl {
             writer.write_chunk(b"left,right,addresses\n", 0, 0)?;
         }
@@ -520,7 +530,12 @@ pub fn query_matching_feeds(state: &mut SessionState, params: Value) -> Result<V
     let spec = decode_output(&object["output"])?;
     let mut reader = open_temporary(&path, &mode, state)?;
     let result = (|| -> Result<Value, HandlerError> {
-        let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
+        let mut writer = ExportWriter::create_following(
+            &spec.path,
+            spec.policy,
+            &spec.budget,
+            crate::io::export_writer::source_is_creator_only(Path::new(&path)),
+        )?;
         if !spec.jsonl {
             writer.write_chunk(b"address,feeds\n", 0, 0)?;
         }
@@ -628,7 +643,13 @@ pub fn join_direct(state: &mut SessionState, params: Value) -> Result<Value, Han
         }
     };
     let result = (|| -> Result<Value, HandlerError> {
-        let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
+        let mut writer = ExportWriter::create_following(
+            &spec.path,
+            spec.policy,
+            &spec.budget,
+            crate::io::export_writer::source_is_creator_only(Path::new(&membership_path))
+                || crate::io::export_writer::source_is_creator_only(Path::new(&direct_path)),
+        )?;
         if !spec.jsonl {
             writer.write_chunk(b"feed,direct_value,addresses\n", 0, 0)?;
         }
@@ -701,7 +722,13 @@ pub fn join_membership(state: &mut SessionState, params: Value) -> Result<Value,
     let result = (|| -> Result<Value, HandlerError> {
         let left_scope = resolve_scope(&left_reader, &left_selection, left_budget, state)?;
         let right_scope = resolve_scope(&right_reader, &right_selection, right_budget, state)?;
-        let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
+        let mut writer = ExportWriter::create_following(
+            &spec.path,
+            spec.policy,
+            &spec.budget,
+            crate::io::export_writer::source_is_creator_only(Path::new(&left_path))
+                || crate::io::export_writer::source_is_creator_only(Path::new(&right_path)),
+        )?;
         if !spec.jsonl {
             writer.write_chunk(b"kind,left,right,side,feed,addresses\n", 0, 0)?;
         }

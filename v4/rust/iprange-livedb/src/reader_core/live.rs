@@ -44,6 +44,10 @@ pub(crate) struct LiveReaderCore {
 }
 
 impl LiveReaderCore {
+    pub(crate) fn sidecar_requires_creator_only(&self) -> bool {
+        self.sidecar.requires_creator_only()
+    }
+
     pub(crate) fn open(path: &Path, cancellation: &CancellationToken) -> Result<Self> {
         live_lock::require_live_supported()?;
         cancellation.check()?;

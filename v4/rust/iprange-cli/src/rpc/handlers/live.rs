@@ -676,7 +676,11 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
         // is open; a failure must still close the source reader and
         // the writer and report both factual close results with the
         // error.
-        Some(settings) => match RemovalCollector::new(settings, refresh_value) {
+        Some(settings) => match RemovalCollector::new(
+            settings,
+            refresh_value,
+            crate::io::export_writer::source_is_creator_only(Path::new(&source_path)),
+        ) {
             Ok(collector) => Some(collector),
             Err(error) => return Err(close_refresh_facts(&mut reader, &mut writer, error)),
         },
@@ -1647,7 +1651,11 @@ struct RemovalCollector {
 }
 
 impl RemovalCollector {
-    fn new(settings: RemovalsSettings, refresh_value: u32) -> Result<Self, HandlerError> {
+    fn new(
+        settings: RemovalsSettings,
+        refresh_value: u32,
+        creator_only: bool,
+    ) -> Result<Self, HandlerError> {
         if settings.max_open_files < 1 {
             return Err(HandlerError::new(
                 "invalid_argument",
@@ -1691,7 +1699,7 @@ impl RemovalCollector {
             .create_new(true)
             .open(&temporary)
             .map_err(|error| file_error(error, "create removal output"))?;
-        crate::io::export_writer::apply_output_mode(&file, false)?;
+        crate::io::export_writer::apply_output_mode(&file, creator_only)?;
         Ok(Self {
             file: BufWriter::with_capacity(64 * 1024, file),
             temporary,
@@ -2530,7 +2538,7 @@ mod tests {
                 },
             }))
             .expect("valid removals settings");
-            let mut collector = RemovalCollector::new(settings, 84).expect("create the collector");
+            let mut collector = RemovalCollector::new(settings, 84, false).expect("create the collector");
             collector
                 .write_line("{\"feed\":\"coverage\"}")
                 .expect("write one removal row");

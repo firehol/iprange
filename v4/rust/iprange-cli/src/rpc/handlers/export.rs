@@ -329,11 +329,15 @@ fn export_with_reader(
         budget,
     )?;
     let cancellation = state.token();
+    let creator_only = crate::io::export_writer::source_is_creator_only(Path::new(
+        object["source"]["path"].as_str().expect("validator checked source.path"),
+    ));
     let facts = match format {
         "legacy_binary" => write_legacy_binary(
             destination,
             policy,
             budget,
+            creator_only,
             reader,
             view,
             host_prefix,
@@ -343,6 +347,7 @@ fn export_with_reader(
             destination,
             policy,
             budget,
+            creator_only,
             reader,
             view,
             host_prefix,
@@ -355,6 +360,7 @@ fn export_with_reader(
                 destination,
                 policy,
                 budget,
+                creator_only,
                 reader,
                 view,
                 &mut |writer, from, to| {
@@ -371,6 +377,7 @@ fn export_with_reader(
                 destination,
                 policy,
                 budget,
+                creator_only,
                 reader,
                 view,
                 &mut |writer, from, to| {
@@ -387,6 +394,7 @@ fn export_with_reader(
                 destination,
                 policy,
                 budget,
+                creator_only,
                 reader,
                 view,
                 &mut |writer, from, to| {
@@ -409,11 +417,17 @@ fn write_streamed(
     destination: &Path,
     policy: PublicationPolicy,
     budget: &ExportBudget,
+    creator_only: bool,
     reader: &ReaderValue,
     view: &ExportView,
     format: &mut dyn FnMut(&mut ExportWriter, u128, u128) -> Result<(), HandlerError>,
 ) -> Result<ExportFacts, HandlerError> {
-    let mut writer = ExportWriter::create(destination, policy, budget)?;
+    let mut writer = ExportWriter::create_following(
+        destination,
+        policy,
+        budget,
+        creator_only,
+    )?;
     let work = stream_coverage(reader, view, &mut |from, to| format(&mut writer, from, to));
     work.and_then(|()| writer.finish())
 }
@@ -424,13 +438,19 @@ fn write_rows(
     destination: &Path,
     policy: PublicationPolicy,
     budget: &ExportBudget,
+    creator_only: bool,
     reader: &ReaderValue,
     view: &ExportView,
     host_prefix: u32,
     cancellation: &CancellationToken,
     jsonl: bool,
 ) -> Result<ExportFacts, HandlerError> {
-    let mut writer = ExportWriter::create(destination, policy, budget)?;
+    let mut writer = ExportWriter::create_following(
+        destination,
+        policy,
+        budget,
+        creator_only,
+    )?;
     let result = (|| -> Result<(), HandlerError> {
         if !jsonl {
             writer.write_chunk(b"from,to,value\n", 0, Cardinality129::ZERO)?;
@@ -590,6 +610,7 @@ fn write_legacy_binary(
     destination: &Path,
     policy: PublicationPolicy,
     budget: &ExportBudget,
+    creator_only: bool,
     reader: &ReaderValue,
     view: &ExportView,
     host_prefix: u32,
@@ -638,7 +659,7 @@ fn write_legacy_binary(
     if records == 0 {
         // The released writer emits nothing for an empty set; the
         // destination is still atomically published as an empty file.
-        return ExportWriter::create(destination, policy, budget)?.finish();
+        return ExportWriter::create_following(destination, policy, budget, creator_only)?.finish();
     }
     // The released header parses `unique ips` into a uint128 for IPv6
     // (src/ipset6_binary.c), so the 2^128 addresses of a full IPv6
@@ -664,7 +685,12 @@ fn write_legacy_binary(
             ),
         ));
     }
-    let mut writer = ExportWriter::create(destination, policy, budget)?;
+    let mut writer = ExportWriter::create_following(
+        destination,
+        policy,
+        budget,
+        creator_only,
+    )?;
     let result = (|| -> Result<(), HandlerError> {
         writer.write_chunk(header.as_bytes(), 0, Cardinality129::ZERO)?;
         writer

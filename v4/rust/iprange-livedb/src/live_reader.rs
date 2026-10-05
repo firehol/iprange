@@ -55,6 +55,11 @@ impl LiveReader {
     }
 
     /// Identity and counters from this reader's pinned generation.
+    /// True when this database was created creator-only, or predates the flag.
+    pub fn creator_only(&self) -> bool {
+        self.core.sidecar_requires_creator_only()
+    }
+
     pub fn info(&self) -> Result<DatabaseInfo> {
         self.core.info()
     }

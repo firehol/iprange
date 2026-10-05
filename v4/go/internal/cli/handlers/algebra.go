@@ -1763,15 +1763,15 @@ func QueryCardinalities(st *rpc.SessionState, params json.RawMessage) (any, *rpc
 	if herr != nil {
 		return nil, herr
 	}
-	report, herr := runQueryCardinalities(st, reader, selection, budget, spec)
+	report, herr := runQueryCardinalities(st, reader, source.path, selection, budget, spec)
 	if herr != nil {
 		return nil, CloseOnError([]*rpc.ReaderValue{reader}, herr)
 	}
 	return closeSingleReader(reader, report)
 }
 
-func runQueryCardinalities(st *rpc.SessionState, reader *rpc.ReaderValue, selection *decodedSelection, budget iprangedb.MembershipQueryBudget, spec *outputSpec) (map[string]any, *rpc.HandlerError) {
-	writer, herr := fileio.NewExportWriter(spec.path, spec.policy, spec.budget)
+func runQueryCardinalities(st *rpc.SessionState, reader *rpc.ReaderValue, source string, selection *decodedSelection, budget iprangedb.MembershipQueryBudget, spec *outputSpec) (map[string]any, *rpc.HandlerError) {
+	writer, herr := fileio.NewExportWriterFollowing(spec.path, source, spec.policy, spec.budget)
 	if herr != nil {
 		return nil, herr
 	}
@@ -1843,15 +1843,15 @@ func QueryOverlaps(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Hand
 	if herr != nil {
 		return nil, herr
 	}
-	report, herr := runQueryOverlaps(st, reader, selection, budget, mode, spec)
+	report, herr := runQueryOverlaps(st, reader, source.path, selection, budget, mode, spec)
 	if herr != nil {
 		return nil, CloseOnError([]*rpc.ReaderValue{reader}, herr)
 	}
 	return closeSingleReader(reader, report)
 }
 
-func runQueryOverlaps(st *rpc.SessionState, reader *rpc.ReaderValue, selection *decodedSelection, budget iprangedb.MembershipQueryBudget, mode iprangedb.MembershipAggregationMode, spec *outputSpec) (map[string]any, *rpc.HandlerError) {
-	writer, herr := fileio.NewExportWriter(spec.path, spec.policy, spec.budget)
+func runQueryOverlaps(st *rpc.SessionState, reader *rpc.ReaderValue, source string, selection *decodedSelection, budget iprangedb.MembershipQueryBudget, mode iprangedb.MembershipAggregationMode, spec *outputSpec) (map[string]any, *rpc.HandlerError) {
+	writer, herr := fileio.NewExportWriterFollowing(spec.path, source, spec.policy, spec.budget)
 	if herr != nil {
 		return nil, herr
 	}
@@ -1915,15 +1915,15 @@ func QueryMatchingFeeds(st *rpc.SessionState, params json.RawMessage) (any, *rpc
 	if herr != nil {
 		return nil, herr
 	}
-	report, herr := runQueryMatchingFeeds(st, reader, addresses, spec)
+	report, herr := runQueryMatchingFeeds(st, reader, source.path, addresses, spec)
 	if herr != nil {
 		return nil, CloseOnError([]*rpc.ReaderValue{reader}, herr)
 	}
 	return closeSingleReader(reader, report)
 }
 
-func runQueryMatchingFeeds(st *rpc.SessionState, reader *rpc.ReaderValue, addresses []string, spec *outputSpec) (map[string]any, *rpc.HandlerError) {
-	writer, herr := fileio.NewExportWriter(spec.path, spec.policy, spec.budget)
+func runQueryMatchingFeeds(st *rpc.SessionState, reader *rpc.ReaderValue, source string, addresses []string, spec *outputSpec) (map[string]any, *rpc.HandlerError) {
+	writer, herr := fileio.NewExportWriterFollowing(spec.path, source, spec.policy, spec.budget)
 	if herr != nil {
 		return nil, herr
 	}
@@ -2096,15 +2096,15 @@ func JoinDirect(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Handler
 		return nil, CloseOnError([]*rpc.ReaderValue{membershipReader}, herr)
 	}
 	readers := []*rpc.ReaderValue{membershipReader, directReader}
-	report, herr := runJoinDirect(st, readers, selection, budget, maxCells, spec)
+	report, herr := runJoinDirect(st, readers, membershipSource.path, directSource.path, selection, budget, maxCells, spec)
 	if herr != nil {
 		return nil, CloseOnError(readers, herr)
 	}
 	return closeReadersReport(readers, report)
 }
 
-func runJoinDirect(st *rpc.SessionState, readers []*rpc.ReaderValue, selection *decodedSelection, budget iprangedb.MembershipQueryBudget, maxCells uint64, spec *outputSpec) (map[string]any, *rpc.HandlerError) {
-	writer, herr := fileio.NewExportWriter(spec.path, spec.policy, spec.budget)
+func runJoinDirect(st *rpc.SessionState, readers []*rpc.ReaderValue, membershipSource, directSource string, selection *decodedSelection, budget iprangedb.MembershipQueryBudget, maxCells uint64, spec *outputSpec) (map[string]any, *rpc.HandlerError) {
+	writer, herr := fileio.NewExportWriterFollowing(spec.path, fileio.StricterSource(membershipSource, directSource), spec.policy, spec.budget)
 	if herr != nil {
 		return nil, herr
 	}
@@ -2206,14 +2206,14 @@ func JoinMembership(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Han
 		return nil, CloseOnError([]*rpc.ReaderValue{leftReader}, herr)
 	}
 	readers := []*rpc.ReaderValue{leftReader, rightReader}
-	report, herr := runJoinMembership(st, readers, leftSelection, rightSelection, leftBudget, rightBudget, spec)
+	report, herr := runJoinMembership(st, readers, leftSource.path, rightSource.path, leftSelection, rightSelection, leftBudget, rightBudget, spec)
 	if herr != nil {
 		return nil, CloseOnError(readers, herr)
 	}
 	return closeReadersReport(readers, report)
 }
 
-func runJoinMembership(st *rpc.SessionState, readers []*rpc.ReaderValue, leftSelection, rightSelection *decodedSelection, leftBudget, rightBudget iprangedb.MembershipQueryBudget, spec *outputSpec) (map[string]any, *rpc.HandlerError) {
+func runJoinMembership(st *rpc.SessionState, readers []*rpc.ReaderValue, leftSource, rightSource string, leftSelection, rightSelection *decodedSelection, leftBudget, rightBudget iprangedb.MembershipQueryBudget, spec *outputSpec) (map[string]any, *rpc.HandlerError) {
 	leftScope, herr := resolveScope(readers[0], leftSelection, leftBudget, st)
 	if herr != nil {
 		return nil, herr
@@ -2222,7 +2222,7 @@ func runJoinMembership(st *rpc.SessionState, readers []*rpc.ReaderValue, leftSel
 	if herr != nil {
 		return nil, herr
 	}
-	writer, herr := fileio.NewExportWriter(spec.path, spec.policy, spec.budget)
+	writer, herr := fileio.NewExportWriterFollowing(spec.path, fileio.StricterSource(leftSource, rightSource), spec.policy, spec.budget)
 	if herr != nil {
 		return nil, herr
 	}

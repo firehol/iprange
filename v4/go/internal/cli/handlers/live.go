@@ -1193,7 +1193,7 @@ func runRefresh(st *rpc.SessionState, params json.RawMessage, lastSeen bool) (an
 	}
 	var collector *removalCollector
 	if decoded.removals != nil {
-		collector, herr = newRemovalCollector(*decoded.removals, decoded.refreshValue)
+		collector, herr = newRemovalCollector(*decoded.removals, decoded.refreshValue, fileio.SourceIsCreatorOnly(decoded.sourcePath))
 		if herr != nil {
 			return nil, closeRefreshFacts(reader, writer, herr)
 		}
@@ -1439,7 +1439,7 @@ type removalCollector struct {
 // newRemovalCollector creates the private temporary removal output
 // after every fallible pre-work has succeeded, so no early return can
 // leak it (Rust RemovalCollector::new).
-func newRemovalCollector(settings removalsSettings, refreshValue uint32) (*removalCollector, *rpc.HandlerError) {
+func newRemovalCollector(settings removalsSettings, refreshValue uint32, creatorOnly bool) (*removalCollector, *rpc.HandlerError) {
 	if settings.maxOpenFiles < 1 {
 		return nil, rpc.NewHandlerError("invalid_argument", "not_started",
 			"removal output requires at least one open file")
@@ -1466,7 +1466,11 @@ func newRemovalCollector(settings removalsSettings, refreshValue uint32) (*remov
 	// The owner-side open keeps this create out of the runtime network
 	// poller, whose initialization has no failure path under a low
 	// RLIMIT_NOFILE (wave-19.25 design section 5).
-	file, err := calleropen.Open(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, 0o666)
+	mode := os.FileMode(0o666)
+	if creatorOnly {
+		mode = 0o600
+	}
+	file, err := calleropen.Open(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, mode)
 	if err != nil {
 		return nil, fileError(err, "create removal output")
 	}

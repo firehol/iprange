@@ -233,7 +233,7 @@ func Validate(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerEr
 	if herr != nil {
 		return nil, herr
 	}
-	writer, herr := fileio.NewExportWriter(outputPath, policy, exportBudget)
+	writer, herr := fileio.NewExportWriterFollowing(outputPath, path, policy, exportBudget)
 	if herr != nil {
 		return nil, herr
 	}
@@ -851,7 +851,7 @@ func Recover(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerErr
 	if herr != nil {
 		return nil, herr
 	}
-	writer, herr := fileio.NewExportWriter(reportPath, policy, exportBudget)
+	writer, herr := fileio.NewExportWriterFollowing(reportPath, sourcePath, policy, exportBudget)
 	if herr != nil {
 		return nil, herr
 	}

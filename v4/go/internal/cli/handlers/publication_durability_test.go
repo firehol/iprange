@@ -238,7 +238,7 @@ func newTestRemovalCollector(t *testing.T, dir, name string, policy iprangedb.Pu
 		maxOutputBytes: 4096,
 		maxOpenFiles:   1,
 	}
-	collector, herr := newRemovalCollector(settings, 84)
+	collector, herr := newRemovalCollector(settings, 84, false)
 	if herr != nil {
 		t.Fatalf("newRemovalCollector: code=%q outcome=%q message=%q",
 			herr.Code, herr.Outcome, herr.Message)

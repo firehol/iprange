@@ -17,6 +17,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use iprange_livedb::publication::PublicationPolicy;
+use iprange_livedb::{CancellationToken, LiveReader};
 use iprange_livedb::Cardinality129;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -24,9 +25,30 @@ use sha2::{Digest, Sha256};
 use crate::rpc::dispatch::HandlerError;
 use crate::rpc::new_handle;
 
-/// Make one newly created output creator-private. Windows uses the
-/// process DACL; POSIX must not inherit the umask.
-#[cfg(unix)]
+#[cfg(all(unix, test))]
+mod unix_test_mode {
+    pub(super) unsafe fn libc_umask(mask: u32) -> u32 {
+        extern "C" {
+            fn umask(mask: u32) -> u32;
+        }
+        unsafe { umask(mask) }
+    }
+}
+
+/// Read the source database's recorded choice. An immutable file and a
+/// pre-decision sidecar are creator-only. Open failure is creator-only
+/// too: an output must not become world-readable because the source
+/// could not be classified.
+pub(crate) fn source_is_creator_only(source: &Path) -> bool {
+    match LiveReader::open(source, &CancellationToken::new()) {
+        Ok(reader) => reader.creator_only(),
+        Err(_) => true,
+    }
+}
+
+/// Make one newly created output follow the source database. Windows
+/// uses the process DACL; POSIX must not inherit the umask when the
+/// source is creator-only.
 pub(crate) fn apply_output_mode(file: &File, creator_only: bool) -> Result<(), HandlerError> {
     if !creator_only {
         return Ok(());
@@ -34,6 +56,7 @@ pub(crate) fn apply_output_mode(file: &File, creator_only: bool) -> Result<(), H
     creator_private(file)
 }
 
+#[cfg(unix)]
 pub(crate) fn creator_private(file: &File) -> Result<(), HandlerError> {
     use std::os::unix::fs::PermissionsExt as _;
     file.set_permissions(fs::Permissions::from_mode(0o600))
@@ -105,6 +128,16 @@ impl ExportWriter {
         policy: PublicationPolicy,
         budget: &ExportBudget,
     ) -> Result<Self, HandlerError> {
+        Self::create_following(destination, policy, budget, false)
+    }
+
+    /// `creator_only` is the source database's recorded choice.
+    pub(crate) fn create_following(
+        destination: &Path,
+        policy: PublicationPolicy,
+        budget: &ExportBudget,
+        creator_only: bool,
+    ) -> Result<Self, HandlerError> {
         if budget.max_open_files == 0 {
             return Err(HandlerError::new(
                 "invalid_argument",
@@ -124,7 +157,7 @@ impl ExportWriter {
             .create_new(true)
             .open(&temporary)
             .map_err(|error| file_error(error, "create export output"))?;
-        apply_output_mode(&file, false)?;
+        apply_output_mode(&file, creator_only)?;
         Ok(Self {
             file: BufWriter::with_capacity(64 * 1024, file),
             temporary,
@@ -650,6 +683,79 @@ pub(crate) fn legacy_binary_min_header_bytes(ipv6: bool) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn output_follows_the_source_database() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "iprange-export-follow-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let tag = iprange_livedb::ValueTag::new(b"asn").unwrap();
+        let previous = unsafe { unix_test_mode::libc_umask(0) };
+        let unprotected = directory.join("plain.iprdb");
+        iprange_livedb::create_live(
+            &unprotected,
+            iprange_livedb::AddressFamily::Ipv4,
+            iprange_livedb::ValueKind::Direct,
+            iprange_livedb::StructureKind::None,
+            tag,
+            2,
+            &iprange_livedb::CancellationToken::new(),
+            false,
+        )
+        .unwrap();
+        let protected = directory.join("protected.iprdb");
+        iprange_livedb::create_live(
+            &protected,
+            iprange_livedb::AddressFamily::Ipv4,
+            iprange_livedb::ValueKind::Direct,
+            iprange_livedb::StructureKind::None,
+            tag,
+            2,
+            &iprange_livedb::CancellationToken::new(),
+            true,
+        )
+        .unwrap();
+        unsafe { unix_test_mode::libc_umask(previous) };
+
+        let budget = ExportBudget {
+            max_rows: 4,
+            max_output_bytes: 1024,
+            max_open_files: 1,
+        };
+        let plain = directory.join("plain.out");
+        ExportWriter::create_following(
+            &plain,
+            PublicationPolicy::FailIfExists,
+            &budget,
+            source_is_creator_only(&unprotected),
+        )
+        .unwrap()
+        .finish()
+        .unwrap();
+        let plain_mode = fs::metadata(&plain).unwrap().permissions().mode() & 0o777;
+        assert_ne!(plain_mode, 0o600, "unprotected source forced mode 0600");
+
+        let locked = directory.join("locked.out");
+        ExportWriter::create_following(
+            &locked,
+            PublicationPolicy::FailIfExists,
+            &budget,
+            source_is_creator_only(&protected),
+        )
+        .unwrap()
+        .finish()
+        .unwrap();
+        let locked_mode = fs::metadata(&locked).unwrap().permissions().mode() & 0o777;
+        assert_eq!(locked_mode, 0o600, "protected source did not keep mode 0600");
+        let _ = fs::remove_dir_all(&directory);
+    }
 
     fn lines(from: u128, to: u128, filter: &PrefixFilter) -> (Vec<String>, Vec<Cardinality129>) {
         let mut output = Vec::new();

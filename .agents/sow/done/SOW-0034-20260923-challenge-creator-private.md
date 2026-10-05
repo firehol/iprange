@@ -433,4 +433,22 @@ None yet.
 
 ## Regression Log
 
-None yet.
+### 2026-10-06
+
+The close note above overstated completeness. Export, metadata, and
+removal outputs did not yet follow the source database. A later pass
+stopped forcing mode `0600` on those outputs, which made a protected
+database produce an unprotected export. That was the opposite of the
+rule in this SOW.
+
+The repair reads the source sidecar. A protected or pre-decision
+database produces a creator-only output. An unprotected database
+follows the process mode. A shared output of two databases follows the
+stricter source. Maintenance residue lists have no source database and
+stay on the process mode. Recovery scratch and publication reservations
+stay creator-only.
+
+Detecting tests: Rust
+`io::export_writer::tests::output_follows_the_source_database`; Go
+`TestExportWriterFollowsSourceDatabase` and
+`TestMetadataFollowsUnprotectedDatabase`.

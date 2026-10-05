@@ -101,6 +101,10 @@ func NewExportWriterFollowing(destination, source string, policy iprangedb.Publi
 	return NewExportWriterMode(destination, policy, budget, sourceIsCreatorOnly(source))
 }
 
+func SourceIsCreatorOnly(source string) bool {
+	return sourceIsCreatorOnly(source)
+}
+
 func sourceIsCreatorOnly(source string) bool {
 	reader, err := iprangedb.OpenLiveReaderPolicy(source, nil, false)
 	if err != nil {
@@ -108,6 +112,15 @@ func sourceIsCreatorOnly(source string) bool {
 	}
 	defer reader.Close()
 	return reader.CreatorOnly()
+}
+
+// StricterSource is the source whose output must stay creator-only.
+// One protected source makes the shared output protected.
+func StricterSource(left, right string) string {
+	if sourceIsCreatorOnly(left) {
+		return left
+	}
+	return right
 }
 
 func NewExportWriterMode(destination string, policy iprangedb.PublicationPolicy, budget ExportBudget, creatorOnly bool) (*ExportWriter, *rpc.HandlerError) {

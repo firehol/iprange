@@ -54,6 +54,10 @@ func Base64Padded(input []byte) string {
 // has already been read when the budget is enforced: an over-limit
 // refusal is an output-limit failure of a read-only operation.
 func MetadataOutput(path string, bytes []byte, policy iprangedb.PublicationPolicy, maxOutputBytes uint64, maxOpenFiles uint32) (map[string]any, *rpc.HandlerError) {
+	return MetadataOutputFollowing(path, bytes, policy, maxOutputBytes, maxOpenFiles, false)
+}
+
+func MetadataOutputFollowing(path string, bytes []byte, policy iprangedb.PublicationPolicy, maxOutputBytes uint64, maxOpenFiles uint32, creatorOnly bool) (map[string]any, *rpc.HandlerError) {
 	if maxOpenFiles < 1 {
 		return nil, rpc.NewHandlerError("invalid_argument", "not_started",
 			"metadata file delivery requires at least one open file")
@@ -64,7 +68,7 @@ func MetadataOutput(path string, bytes []byte, policy iprangedb.PublicationPolic
 	}
 	sum := sha256.Sum256(bytes)
 	sha := HexBytes(sum[:])
-	if herr := publishMetadata(path, bytes, policy, sha); herr != nil {
+	if herr := publishMetadata(path, bytes, policy, sha, creatorOnly); herr != nil {
 		return nil, herr
 	}
 	return map[string]any{
@@ -79,7 +83,7 @@ func MetadataOutput(path string, bytes []byte, policy iprangedb.PublicationPolic
 // temporary and an atomic publication step. Failures before the
 // destination name is visible are definite refusals; failures after it
 // are unknown durability of a delivered file.
-func publishMetadata(path string, bytes []byte, policy iprangedb.PublicationPolicy, sha string) *rpc.HandlerError {
+func publishMetadata(path string, bytes []byte, policy iprangedb.PublicationPolicy, sha string, creatorOnly bool) *rpc.HandlerError {
 	parent := live.FileParent(path)
 	handle, herr := rpc.NewHandle()
 	if herr != nil {
@@ -89,7 +93,11 @@ func publishMetadata(path string, bytes []byte, policy iprangedb.PublicationPoli
 	// The owner-side open keeps this create out of the runtime network
 	// poller, whose initialization has no failure path under a low
 	// RLIMIT_NOFILE (wave-19.25 design section 5).
-	file, err := calleropen.Open(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, 0o666)
+	mode := os.FileMode(0o666)
+	if creatorOnly {
+		mode = 0o600
+	}
+	file, err := calleropen.Open(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, mode)
 	if err != nil {
 		return outputFileError(err, "create metadata output")
 	}

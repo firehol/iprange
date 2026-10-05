@@ -78,7 +78,12 @@ pub fn validate(state: &mut SessionState, params: Value) -> Result<Value, Handle
     let budget = validation_budget(&object["validation_budget"])?;
     let (output_path, policy, result_budget) =
         maintenance::output_descriptor(&object["findings_output"])?;
-    let mut writer = ExportWriter::create(Path::new(&output_path), policy, &result_budget)?;
+    let mut writer = ExportWriter::create_following(
+        Path::new(&output_path),
+        policy,
+        &result_budget,
+        crate::io::export_writer::source_is_creator_only(Path::new(path)),
+    )?;
     match iprange_livedb::validation::validate(
         path,
         mode,
@@ -214,7 +219,12 @@ pub fn recover(state: &mut SessionState, params: Value) -> Result<Value, Handler
     let budget = recovery_budget(&object["recovery_budget"])?;
     let (report_path, policy, result_budget) =
         maintenance::output_descriptor(&object["report_output"])?;
-    let mut writer = ExportWriter::create(Path::new(&report_path), policy, &result_budget)?;
+    let mut writer = ExportWriter::create_following(
+        Path::new(&report_path),
+        policy,
+        &result_budget,
+        crate::io::export_writer::source_is_creator_only(Path::new(source_path)),
+    )?;
     let mut sink = EnvelopeSink { writer: &mut writer };
     let outcome = match source_mode {
         "immutable" => recover_immutable(

@@ -599,6 +599,17 @@ pub fn metadata_output(
     max_output_bytes: u64,
     max_open_files: u32,
 ) -> Result<Value, HandlerError> {
+    metadata_output_following(path, bytes, policy, max_output_bytes, max_open_files, false)
+}
+
+pub fn metadata_output_following(
+    path: &Path,
+    bytes: &[u8],
+    policy: PublicationPolicy,
+    max_output_bytes: u64,
+    max_open_files: u32,
+    creator_only: bool,
+) -> Result<Value, HandlerError> {
     if max_open_files < 1 {
         return Err(HandlerError::new(
             "invalid_argument",
@@ -623,7 +634,7 @@ pub fn metadata_output(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    publish(path, bytes, policy, &sha256)?;
+    publish(path, bytes, policy, &sha256, creator_only)?;
     // OUTPUT_FACTS is one generic schema for every file result. A metadata
     // delivery publishes exactly one opaque blob, so its row count is "1";
     // `bytes` remains the exact byte count, not an encoded length.
@@ -640,6 +651,7 @@ fn publish(
     bytes: &[u8],
     policy: PublicationPolicy,
     sha256: &str,
+    creator_only: bool,
 ) -> Result<(), HandlerError> {
     let parent = path
         .parent()
@@ -652,7 +664,7 @@ fn publish(
         .create_new(true)
         .open(&temporary)
         .map_err(|error| file_error(error, "create metadata output"))?;
-    crate::io::export_writer::apply_output_mode(&file, false)?;
+    crate::io::export_writer::apply_output_mode(&file, creator_only)?;
     write_and_publish(file, &temporary, path, bytes, policy, sha256)?;
     // The destination name is visible with its complete content. Failing to
     // synchronize the directory now leaves the durability of that namespace
