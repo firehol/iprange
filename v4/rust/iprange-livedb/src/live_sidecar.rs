@@ -206,6 +206,10 @@ impl Sidecar {
         ))
     }
 
+    pub(crate) fn requires_creator_only(&self) -> bool {
+        self.header.policy != Policy::Unprotected
+    }
+
     pub(crate) fn verify_path(&self) -> Result<()> {
         live_namespace::verify_path(&self.path, self.identity)
     }

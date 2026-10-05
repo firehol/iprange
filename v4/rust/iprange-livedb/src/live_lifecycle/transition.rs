@@ -70,7 +70,7 @@ pub fn initialize_live(
         attempt.sidecar_id,
         reader_capacity,
         true,
-    , true) {
+    ) {
         Ok(sidecar) => sidecar,
         Err(cause) => return Ok(attempt.reservation_failure(cause)),
     };
@@ -129,7 +129,7 @@ pub fn reset_live_coordination(
         attempt.sidecar_id,
         reader_capacity,
         true,
-    , true) {
+    ) {
         Ok(sidecar) => sidecar,
         Err(cause) => return Ok(attempt.reservation_failure(cause)),
     };

@@ -120,6 +120,14 @@ impl Directory {
         name: &Name,
         _security: &security::Profile,
     ) -> Result<File, NamespaceError> {
+        self.create_with_mode(name, security::CREATOR_MODE)
+    }
+
+    pub(crate) fn create_with_mode(
+        &self,
+        name: &Name,
+        mode: u32,
+    ) -> Result<File, NamespaceError> {
         self.check_creator()?;
         self.require_name_lengths(&[name])?;
         let fd = unsafe {
@@ -132,7 +140,7 @@ impl Directory {
                     | libc::O_CLOEXEC
                     | libc::O_NOFOLLOW
                     | libc::O_NONBLOCK,
-                security::CREATOR_MODE,
+                mode as libc::mode_t,
             )
         };
         if fd < 0 {

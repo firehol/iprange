@@ -131,7 +131,7 @@ fn complete(
                 supplied.sidecar_id,
                 supplied.reader_capacity,
                 true,
-            , true) {
+            ) {
                 Ok(sidecar) => sidecar,
                 Err(failure) => {
                     let sidecar_identity =

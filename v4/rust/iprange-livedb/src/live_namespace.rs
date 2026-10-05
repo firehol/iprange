@@ -120,8 +120,9 @@ pub(crate) fn create_private(
     };
     let (directory, name) = bind_path(path).map_err(failure)?;
     let profile = Profile::capture().map_err(|error| failure(namespace_error(error)))?;
+    let mode = if creator_only { 0o600 } else { 0o666 };
     let file = directory
-        .create(&name, &profile)
+        .create_with_mode(&name, mode)
         .map_err(|error| failure(namespace_error(error)))?;
     let identity = match identity(&file) {
         Ok(identity) => identity,
@@ -295,6 +296,10 @@ fn bind_pair(private: &Path, canonical: &Path) -> Result<(Directory, Name, Name)
         .ok_or(Error::InvalidArgument("database path has no file name"))
         .and_then(|component| Name::from_component(component).map_err(namespace_error))?;
     Ok((directory, private_name, canonical_name))
+}
+
+pub(crate) fn access_policy_error(error: crate::publication::namespace::NamespaceError) -> Error {
+    namespace_error(error)
 }
 
 fn namespace_error(error: NamespaceError) -> Error {
