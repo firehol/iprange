@@ -682,6 +682,7 @@ pub(crate) fn legacy_binary_min_header_bytes(ipv6: bool) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
 
     #[test]
@@ -696,6 +697,10 @@ mod tests {
         ));
         fs::create_dir_all(&directory).unwrap();
         let tag = iprange_livedb::ValueTag::new(b"asn").unwrap();
+        // The umask manipulation and the mode assertions are Unix-only:
+        // Windows has no mode bits, and the Go twin of this test skips the
+        // same assertions there.
+        #[cfg(unix)]
         let previous = unsafe { unix_test_mode::libc_umask(0) };
         let unprotected = directory.join("plain.iprdb");
         iprange_livedb::create_live(
@@ -721,6 +726,7 @@ mod tests {
             true,
         )
         .unwrap();
+        #[cfg(unix)]
         unsafe { unix_test_mode::libc_umask(previous) };
 
         let budget = ExportBudget {
@@ -738,8 +744,11 @@ mod tests {
         .unwrap()
         .finish()
         .unwrap();
-        let plain_mode = fs::metadata(&plain).unwrap().permissions().mode() & 0o777;
-        assert_ne!(plain_mode, 0o600, "unprotected source forced mode 0600");
+        #[cfg(unix)]
+        {
+            let plain_mode = fs::metadata(&plain).unwrap().permissions().mode() & 0o777;
+            assert_ne!(plain_mode, 0o600, "unprotected source forced mode 0600");
+        }
 
         let locked = directory.join("locked.out");
         ExportWriter::create_following(
@@ -751,8 +760,11 @@ mod tests {
         .unwrap()
         .finish()
         .unwrap();
-        let locked_mode = fs::metadata(&locked).unwrap().permissions().mode() & 0o777;
-        assert_eq!(locked_mode, 0o600, "protected source did not keep mode 0600");
+        #[cfg(unix)]
+        {
+            let locked_mode = fs::metadata(&locked).unwrap().permissions().mode() & 0o777;
+            assert_eq!(locked_mode, 0o600, "protected source did not keep mode 0600");
+        }
         let _ = fs::remove_dir_all(&directory);
     }
 
