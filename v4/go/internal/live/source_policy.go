@@ -3,10 +3,10 @@ package live
 import (
 	"os"
 
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/security"
 )
-
 // SourceCreatorOnly reports the creator-only choice a live database's
 // sidecar records, read from the sidecar header alone: one mapped page,
 // no database open, no locks, no reader registration (Rust
@@ -21,7 +21,10 @@ func SourceCreatorOnly(main string) bool {
 	if err != nil {
 		return security.CreatorOnlyRequested()
 	}
-	file, err := os.Open(path)
+	// The owner-side open keeps this read out of the runtime network
+	// poller, whose initialization has no failure path under a low
+	// RLIMIT_NOFILE — the same rule the creator-only proof open follows.
+	file, err := calleropen.Open(path, os.O_RDONLY|calleropen.NonBlocking, 0)
 	if err != nil {
 		return security.CreatorOnlyRequested()
 	}
