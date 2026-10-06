@@ -609,14 +609,17 @@ func scratchNamespaceError(err error) error {
 
 // scratchResidueOf builds the residue of one failed removal (Rust
 // cleanup::residue).
-func scratchResidueOf(directoryIdentity publication.LocalFileIdentity, profile security.Profile, owner *scratchOwned, problem scratchProblem) scratchResidue {
+// scratchResidueOf builds the residue of one failed removal (Rust
+// cleanup::residue). The commitment is the recorded choice, matching
+// the top-level cleanup record the same scratch writes.
+func scratchResidueOf(directoryIdentity publication.LocalFileIdentity, recorded [32]byte, owner *scratchOwned, problem scratchProblem) scratchResidue {
 	return scratchResidue{
 		ordinal:                    owner.ordinal,
 		directoryIdentity:          directoryIdentity,
 		basename:                   []byte(owner.name),
 		identity:                   scratchLocal(owner.identity),
 		creationSecurityKind:       scratchCreationSecurityKind(),
-		creationSecurityCommitment: profile.Commitment(),
+		creationSecurityCommitment: recorded,
 		problem:                    problem,
 	}
 }

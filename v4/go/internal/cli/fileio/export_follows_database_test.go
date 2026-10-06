@@ -28,13 +28,20 @@ func TestExportWriterFollowsSourceDatabase(t *testing.T) {
 	}
 	protected := filepath.Join(dir, "protected.iprdb")
 	created, err = iprangedb.CreateLive(protected, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 2, nil, true)
-	setUmask(old)
 	if err != nil {
+		setUmask(old)
 		t.Fatal(err)
 	}
 	if created.State != iprangedb.CreationStateCreated {
+		setUmask(old)
 		t.Fatalf("state = %v", created.State)
 	}
+	// A umask that would strip the owner-write bit distinguishes an
+	// exact-0600 set from a plain 0600 create (0600 & ~0200 == 0400):
+	// the protected output must stay exactly 0600 (Rust twin sets the
+	// mode explicitly after create).
+	setUmask(0o200)
+	defer setUmask(old)
 	budget := ExportBudget{MaxRows: 4, MaxOutputBytes: 1024, MaxOpenFiles: 1}
 	plain := filepath.Join(dir, "plain.out")
 	writer, herr := NewExportWriterFollowing(plain, unprotected, iprangedb.PolicyFailIfExists, budget)

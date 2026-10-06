@@ -82,8 +82,9 @@ func scratchHeader(source format.Meta, attempt [16]byte, ordinal uint32, commitm
 
 // decodeScratchHeader validates and decodes one fixed ownership
 // header (Rust scratch::format::decode_header): the fixed fields, the
-// reserved zero ranges, the nonzero attempt and commitment, and the
-// header CRC must all hold.
+// reserved zero ranges, the nonzero attempt, and the header CRC must
+// all hold. The commitment span carries the recorded choice: zero is
+// the valid unprotected record.
 func decodeScratchHeader(bytes *[scratchHeaderSize]byte) (scratchDecodedHeader, bool) {
 	ownerKind := format.U16(bytes[scratchOwnerKindOffset:])
 	var attemptID [16]byte

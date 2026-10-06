@@ -43,7 +43,7 @@ func (s *scratch) cleanupPlatform() *scratchCleanup {
 			continue
 		}
 		owner := s.owned[index]
-		cleanup.residues = append(cleanup.residues, scratchResidueOf(directoryIdentity, s.profile, owner, *problem))
+		cleanup.residues = append(cleanup.residues, scratchResidueOf(directoryIdentity, scratchRecordedCommitment(s), owner, *problem))
 		s.owned[index] = nil
 		if owner.shared != nil {
 			owner.shared.close()

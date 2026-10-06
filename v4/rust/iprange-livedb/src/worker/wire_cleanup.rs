@@ -251,6 +251,74 @@ fn valid_identity(identity: crate::validation::LocalFileIdentity) -> bool {
         && crate::publication::namespace::Identity::decode(identity.bytes).is_some()
 }
 
+// A zero commitment is the valid unprotected record: the scratch
+// writers record it when their database did not ask for creator-only
+// (the control-page twin accepts it the same way).
 fn valid_security(kind: u16, commitment: [u8; 32]) -> bool {
-    kind == crate::publication::namespace::CREATION_SECURITY_KIND && commitment != [0; 32]
+    let _ = commitment;
+    kind == crate::publication::namespace::CREATION_SECURITY_KIND
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn identity_bytes(seed: u8) -> [u8; 32] {
+        // Identity::decode: nonzero, payload in the first 16 bytes, zero
+        // tail.
+        let mut bytes = [0u8; 32];
+        bytes[0] = seed;
+        bytes[8] = seed;
+        bytes
+    }
+
+    // The checkpoint span must round-trip the zero commitment: the
+    // scratch writers record it for every unprotected database, so a
+    // decoder that still required nonzero would refuse the cleanup of
+    // the default configuration (round-2 security/tester finding).
+    #[test]
+    fn checkpoint_span_round_trips_the_zero_commitment() {
+        let checkpoint = ScratchCheckpoint {
+            attempt_id: [7; 16],
+            directory_identity: crate::validation::LocalFileIdentity {
+                kind: 1,
+                bytes: identity_bytes(9),
+            },
+            creation_security: CreationSecurity {
+                kind: crate::publication::namespace::CREATION_SECURITY_KIND,
+                commitment: [0; 32],
+            },
+            entries: Vec::new(),
+        };
+        let control = crate::worker::Control::create_parent().unwrap();
+        write_request(
+            &control,
+            Path::new("/tmp/zero-commitment-probe.v4"),
+            &crate::publication::PrivateOutputAttempt {
+                publication_attempt_id: [1; 16],
+                directory_identity: crate::validation::LocalFileIdentity {
+                    kind: 1,
+                    bytes: identity_bytes(2),
+                },
+                basename_encoding:
+                    crate::publication::namespace::BASENAME_ENCODING_KIND,
+                basename: b"probe.v4.tmp".to_vec().into_boxed_slice(),
+                identity: Some(crate::validation::LocalFileIdentity {
+                    kind: 1,
+                    bytes: identity_bytes(3),
+                }),
+                creation_security: CreationSecurity {
+                    kind: crate::publication::namespace::CREATION_SECURITY_KIND,
+                    commitment: [0; 32],
+                },
+            },
+            Some(Path::new("/tmp")),
+            Some(&checkpoint),
+        )
+        .unwrap();
+        let request = read_request(&control).unwrap();
+        let read = request.scratch.expect("checkpoint present");
+        assert_eq!(read.creation_security.commitment, [0u8; 32]);
+        drop(control);
+    }
 }

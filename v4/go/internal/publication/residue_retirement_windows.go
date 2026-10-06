@@ -12,8 +12,9 @@ import (
 // retireResidueCoordination retires one coordination inode through
 // its authenticated GC transition (Rust retirement.rs retire windows
 // arm): a fresh collision-free attempt id is drawn for the exact
-// source, the creator-only commitment of the retained handle is
-// captured, and the envelope move runs the common resolver.
+// source, the retained handle's recorded creator-only choice is
+// carried (zero when the proof cannot be read), and the envelope move
+// runs the common resolver.
 func retireResidueCoordination(destination *destination, file *os.File, identity live.FileIdentity) (retirementOutcome, error) {
 	attemptID, err := live.GCFreshAttempt(destination.directory(), destination.coordinationName(), identity, 1, ArtifactOwnedCoordination, DirectoryRoleDestination)
 	if err != nil {

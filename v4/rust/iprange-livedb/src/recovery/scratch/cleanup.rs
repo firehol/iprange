@@ -86,16 +86,22 @@ fn conflict(detail: &'static str) -> ScratchProblem {
 pub(super) fn residue(
     directory_identity: LocalFileIdentity,
     profile: &Profile,
+    recorded: [u8; 32],
     owner: Owned,
     problem: ScratchProblem,
 ) -> ScratchResidue {
+    let _ = profile;
     ScratchResidue {
         ordinal: owner.ordinal,
         directory_identity,
         basename: owner.name.bytes().into(),
         identity: local(owner.identity),
         creation_security_kind: CREATION_SECURITY_KIND,
-        creation_security_commitment: profile.commitment(),
+        // The recorded choice, not the platform commitment: the residue
+        // must decode against the same zero-accepting rule as the
+        // top-level cleanup record (an unprotected scratch carries the
+        // zero record end to end).
+        creation_security_commitment: recorded,
         problem,
     }
 }

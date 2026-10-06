@@ -35,11 +35,13 @@ func (a *maintenanceArtifact) resumePlatform(dir *live.Directory, attempt [16]by
 // retirePlatform retires the artifact through its attempt-bound GC
 // envelope (Rust Artifact::retire_windows). Windows cannot unlink a
 // name whose handle is retained, so the removal is a rename the GC
-// machine drives through the owned handle: the creator-only policy of
-// the retained file is proved and committed into the envelope together
-// with the retirement authority (attempt, ordinal, kind, destination
-// role, source name, identity, and the exact payload evidence), and the
-// housekeeping facts the resolver reports become the removal outcome.
+// machine drives through the owned handle: the recorded creator-only
+// choice is carried into the envelope together with the retirement
+// authority (attempt, ordinal, kind, destination role, source name,
+// identity, and the exact payload evidence) — a proof that cannot be
+// read records the zero unprotected commitment, and the envelope's
+// identity binding still catches replacement — and the housekeeping
+// facts the resolver reports become the removal outcome.
 func (a *maintenanceArtifact) retirePlatform(dir *live.Directory, name string, regular *live.RegularFile, attempt [16]byte, expected live.FileIdentity, ordinal uint32, kind live.ArtifactKind, payload *maintenanceRetirementPayload) (AbandonedArtifactRemoval, error) {
 	commitment, err := security.CreatorOnlyCommitment(regular.File)
 	if err != nil {

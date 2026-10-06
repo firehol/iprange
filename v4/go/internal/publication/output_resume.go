@@ -117,7 +117,13 @@ func bindSecuredOutput(destinationPath string, facts *PrivateOutputAttempt) (*de
 		}
 	}
 	identity = live.IdentityFromDeviceInode(device, inode)
-	d, err := bindDestination(destinationPath)
+	// The attempt was created under the policy its facts record: a
+	// nonzero recorded commitment is a creator-only output whoever
+	// resumes it, and a zero commitment is an unprotected one. The
+	// worker must not re-derive this from its own process switch, or a
+	// parent-created output is resumed under the wrong policy and fails
+	// its own identity check (Rust bind_secured_output twin).
+	d, err := bindDestinationFollowing(destinationPath, facts.CreationSecurity.Commitment != [32]byte{})
 	if err != nil {
 		return nil, "", live.FileIdentity{}, err
 	}

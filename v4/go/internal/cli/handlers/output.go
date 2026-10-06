@@ -90,14 +90,7 @@ func publishMetadata(path string, bytes []byte, policy iprangedb.PublicationPoli
 		return herr
 	}
 	temporary := pathname.Push(parent, "."+handle+".metadata.tmp")
-	// The owner-side open keeps this create out of the runtime network
-	// poller, whose initialization has no failure path under a low
-	// RLIMIT_NOFILE (wave-19.25 design section 5).
-	mode := os.FileMode(0o666)
-	if creatorOnly {
-		mode = 0o600
-	}
-	file, err := calleropen.Open(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, mode)
+	file, err := fileio.CreateOutputFile(temporary, creatorOnly)
 	if err != nil {
 		return outputFileError(err, "create metadata output")
 	}

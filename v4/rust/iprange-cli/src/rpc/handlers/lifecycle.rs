@@ -33,6 +33,13 @@ pub fn validate_database_create(params: &Value) -> Result<(), String> {
         ],
         &["creator_only"],
     )?;
+    // The frozen oracle types the member boolean-only, and null is not
+    // omission: reject it at the validation boundary like the Go twin.
+    if let Some(member) = object.get("creator_only") {
+        if !member.is_boolean() {
+            return Err("creator_only must be a boolean".into());
+        }
+    }
     reader::validate_path(object["path"].as_str())?;
     match object["family"].as_str() {
         Some("ipv4") | Some("ipv6") => {}
@@ -89,8 +96,10 @@ pub fn database_create(state: &mut SessionState, params: Value) -> Result<Value,
     let reader_capacity = u32_value(object.get("reader_capacity").unwrap_or(&Value::Null))
         .map_err(HandlerError::invalid_params)?;
     let creator_only = match object.get("creator_only") {
-        None | Some(Value::Null) => iprange_livedb::creator_only_requested(),
+        None => iprange_livedb::creator_only_requested(),
         Some(Value::Bool(value)) => *value,
+        // The frozen oracle types the member boolean-only, and the Go
+        // twin rejects null the same way: null is not omission.
         Some(_) => {
             return Err(HandlerError::invalid_params(
                 "creator_only must be a boolean",
@@ -1794,5 +1803,55 @@ mod metadata_open_caller_tests {
         let report =
             pin_support::swap_race("metadata-arm", content, &rule, ATTEMPTS, CONCURRENCY, arm);
         pin_support::assert_race("metadata source", &report, ATTEMPTS);
+    }
+}
+
+#[cfg(test)]
+mod creator_only_member_tests {
+    use super::*;
+    use serde_json::json;
+
+    // The documented member must reach the handler: absent follows the
+    // process switch, true/false are honored, and non-boolean values
+    // (including null, which the frozen oracle types boolean-only and
+    // the Go twin rejects the same way) are parameter errors.
+    #[test]
+    fn creator_only_member_is_accepted_and_typed() {
+        let params = json!({
+            "path": "/tmp/iprange-v4-rpc-member.iprdb",
+            "family": "ipv4",
+            "value_kind": "direct",
+            "structure_kind": "none",
+            "value_tag": {"text": "asn"},
+            "reader_capacity": 2,
+        });
+        let with_flag = {
+            let mut object = params.clone();
+            object["creator_only"] = json!(true);
+            object
+        };
+        assert!(validate_database_create(&with_flag).is_ok());
+
+        let mut explicit_false = with_flag.clone();
+        explicit_false["creator_only"] = json!(false);
+        assert!(validate_database_create(&explicit_false).is_ok());
+
+        assert!(validate_database_create(&params).is_ok());
+
+        let mut null_flag = with_flag.clone();
+        null_flag["creator_only"] = Value::Null;
+        assert!(
+            validate_database_create(&null_flag)
+                .unwrap_err()
+                .contains("creator_only must be a boolean")
+        );
+
+        let mut string_flag = with_flag;
+        string_flag["creator_only"] = json!("true");
+        assert!(
+            validate_database_create(&string_flag)
+                .unwrap_err()
+                .contains("creator_only must be a boolean")
+        );
     }
 }

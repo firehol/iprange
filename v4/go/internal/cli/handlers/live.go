@@ -36,7 +36,6 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/pathname"
 
-	"github.com/firehol/iprange/v4/go/internal/calleropen"
 )
 
 // RegisterLive installs the live lifecycle, resolution, direct
@@ -1463,14 +1462,7 @@ func newRemovalCollector(settings removalsSettings, refreshValue uint32, creator
 		return nil, herr
 	}
 	temporary := pathname.Push(parent, "."+handle+".removals.tmp")
-	// The owner-side open keeps this create out of the runtime network
-	// poller, whose initialization has no failure path under a low
-	// RLIMIT_NOFILE (wave-19.25 design section 5).
-	mode := os.FileMode(0o666)
-	if creatorOnly {
-		mode = 0o600
-	}
-	file, err := calleropen.Open(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, mode)
+	file, err := fileio.CreateOutputFile(temporary, creatorOnly)
 	if err != nil {
 		return nil, fileError(err, "create removal output")
 	}

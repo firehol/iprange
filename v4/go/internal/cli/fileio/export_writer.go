@@ -25,12 +25,10 @@ import (
 	"runtime"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"github.com/firehol/iprange/v4/go/internal/live"
-	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/pathname"
-
-	"github.com/firehol/iprange/v4/go/internal/calleropen"
 )
 
 // ExportBudget carries the caller-supplied export limits
@@ -107,12 +105,10 @@ func SourceIsCreatorOnly(source string) bool {
 }
 
 func sourceIsCreatorOnly(source string) bool {
-	reader, err := iprangedb.OpenLiveReaderPolicy(source, nil, false)
-	if err != nil {
-		return security.CreatorOnlyRequested()
-	}
-	defer reader.Close()
-	return reader.CreatorOnly()
+	// One mapped sidecar-header page (live.SourceCreatorOnly): no
+	// database open, no locks, no reader registration — the Rust twin
+	// is iprange_livedb::source_creator_only.
+	return live.SourceCreatorOnly(source)
 }
 
 // StricterSource is the source whose output must stay creator-only.
@@ -138,11 +134,7 @@ func NewExportWriterMode(destination string, policy iprangedb.PublicationPolicy,
 	// The owner-side open keeps this create out of the runtime network
 	// poller, whose initialization has no failure path under a low
 	// RLIMIT_NOFILE (wave-19.25 design section 5).
-	mode := os.FileMode(0o666)
-	if creatorOnly {
-		mode = 0o600
-	}
-	raw, err := calleropen.Open(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, mode)
+	raw, err := CreateOutputFile(temporary, creatorOnly)
 	if err != nil {
 		return nil, fileError(err, "create export output")
 	}

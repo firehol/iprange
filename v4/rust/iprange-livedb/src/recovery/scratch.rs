@@ -404,6 +404,7 @@ impl Scratch {
                 residues.push(cleanup::residue(
                     directory_identity,
                     &self.profile,
+                    commitment,
                     owner,
                     ScratchProblem {
                         code: problem.code,
@@ -477,7 +478,15 @@ impl Scratch {
                 continue;
             };
             let owner = self.owned[index].take().expect("problem has an owner");
-            residues.push(residue(directory_identity, &self.profile, owner, problem));
+            // The recorded choice, matching the top-level cleanup
+            // record the same scratch writes.
+            residues.push(residue(
+                directory_identity,
+                &self.profile,
+                self.recorded_commitment(),
+                owner,
+                problem,
+            ));
         }
         residues
     }
