@@ -15,7 +15,7 @@
 //! log to a same-directory private file and publishes it only after the
 //! commit is factually known to have committed (iprange-jsonrpc-v1.md).
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::fmt::Write as _;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -1694,12 +1694,8 @@ impl RemovalCollector {
         }
         let mut temporary = parent.to_path_buf();
         temporary.push(format!(".{}.removals.tmp", super::super::new_handle()?));
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
+        let file = crate::io::export_writer::create_output_file(&temporary, creator_only)
             .map_err(|error| file_error(error, "create removal output"))?;
-        crate::io::export_writer::apply_output_mode(&file, creator_only)?;
         Ok(Self {
             file: BufWriter::with_capacity(64 * 1024, file),
             temporary,

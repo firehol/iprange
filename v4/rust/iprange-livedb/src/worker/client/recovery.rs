@@ -134,8 +134,8 @@ pub(in crate::worker) fn recover<S: RecoverySink>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn source_requires_creator_only(_path: &Path) -> bool {
-    crate::creator_only_requested()
+fn source_requires_creator_only(path: &Path) -> bool {
+    crate::source_creator_only(path)
 }
 
 pub(super) fn recover_once<S: RecoverySink>(

@@ -18,10 +18,10 @@ use serde_json::{json, Value};
 use super::super::dispatch::HandlerError;
 use super::super::session::SessionState;
 use super::convert;
-use super::reader;
+use super::reader::{self, exact_object_opt};
 
 pub fn validate_database_create(params: &Value) -> Result<(), String> {
-    let object = exact_object(
+    let object = exact_object_opt(
         params,
         &[
             "path",
@@ -31,6 +31,7 @@ pub fn validate_database_create(params: &Value) -> Result<(), String> {
             "value_tag",
             "reader_capacity",
         ],
+        &["creator_only"],
     )?;
     reader::validate_path(object["path"].as_str())?;
     match object["family"].as_str() {

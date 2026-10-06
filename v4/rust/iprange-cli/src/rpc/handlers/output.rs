@@ -1,6 +1,6 @@
 //! Metadata delivery encoding and bounded atomic file publication.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -667,12 +667,8 @@ fn publish(
         .unwrap_or_else(|| Path::new("."));
     let mut temporary = PathBuf::from(parent);
     temporary.push(format!(".{}.metadata.tmp", new_handle()?));
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
+    let file = crate::io::export_writer::create_output_file(&temporary, creator_only)
         .map_err(|error| file_error(error, "create metadata output"))?;
-    crate::io::export_writer::apply_output_mode(&file, creator_only)?;
     write_and_publish(file, &temporary, path, bytes, policy, sha256)?;
     // The destination name is visible with its complete content. Failing to
     // synchronize the directory now leaves the durability of that namespace

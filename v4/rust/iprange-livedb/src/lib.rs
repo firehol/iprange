@@ -30,6 +30,7 @@ pub mod error;
 pub mod file_identity;
 pub use file_identity::identity;
 pub use path::sidecar_path;
+pub use live_sidecar::source_creator_only;
 mod fault;
 mod feed;
 mod feed_catalog;

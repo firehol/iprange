@@ -251,7 +251,7 @@ mod platform {
             budget,
             cancellation,
             sink,
-            crate::creator_only_requested(),
+            crate::source_creator_only(source.path()),
         ) {
             Ok(built) => built,
             Err(failure) => {

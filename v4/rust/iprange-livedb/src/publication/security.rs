@@ -12,8 +12,9 @@ pub fn creator_only_requested() -> bool {
 /// Serializes every test that mutates or asserts the process switch.
 /// Rust test binaries run their tests on parallel threads, so an
 /// unserialized `set_var` could flip the switch under a concurrent test
-/// that reads it through a product path.
-#[cfg(test)]
+/// that reads it through a product path. Unix-gated like the tests it
+/// serves.
+#[cfg(all(test, unix))]
 pub(crate) static CREATOR_ONLY_ENV_LOCK: std::sync::Mutex<()> =
     std::sync::Mutex::new(());
 
@@ -22,14 +23,14 @@ pub(crate) static CREATOR_ONLY_ENV_LOCK: std::sync::Mutex<()> =
 /// bare set leaks into the next test. The guard also holds the env lock
 /// for its lifetime, serializing it against every other switch-asserting
 /// test in the binary.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) struct CreatorOnlyGuard {
     previous: Option<std::ffi::OsString>,
     #[allow(dead_code)]
     lock: Option<std::sync::MutexGuard<'static, ()>>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl CreatorOnlyGuard {
     pub(crate) fn on() -> Self {
         let lock = Some(
@@ -43,7 +44,7 @@ impl CreatorOnlyGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl Drop for CreatorOnlyGuard {
     fn drop(&mut self) {
         match self.previous.take() {

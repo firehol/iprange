@@ -84,6 +84,7 @@ LastSeenRefresh	LastSeenRefresh::add_ranges_v6_slice
 LastSeenRefresh	LastSeenRefresh::finish_input
 LiveReader	LiveReader::creator_only
 LiveReader	LiveReader::close
+lib-reexport	source_creator_only
 LiveReader	LiveReader::direct_cursor_v4
 LiveReader	LiveReader::direct_cursor_v6
 LiveReader	LiveReader::direct_range_source_v4

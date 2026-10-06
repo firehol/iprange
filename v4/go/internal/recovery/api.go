@@ -15,7 +15,6 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/publication"
-	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
@@ -27,8 +26,8 @@ import (
 // in-process (non-worker) entries keep this client create position;
 // the worker session consumes a parent-created attempt through the
 // Recover*WithAttempt entries instead.
-func sourceIsCreatorOnly(string) bool {
-	return security.CreatorOnlyRequested()
+func sourceIsCreatorOnly(path string) bool {
+	return live.SourceCreatorOnly(path)
 }
 
 func recoverPrecreated(sourcePath string, candidate *RecoveryCandidate, destinationPath string, mode sourceMode, budget *RecoveryBudget, check func() error, sink RecoverySink) (*RecoveryResult, *RecoveryPreparationFailure) {

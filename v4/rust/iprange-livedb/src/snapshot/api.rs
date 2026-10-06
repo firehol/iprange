@@ -10,10 +10,7 @@ use super::{
 };
 
 fn source_requires_creator_only(path: &Path) -> bool {
-    match crate::LiveReader::open(path, &crate::CancellationToken::new()) {
-        Ok(reader) => reader.creator_only(),
-        Err(_) => crate::creator_only_requested(),
-    }
+    crate::source_creator_only(path)
 }
 
 pub fn snapshot_to(

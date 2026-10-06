@@ -271,8 +271,11 @@ func scratchIdentityValid(identity publication.LocalFileIdentity) bool {
 }
 
 // scratchSecurityValid reports whether one creator-only commitment is
-// plausible for this platform (Rust wire_cleanup.rs::valid_security:
-// the platform creator-only kind and a nonzero commitment).
+// plausible for this platform (Rust wire_cleanup.rs::valid_security):
+// the platform creator-only kind. A zero commitment is the valid
+// unprotected record: the scratch artifacts record it when their
+// database did not ask for creator-only, and the checkpoint carries
+// the same value.
 func scratchSecurityValid(kind uint16, commitment [32]byte) bool {
-	return kind == creationSecurityKind && commitment != [32]byte{}
+	return kind == creationSecurityKind
 }

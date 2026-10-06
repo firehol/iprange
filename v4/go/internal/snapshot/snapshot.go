@@ -19,7 +19,6 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/pathname"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/reader"
-	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
@@ -341,12 +340,7 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 // validation, the Rust api.rs position); the immutable mode opens the
 // ordinary reader.
 func sourceIsCreatorOnly(path string) bool {
-	reader, err := live.OpenLiveReaderPolicy(path, nil, false)
-	if err != nil {
-		return security.CreatorOnlyRequested()
-	}
-	defer reader.Close()
-	return reader.CreatorOnly()
+	return live.SourceCreatorOnly(path)
 }
 
 func openSource(path string, mode SourceMode, check func() error) (source, *Failure, func() sourceEnd) {

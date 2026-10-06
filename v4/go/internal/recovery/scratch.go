@@ -175,7 +175,10 @@ func scratchStartFollowing(directoryPath string, source format.Meta, maxBytes ui
 	}
 	if err := startScratchCheckpoint(attemptID, scratchLocal(directory.Identity()), &publication.CreationSecurity{
 		Kind:       scratchCreationSecurityKind(),
-		Commitment: profile.Commitment(),
+		// The checkpoint records the same commitment the scratch
+		// artifacts record, so a crash-resumed cleanup retires an
+		// unprotected scratch through an unprotected envelope.
+		Commitment: scratchRecordedCommitment(&owned),
 	}); err != nil {
 		directory.Close()
 		return nil, err

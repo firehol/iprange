@@ -17,7 +17,6 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use iprange_livedb::publication::PublicationPolicy;
-use iprange_livedb::{CancellationToken, LiveReader};
 use iprange_livedb::Cardinality129;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -35,36 +34,49 @@ mod unix_test_mode {
     }
 }
 
-/// Read the source database's recorded choice. A missing or unreadable
-/// source follows the process switch, which is off unless
-/// `IPRANGE_CREATOR_ONLY=1`.
+/// Read the source database's recorded choice: one mapped sidecar
+/// header, no database open. A missing or unreadable sidecar (every
+/// immutable source has none) follows the process switch, which is off
+/// unless `IPRANGE_CREATOR_ONLY=1`.
 pub(crate) fn source_is_creator_only(source: &Path) -> bool {
-    match LiveReader::open(source, &CancellationToken::new()) {
-        Ok(reader) => reader.creator_only(),
-        Err(_) => iprange_livedb::creator_only_requested(),
+    iprange_livedb::source_creator_only(source)
+}
+
+/// Create one private CLI output at its temporary path under the
+/// source's creator-only choice. POSIX creates with the process default
+/// and then sets exactly 0600 when the source is creator-only; Windows
+/// cannot apply the protection after the fact, so a creator-only output
+/// is created through the engine's protected single-user DACL path
+/// instead of a plain descriptor.
+pub(crate) fn create_output_file(
+    temporary: &Path,
+    creator_only: bool,
+) -> std::io::Result<File> {
+    #[cfg(unix)]
+    {
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(temporary)?;
+        if creator_only {
+            use std::os::unix::fs::PermissionsExt as _;
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(file)
     }
-}
-
-/// Make one newly created output follow the source database. Windows
-/// uses the process DACL; POSIX must not inherit the umask when the
-/// source is creator-only.
-pub(crate) fn apply_output_mode(file: &File, creator_only: bool) -> Result<(), HandlerError> {
-    if !creator_only {
-        return Ok(());
+    #[cfg(windows)]
+    {
+        if creator_only {
+            let (file, _commitment) =
+                iprange_livedb::publication::create_private_artifact(temporary)?;
+            Ok(file)
+        } else {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(temporary)
+        }
     }
-    creator_private(file)
-}
-
-#[cfg(unix)]
-pub(crate) fn creator_private(file: &File) -> Result<(), HandlerError> {
-    use std::os::unix::fs::PermissionsExt as _;
-    file.set_permissions(fs::Permissions::from_mode(0o600))
-        .map_err(|error| file_error(error, "apply creator-private mode"))
-}
-
-#[cfg(not(unix))]
-pub(crate) fn creator_private(_file: &File) -> Result<(), HandlerError> {
-    Ok(())
 }
 
 /// Caller-supplied export limits (`result_budget`).
@@ -151,12 +163,8 @@ impl ExportWriter {
             .to_path_buf();
         let mut temporary = parent.clone();
         temporary.push(format!(".{}.export.tmp", new_handle()?));
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
+        let file = create_output_file(&temporary, creator_only)
             .map_err(|error| file_error(error, "create export output"))?;
-        apply_output_mode(&file, creator_only)?;
         Ok(Self {
             file: BufWriter::with_capacity(64 * 1024, file),
             temporary,

@@ -16,6 +16,7 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/publication"
+	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
@@ -287,7 +288,9 @@ func createImmutableFeed(
 	if err := check(); err != nil {
 		return zero, &ImmutableFeedPreparationFailure{Cause: publicError(err), Cleanup: CleanupStateClean}
 	}
-	attempt, failure := publication.CreatePublishAttemptFollowing(destination, publicationPolicy, false)
+	// The feed publish has no source database, so it follows the
+	// process switch like every other no-source artifact.
+	attempt, failure := publication.CreatePublishAttemptFollowing(destination, publicationPolicy, security.CreatorOnlyRequested())
 	if failure != nil {
 		return zero, feedFailureOf(failure)
 	}

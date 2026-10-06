@@ -66,6 +66,14 @@ fn exact_names_headers_io_and_cleanup_round_trip() {
         u32::from_le_bytes(bytes[124..128].try_into().unwrap()),
         crc32c::crc32c_with_zeroed(&bytes, 124, 4).unwrap()
     );
+    // The commitment bytes [80..112) record the recorded choice: this
+    // scratch started under the default switch-off, so they are the
+    // zero unprotected record, never a forced protected commitment.
+    assert_eq!(
+        &bytes[80..112],
+        &[0u8; 32],
+        "switch-off scratch recorded a protected commitment"
+    );
 
     scratch.write(first, HEADER_SIZE, b"abcdef").unwrap();
     let mut read = [0; 6];
@@ -220,4 +228,23 @@ fn expected_name(attempt: [u8; 16], ordinal: &[u8; 8]) -> Vec<u8> {
     name.extend_from_slice(ordinal);
     name.extend_from_slice(b".tmp");
     name
+}
+
+#[test]
+fn protected_scratch_records_the_profile_commitment() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
+    let directory = TempDirectory::new("protected-commitment");
+    let mut scratch =
+        Scratch::start_following(&directory.path, meta(), 4096, 2, 4, true).unwrap();
+    let slot = scratch.create().unwrap();
+    let name = scratch_name(scratch.attempt_id, 0).unwrap();
+    let bytes = fs::read(directory
+        .path
+        .join(std::ffi::OsStr::from_bytes(name.bytes())))
+    .unwrap();
+    assert_ne!(
+        &bytes[80..112],
+        &[0u8; 32],
+        "creator-only scratch recorded the zero unprotected commitment"
+    );
 }

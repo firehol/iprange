@@ -112,7 +112,7 @@ struct SharedFile {
 }
 
 impl Scratch {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn start(
         directory: &Path,
         source: MetaV4,
@@ -169,7 +169,10 @@ impl Scratch {
             local(scratch.directory.identity()),
             &crate::publication::CreationSecurity {
                 kind: CREATION_SECURITY_KIND,
-                commitment: scratch.profile.commitment(),
+                // The checkpoint records the same commitment the scratch
+                // artifacts record, so a crash-resumed cleanup retires an
+                // unprotected scratch through an unprotected envelope.
+                commitment: scratch.recorded_commitment(),
             },
         )?;
         Ok(scratch)

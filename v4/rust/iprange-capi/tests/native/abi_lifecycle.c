@@ -241,6 +241,22 @@ static int recover_source(const char *source,
             &report,
             &error);
     }
+    if (status != IPRANGE_V4_ABI1_STATUS_OK && error != NULL) {
+        uint32_t code = 0;
+        uint8_t caller_present = 0;
+        uint64_t caller_code = 0;
+        uint8_t message[192];
+        uint64_t required = 0;
+        iprange_v4_abi1_mutable_byte_slice output = {message, sizeof(message) - 1};
+        iprange_v4_abi1_error_code(error, &code, &caller_present, &caller_code);
+        iprange_v4_abi1_error_message_read(error, output, &required);
+        if (required > sizeof(message) - 1) {
+            required = sizeof(message) - 1;
+        }
+        message[required] = 0;
+        fprintf(stderr, "recover status=%u code=%u message=%s\n", status, code,
+                (char *)message);
+    }
     CHECK(status == IPRANGE_V4_ABI1_STATUS_OK);
     CHECK(error == NULL);
     CHECK(iprange_v4_abi1_report_get_recovery(report, &facts, &error) ==

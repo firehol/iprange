@@ -27,13 +27,13 @@ package worker
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/publication"
-	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/recovery"
 )
 
-func sourceIsCreatorOnly(string) bool {
-	return security.CreatorOnlyRequested()
+func sourceIsCreatorOnly(path string) bool {
+	return live.SourceCreatorOnly(path)
 }
 
 // recoveryAttempt is one single-session recovery outcome (Rust

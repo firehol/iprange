@@ -15,6 +15,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/reader"
+	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
@@ -262,8 +263,10 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	}
 	// Rust publication::workflow::create: the exchange probe, the
 	// creation, and the security proof fold their discard evidence into
-	// the preparation failure ledger.
-	attempt, failure := publication.CreatePublishAttemptFollowing(destination, policy, false)
+	// the preparation failure ledger. The algebra publish output has no
+	// source database of its own, so it follows the process switch like
+	// every other no-source artifact.
+	attempt, failure := publication.CreatePublishAttemptFollowing(destination, policy, security.CreatorOnlyRequested())
 	if failure != nil {
 		return zero, algebraFailureOf(failure)
 	}

@@ -28,6 +28,29 @@ pub(crate) use header::has_selectable_header;
 pub(crate) use header::{read_header, Header, Policy, State};
 use header::{read_header_mapping, sidecar_length, write_header_mapping};
 
+/// The creator-only choice a live database's sidecar records, read from
+/// the sidecar header alone: one mapped page, no database open, no
+/// locks, no reader registration. Pre-decision (generation 0) and
+/// generation-1 protected count as protected; generation-1 unprotected
+/// counts as unprotected. A missing or unreadable sidecar — every
+/// immutable source has none — and any corrupt header follow the
+/// process switch, exactly like an unclassified source. This is an
+/// advisory policy read for output creation, never an access check.
+pub fn source_creator_only(main: &Path) -> bool {
+    let sidecar = match path::sidecar_path(main) {
+        Ok(sidecar) => sidecar,
+        Err(_) => return crate::creator_only_requested(),
+    };
+    let file = match File::open(&sidecar) {
+        Ok(file) => file,
+        Err(_) => return crate::creator_only_requested(),
+    };
+    match read_header(&file) {
+        Ok((_, header)) => header.policy != Policy::Unprotected,
+        Err(_) => crate::creator_only_requested(),
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Sidecar {
     pub(crate) file: File,

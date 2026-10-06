@@ -82,9 +82,15 @@ pub(crate) fn publish(
     }
     let prepared = Prepared::new(algebra, operation, mode, reserved_heap_bytes, cancellation)
         .map_err(|cause| Box::new(AlgebraPreparationFailure::early(cause)))?;
-    let (attempt, file) =
-        crate::publication::workflow::create_following(destination, policy, false)
-            .map_err(failure_from_early)?;
+    let (attempt, file) = crate::publication::workflow::create_following(
+        destination,
+        policy,
+        // The algebra publish output has no source database of its own,
+        // so it follows the process switch like every other no-source
+        // artifact.
+        crate::creator_only_requested(),
+    )
+    .map_err(failure_from_early)?;
     let built = match build(
         algebra,
         file,

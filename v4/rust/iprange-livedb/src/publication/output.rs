@@ -57,7 +57,7 @@ pub(crate) struct CreatedOutput {
 }
 
 impl CreatedOutput {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn create(path: &Path) -> Result<Self, Error> {
         Self::create_following(path, crate::publication::security::creator_only_requested())
     }
@@ -352,7 +352,17 @@ fn bind_secured_output(
         .ok_or(Error::Sdk(crate::Error::InvalidArgument(
             "worker output identity is invalid",
         )))?;
-    let destination = Destination::bind(destination_path).map_err(Error::Namespace)?;
+    let destination = Destination::bind_following(
+        destination_path,
+        // The attempt was created under the policy its facts record: a
+        // nonzero recorded commitment is a creator-only output whoever
+        // resumes it, and a zero commitment is an unprotected one. The
+        // worker must not re-derive this from its own process switch,
+        // or a parent-created secured output is resumed as unprotected
+        // and fails its own reservation proof.
+        facts.creation_security.commitment != [0; 32],
+    )
+    .map_err(Error::Namespace)?;
     let name = destination
         .output_name(facts.publication_attempt_id)
         .map_err(Error::Namespace)?;

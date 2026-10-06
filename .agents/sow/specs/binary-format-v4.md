@@ -3909,8 +3909,9 @@ For a direct result with no later canonical owner, `destination_content` agrees
 with `publication`: `Published` is `Desired`; a proved absent fail-if-exists
 destination is `NotPublished` plus `Absent`; and a proved unchanged replacement
 destination is `NotPublished` plus `Previous`. The later-owner fields are empty,
-and a newly published inode reports main `CreatorOnly` plus coordination
-`Absent`. Resolvers use all of the
+and a newly published inode reports the access policy its creation recorded:
+main `CreatorOnly` plus coordination `Absent` for a creator-only creation, main
+`ChangedOrUnproven` plus coordination `Absent` for an unprotected one. Resolvers use all of the
 orthogonal fields below rather than inventing compound result values.
 
 Publication-attempt ID equals the reservation ID and determines the private

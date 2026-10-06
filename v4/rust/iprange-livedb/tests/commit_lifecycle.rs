@@ -243,7 +243,8 @@ fn mapped_reader_retains_abort_capacity_for_reuse_then_allows_shrink() {
         ValueTag::new(b"asn").unwrap(),
         2,
         &CancellationToken::new(),
-        )
+        false,
+    )
     .unwrap();
     let initial_length = fs::metadata(&files.main).unwrap().len();
     let cancellation = CancellationToken::new();

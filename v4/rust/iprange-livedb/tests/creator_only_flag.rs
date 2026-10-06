@@ -2,16 +2,22 @@
 
 #![cfg(any(target_os = "linux", target_vendor = "apple", target_os = "windows"))]
 
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
 use iprange_livedb::{
     create_live, AddressFamily, CancellationToken, CreationState, LiveReader, StructureKind,
     ValueKind, ValueTag,
 };
 
+#[cfg(unix)]
 unsafe fn libc_umask(mask: u32) -> u32 {
     extern "C" {
         fn umask(mask: u32) -> u32;
@@ -24,6 +30,7 @@ unsafe fn libc_umask(mask: u32) -> u32 {
 /// an unserialized run could flip the switch under another test's create.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[cfg(unix)]
 fn path(label: &str) -> PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -52,6 +59,7 @@ fn creator_only_switch_defaults_off() {
 }
 
 #[test]
+#[cfg(unix)]
 fn snapshot_follows_an_unprotected_database() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let directory = path("snapshot");
@@ -79,6 +87,7 @@ fn snapshot_follows_an_unprotected_database() {
     let _ = fs::remove_dir_all(&directory);
 }
 
+#[cfg(unix)]
 fn create(main: &PathBuf, creator_only: bool) {
     let result = create_live(
         main,
@@ -95,6 +104,7 @@ fn create(main: &PathBuf, creator_only: bool) {
 }
 
 #[test]
+#[cfg(unix)]
 fn protected_create_is_checked_after_close() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let main = path("protected");
@@ -111,12 +121,13 @@ fn protected_create_is_checked_after_close() {
 }
 
 #[test]
+#[cfg(unix)]
 fn unprotected_umask_0600_is_not_checked_after_close() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let main = path("plain");
-    let old = unsafe { libc::umask(0) };
+    let old = unsafe { libc_umask(0) };
     create(&main, false);
-    unsafe { libc::umask(old) };
+    unsafe { libc_umask(old) };
     let mode = fs::metadata(&main).unwrap().permissions().mode() & 0o777;
     assert_ne!(mode, 0o600, "unprotected create forced mode 0600");
     LiveReader::open(&main, &CancellationToken::new())

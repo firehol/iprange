@@ -372,9 +372,10 @@ impl Control {
                 "worker scratch directory checkpoint is invalid",
             ));
         }
-        if creation_security.kind != crate::publication::namespace::CREATION_SECURITY_KIND
-            || creation_security.commitment == [0; 32]
-        {
+        // A zero commitment is the valid unprotected record: the scratch
+        // artifacts record it when their database did not ask for
+        // creator-only, and the checkpoint carries the same value.
+        if creation_security.kind != crate::publication::namespace::CREATION_SECURITY_KIND {
             return Err(Error::Conflict(
                 "worker scratch security checkpoint is invalid",
             ));
@@ -800,21 +801,54 @@ fn map(file: &File) -> Result<MmapRaw> {
 fn create_file(nonce: [u8; 16]) -> Result<(PathBuf, File)> {
     use std::os::unix::fs::OpenOptionsExt;
 
+    use crate::publication::security::{self as security, Profile};
+
     let path = control_path(nonce);
+    // The control file has no source database, so it follows the process
+    // switch like every other no-source artifact (spec 15.6).
+    let creator_only = crate::publication::security::creator_only_requested();
+    let mode = if creator_only { 0o600 } else { 0o666 };
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create_new(true)
-        .mode(0o666)
+        .mode(mode)
         .open(&path)?;
+    if creator_only {
+        let profile = Profile::capture().map_err(|error| {
+            let _ = std::fs::remove_file(&path);
+            crate::live_namespace::namespace_error(error)
+        })?;
+        security::secure_creator_only(&file, &profile).map_err(|error| {
+            let _ = std::fs::remove_file(&path);
+            crate::live_namespace::namespace_error(error)
+        })?;
+    }
     Ok((path, file))
 }
 
 #[cfg(windows)]
 fn create_file(nonce: [u8; 16]) -> Result<(PathBuf, File)> {
+    use crate::publication::security::{self as security, Profile};
+
     let path = control_path(nonce);
-    let file = crate::publication::security::create_unprotected(&path, false)
-        .map_err(crate::live_namespace::namespace_error)?;
+    // The control file has no source database, so it follows the process
+    // switch like every other no-source artifact (spec 15.6): the
+    // protected single-user DACL when the switch asked for creator-only,
+    // the process default descriptor otherwise.
+    let file = if crate::publication::security::creator_only_requested() {
+        let profile = Profile::capture().map_err(|error| {
+            let _ = std::fs::remove_file(&path);
+            crate::live_namespace::namespace_error(error)
+        })?;
+        security::create_private(&path, &profile, false).map_err(|error| {
+            let _ = std::fs::remove_file(&path);
+            crate::live_namespace::namespace_error(error)
+        })?
+    } else {
+        security::create_unprotected(&path, false)
+            .map_err(crate::live_namespace::namespace_error)?
+    };
     Ok((path, file))
 }
 

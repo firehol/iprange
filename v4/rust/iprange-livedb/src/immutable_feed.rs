@@ -146,7 +146,9 @@ where
     let (attempt, file) = crate::publication::workflow::create_following(
         destination,
         publication_policy,
-        false,
+        // The feed publish has no source database, so it follows the
+        // process switch like every other no-source artifact.
+        crate::creator_only_requested(),
     )
         .map_err(failure_from_early)?;
     let built = match unordered::build::<K, S>(

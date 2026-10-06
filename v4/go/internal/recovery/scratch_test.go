@@ -91,6 +91,12 @@ func TestScratchExactNamesHeadersIOAndCleanupRoundTrip(t *testing.T) {
 	if format.U32(headerBytes[72:76]) != 0 || format.U16(headerBytes[76:78]) != scratchCreationSecurityKind() {
 		t.Fatalf("ordinal/security kind = %d %d", format.U32(headerBytes[72:76]), format.U16(headerBytes[76:78]))
 	}
+	// The commitment bytes [80..112) record the recorded choice: this
+	// scratch started under the default switch-off, so they are the
+	// zero unprotected record, never a forced protected commitment.
+	if string(headerBytes[80:112]) != string(make([]byte, 32)) {
+		t.Fatalf("switch-off scratch recorded a protected commitment: %x", headerBytes[80:112])
+	}
 	checksum, ok := format.CRC32CWithZeroed(headerBytes, scratchHeaderCRCOffset, scratchHeaderCRCSize)
 	if !ok || checksum != format.U32(headerBytes[124:128]) {
 		t.Fatalf("header CRC = %x stored %x ok=%v", checksum, format.U32(headerBytes[124:128]), ok)

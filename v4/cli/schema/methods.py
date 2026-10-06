@@ -148,6 +148,7 @@ _register("iprange.v1.database.create", {
         "structure_kind": C.STRUCTURE_KIND,
         "value_tag": C.VALUE_TAG,
         "reader_capacity": C.U32,
+        "creator_only": {"type": "boolean"},
     },
     "required": ["path", "family", "value_kind", "structure_kind", "value_tag", "reader_capacity"],
     "additional": False,

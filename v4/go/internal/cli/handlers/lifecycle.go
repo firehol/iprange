@@ -32,7 +32,9 @@ import (
 // bounds, the family/value-kind/structure-kind compatibility rule,
 // the strict value tag, and a u32 reader capacity.
 func ValidateDatabaseCreateParams(params json.RawMessage) error {
-	object, err := exactObject(params, "path", "family", "value_kind", "structure_kind", "value_tag", "reader_capacity")
+	object, err := exactObjectOpt(params,
+		[]string{"path", "family", "value_kind", "structure_kind", "value_tag", "reader_capacity"},
+		[]string{"creator_only"})
 	if err != nil {
 		return err
 	}
