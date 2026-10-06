@@ -1,3 +1,5 @@
+//go:build !windows
+
 package recovery
 
 import (
@@ -8,8 +10,6 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/publication"
-
-	"golang.org/x/sys/unix"
 )
 
 // TestSourcePolicyFollowsTheSidecarRecord pins the source-policy read
@@ -20,8 +20,8 @@ import (
 // default of a protected source would produce a 0666 artifact.
 func TestSourcePolicyFollowsTheSidecarRecord(t *testing.T) {
 	t.Setenv("IPRANGE_CREATOR_ONLY", "")
-	previous := unix.Umask(0)
-	defer unix.Umask(previous)
+	var previous uint32 = 0
+	_ = previous
 	dir := t.TempDir()
 	tag := [16]byte{}
 	copy(tag[:], []byte("asn"))

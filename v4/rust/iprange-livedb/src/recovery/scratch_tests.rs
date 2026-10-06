@@ -28,6 +28,15 @@ impl Drop for TempDirectory {
 
 #[test]
 fn exact_names_headers_io_and_cleanup_round_trip() {
+    // Hold the env lock for the whole test: the scratch creation reads
+    // the process switch, and a concurrently running guarded test could
+    // flip it under this test's start (the switch tests serialize on
+    // the same lock).
+    let _lock = crate::publication::security::CREATOR_ONLY_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
+    std::env::remove_var("IPRANGE_CREATOR_ONLY");
     let directory = TempDirectory::new("roundtrip");
     let mut scratch = Scratch::start(&directory.path, meta(), 4096, 2, 4).unwrap();
     let attempt = scratch.attempt_id;
@@ -95,6 +104,10 @@ fn exact_names_headers_io_and_cleanup_round_trip() {
     assert!(cleanup.clean());
     assert_eq!(cleanup.attempt_id, attempt);
     assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 0);
+    match previous {
+        Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
+        None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),
+    }
 }
 
 #[test]
@@ -236,7 +249,7 @@ fn protected_scratch_records_the_profile_commitment() {
     let directory = TempDirectory::new("protected-commitment");
     let mut scratch =
         Scratch::start_following(&directory.path, meta(), 4096, 2, 4, true).unwrap();
-    let slot = scratch.create().unwrap();
+    let _slot = scratch.create().unwrap();
     let name = scratch_name(scratch.attempt_id, 0).unwrap();
     let bytes = fs::read(directory
         .path
