@@ -287,7 +287,7 @@ func createImmutableFeed(
 	if err := check(); err != nil {
 		return zero, &ImmutableFeedPreparationFailure{Cause: publicError(err), Cleanup: CleanupStateClean}
 	}
-	attempt, failure := publication.CreatePublishAttempt(destination, publicationPolicy)
+	attempt, failure := publication.CreatePublishAttemptFollowing(destination, publicationPolicy, false)
 	if failure != nil {
 		return zero, feedFailureOf(failure)
 	}

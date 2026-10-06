@@ -188,6 +188,7 @@ func completeCreate(path string, supplied *CreateResult, main *mainObserved, coo
 		}
 	}
 	sidecarIdentity := sidecar.localIdentity()
+	creatorOnly := sidecar.header.policy != policyUnprotected
 
 	var mainFile *os.File
 	// The main descriptor (observed or freshly created) is owned by
@@ -205,7 +206,7 @@ func completeCreate(path string, supplied *CreateResult, main *mainObserved, coo
 		mainFile = main.file
 		publicMain = mainIdentity(main)
 	case mainAbsent:
-		created, failure := createPrivate(path, true, cleanupAuthority{
+		created, failure := createPrivate(path, creatorOnly, cleanupAuthority{
 			attemptID:     supplied.DatabaseID,
 			ordinal:       0,
 			kind:          ArtifactOwnedMain,

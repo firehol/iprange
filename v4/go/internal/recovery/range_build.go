@@ -32,6 +32,7 @@ type rangeBuild struct {
 	ordered           bool
 	retainedHeapBytes uint64
 	sortReuse         *sortArea
+	creatorOnly       bool
 }
 
 // rangeBuildFailure is one failed range build (Rust BuildFailure): the
@@ -113,6 +114,7 @@ func buildExternal(codec rangeCodec, request rangeBuild, pages *pageSet, output 
 		readableRecords:   request.readableRecords,
 		check:             request.check,
 		initialArea:       request.sortReuse,
+		creatorOnly:       request.creatorOnly,
 	}, pages, func(record rangeRecord) error {
 		return output.push(record)
 	})

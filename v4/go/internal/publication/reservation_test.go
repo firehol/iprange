@@ -322,17 +322,18 @@ func TestWrongSizeAndCRCCorruptionAreDistinct(t *testing.T) {
 
 // TestEmptyCreationSecurityCommitmentIsRejected ports the Rust
 // empty_creation_security_commitment_is_rejected test.
-func TestEmptyCreationSecurityCommitmentIsRejected(t *testing.T) {
+func TestEmptyCreationSecurityCommitmentIsUnprotected(t *testing.T) {
 	file := testReservationFile(t, ptr(testReservationHeader(reservationPolicyFailIfExists)), nil)
 	for i := 464; i < 496; i++ {
 		file[i] = 0
 	}
 	rewriteTestCRC(file[:format.PageSize])
-	_, err := selectReservation(file)
-	var serr *reservationSelectError
-	if !(asSelectError(err, &serr) && serr.kind == reservationSelectNoValidHeader &&
-		serr.block0 == reservationCodecProblemSecurity) {
-		t.Errorf("empty security commitment: got %v", err)
+	selected, err := selectReservation(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.header.securityCommitment != [32]byte{} {
+		t.Fatalf("commitment = %x, want zero", selected.header.securityCommitment)
 	}
 }
 

@@ -399,9 +399,6 @@ func decodeReservation(block []byte) (reservationHeader, reservationCodecProblem
 		return reservationHeader{}, prob
 	}
 	securityCommitment := decodeReservationSecurity(block)
-	if securityCommitment == [32]byte{} {
-		return reservationHeader{}, reservationCodecProblemSecurity
-	}
 	sequence, prob := decodeReservationSequence(block, core.state)
 	if prob != noneCodecProblem {
 		return reservationHeader{}, prob

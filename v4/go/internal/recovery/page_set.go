@@ -45,6 +45,7 @@ type pageFallback struct {
 	maxFiles     uint32
 	maxOpenFiles uint32
 	wantedSlots  int
+	creatorOnly  bool
 }
 
 // fileSlots is the fixed-slot file table of one migrated page set
@@ -85,6 +86,10 @@ func newPageSet(maxHeapBytes uint64, expectedPages uint64, fallback *pageFallbac
 // validated, the fallback captures the scratch directory facts, and
 // the heap table is the smaller power of two.
 func forRecovery(maxHeapBytes uint64, expectedPages uint64, source format.Meta, budget *RecoveryBudget) (*pageSet, error) {
+	return forRecoveryFollowing(maxHeapBytes, expectedPages, source, budget, true)
+}
+
+func forRecoveryFollowing(maxHeapBytes uint64, expectedPages uint64, source format.Meta, budget *RecoveryBudget, creatorOnly bool) (*pageSet, error) {
 	if err := budget.validate(); err != nil {
 		return nil, err
 	}
@@ -97,6 +102,7 @@ func forRecovery(maxHeapBytes uint64, expectedPages uint64, source format.Meta, 
 			maxFiles:     budget.MaxScratchFiles,
 			maxOpenFiles: budget.MaxOpenFiles,
 			wantedSlots:  wantedSlots(expectedPages),
+			creatorOnly:  creatorOnly,
 		}
 	}
 	return newPageSet(maxHeapBytes, expectedPages, fallback)
@@ -375,7 +381,7 @@ func (p *pageSet) ensureScratch() (*scratch, error) {
 		if p.fallback == nil {
 			return nil, &format.Error{Code: format.CodeInsufficientResourceBudget, Detail: "recovery scratch"}
 		}
-		scratch, err := scratchStart(p.fallback.directory, p.fallback.source, p.fallback.maxBytes, p.fallback.maxFiles, p.fallback.maxOpenFiles)
+		scratch, err := scratchStartFollowing(p.fallback.directory, p.fallback.source, p.fallback.maxBytes, p.fallback.maxFiles, p.fallback.maxOpenFiles, p.fallback.creatorOnly)
 		if err != nil {
 			return nil, err
 		}

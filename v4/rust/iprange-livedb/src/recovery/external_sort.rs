@@ -32,6 +32,7 @@ pub(crate) struct SortRequest<'a> {
     pub(crate) readable_records: u64,
     pub(crate) cancellation: &'a CancellationToken,
     pub(crate) initial_area: Option<SortArea>,
+    pub(crate) creator_only: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -64,7 +65,7 @@ pub(crate) fn sort_and_emit<K: DirectKey>(
     }
     let mut scratch = match pages.take_scratch() {
         Some(scratch) => scratch,
-        None => match start_scratch(request.meta, request.budget) {
+        None => match start_scratch(request.meta, request.budget, request.creator_only) {
             Ok(scratch) => scratch,
             Err(cause) => return Err(page_failure(pages, cause)),
         },
@@ -369,17 +370,18 @@ fn finish(
     }
 }
 
-fn start_scratch(meta: MetaV4, budget: &RecoveryBudget) -> Result<Scratch> {
+fn start_scratch(meta: MetaV4, budget: &RecoveryBudget, creator_only: bool) -> Result<Scratch> {
     let directory = budget
         .scratch_directory
         .as_deref()
         .ok_or(Error::BudgetExceeded("recovery unordered ranges"))?;
-    Scratch::start(
+    Scratch::start_following(
         directory,
         meta,
         budget.max_scratch_bytes,
         budget.max_scratch_files,
         budget.max_open_files,
+        creator_only,
     )
 }
 

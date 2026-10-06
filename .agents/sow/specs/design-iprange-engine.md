@@ -410,8 +410,9 @@ file to the process umask and the directory default. A caller that sets
 the flag gets mode `0600` on POSIX and the protected user-only Windows
 DACL, and the sidecar records that choice. Open follows the record: a
 protected file is checked, an unprotected file is not, and a file
-created before the flag existed is still checked. Close-on-exec stays
-in both modes.
+created before the flag existed is still checked. Every product file
+that belongs to a database follows that record. Nothing else applies
+creator-only by default. Close-on-exec stays in both modes.
 
 Go does not abandon a prepared operation when its handle becomes unreachable.
 Rust does, because dropping the handle runs cleanup. Go has no destructor.

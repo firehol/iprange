@@ -563,7 +563,8 @@ fn create_membership(database: &TestDatabase) -> Result<(), String> {
         tag(b"membership")?,
         1,
         &CancellationToken::new(),
-        )
+        true,
+    )
     .map_err(display)?;
     Ok(())
 }

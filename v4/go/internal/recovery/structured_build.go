@@ -14,7 +14,11 @@ import (
 // structuredConstruct builds one canonical structured output from one
 // recovery source (Rust structured_build::construct).
 func structuredConstruct(m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink) (*Construction, *constructionFailure) {
-	return indirectConstruct(indirectMode{
+	return structuredConstructFollowing(m, sourceMeta, builder, budget, check, sink, true)
+}
+
+func structuredConstructFollowing(m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, creatorOnly bool) (*Construction, *constructionFailure) {
+	return indirectConstructFollowing(indirectMode{
 		kind: format.ValueKindStructured,
 		checkStructures: func(structures *structureIndex) error {
 			if structures == nil {
@@ -46,5 +50,5 @@ func structuredConstruct(m *mapping.Mapping, sourceMeta format.Meta, builder *wr
 			}
 			return buildRanges(codec, context.request, context.pages, &components{check: context.request.check, codec: codec, policy: policy})
 		},
-	}, m, sourceMeta, builder, budget, check, sink)
+	}, m, sourceMeta, builder, budget, check, sink, creatorOnly)
 }

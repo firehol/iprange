@@ -31,6 +31,10 @@ type directAnalysis struct {
 // the metadata read; every later failure carries the page-set
 // terminal).
 func directAnalyze(m *mapping.Mapping, meta format.Meta, budget *RecoveryBudget, check func() error, sink RecoverySink) (*directAnalysis, *analysisFailure) {
+	return directAnalyzeFollowing(m, meta, budget, check, sink, true)
+}
+
+func directAnalyzeFollowing(m *mapping.Mapping, meta format.Meta, budget *RecoveryBudget, check func() error, sink RecoverySink, creatorOnly bool) (*directAnalysis, *analysisFailure) {
 	if err := budget.validate(); err != nil {
 		return nil, analysisFailureOf(err, RecoveryReport{}, nil)
 	}
@@ -46,7 +50,7 @@ func directAnalyze(m *mapping.Mapping, meta format.Meta, budget *RecoveryBudget,
 		expected = physicalPages
 	}
 	rep := newReporter(sink)
-	pages, err := forRecovery(budget.MaxHeapBytes, expected, meta, budget)
+	pages, err := forRecoveryFollowing(budget.MaxHeapBytes, expected, meta, budget, creatorOnly)
 	if err != nil {
 		return nil, analysisFailureOf(err, rep.finish(), nil)
 	}
@@ -84,8 +88,12 @@ func directCodec(family uint8) (rangeCodec, bool) {
 // destination against the source generation, the analysis runs, and
 // the family build folds the range stream and the finish).
 func directConstruct(m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink) (*Construction, *constructionFailure) {
+	return directConstructFollowing(m, sourceMeta, builder, budget, check, sink, true)
+}
+
+func directConstructFollowing(m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, creatorOnly bool) (*Construction, *constructionFailure) {
 	analysis, failure := prepareConstruction(builder, sourceMeta, format.ValueKindDirect, func() (any, *analysisFailure) {
-		result, failed := directAnalyze(m, sourceMeta, budget, check, sink)
+		result, failed := directAnalyzeFollowing(m, sourceMeta, budget, check, sink, creatorOnly)
 		if failed != nil {
 			return nil, failed
 		}
@@ -99,14 +107,14 @@ func directConstruct(m *mapping.Mapping, sourceMeta format.Meta, builder *writer
 	if !ok {
 		return nil, constructionFailureOf(builder, &format.Error{Code: format.CodeFormatInvalid, Detail: "recovery direct family is invalid"}, direct.report, nil)
 	}
-	return directBuild(codec, m, sourceMeta, builder, budget, check, sink, direct)
+	return directBuild(codec, m, sourceMeta, builder, budget, check, sink, direct, creatorOnly)
 }
 
 // directBuild runs the family build over one completed analysis (Rust
 // direct_build::build: the retained metadata heap, the direct output
 // policy over the overlap components, and the shared complete-ranges
 // finish).
-func directBuild(codec rangeCodec, m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, analysis *directAnalysis) (*Construction, *constructionFailure) {
+func directBuild(codec rangeCodec, m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, analysis *directAnalysis, creatorOnly bool) (*Construction, *constructionFailure) {
 	retained := retainedMetadataBytes(analysis.metadata)
 	return completeRanges(builder, analysis.metadata, budget.MaxHeapBytes, retained, analysis.report, sink, func(builder *writer.OutputBuilder, rep *reporter) (*scratchCleanup, *rangeBuildFailure) {
 		policy := &directOutput{builder: builder, rep: rep, codec: codec}
@@ -119,6 +127,7 @@ func directBuild(codec rangeCodec, m *mapping.Mapping, sourceMeta format.Meta, b
 			readableRecords:   analysis.readableRecords,
 			ordered:           analysis.ordered,
 			retainedHeapBytes: retained,
+			creatorOnly:       creatorOnly,
 		}, analysis.pages, output)
 	})
 }

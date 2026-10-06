@@ -12,6 +12,13 @@ use iprange_livedb::{
     ValueKind, ValueTag,
 };
 
+unsafe fn libc_umask(mask: u32) -> u32 {
+    extern "C" {
+        fn umask(mask: u32) -> u32;
+    }
+    unsafe { umask(mask) }
+}
+
 fn path(label: &str) -> PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -21,6 +28,33 @@ fn path(label: &str) -> PathBuf {
         "iprange-v4-creator-only-{label}-{}-{unique}",
         std::process::id()
     ))
+}
+
+#[test]
+fn snapshot_follows_an_unprotected_database() {
+    let directory = path("snapshot");
+    fs::create_dir(&directory).unwrap();
+    let source = directory.join("plain.iprdb");
+    let previous = unsafe { libc_umask(0) };
+    create(&source, false);
+    unsafe { libc_umask(previous) };
+    let destination = directory.join("snap.iprdb");
+    let result = iprange_livedb::snapshot_to(
+        &source,
+        iprange_livedb::SnapshotSourceMode::Live,
+        &destination,
+        iprange_livedb::SnapshotPublicationPolicy::FailIfExists,
+        &iprange_livedb::SnapshotBudget::new(16 * 1024 * 1024, 100_000, 4),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        result.publication.publication,
+        iprange_livedb::publication::PublicationStatus::Published
+    );
+    let mode = fs::metadata(&destination).unwrap().permissions().mode() & 0o777;
+    assert_ne!(mode, 0o600, "unprotected snapshot forced mode 0600");
+    let _ = fs::remove_dir_all(&directory);
 }
 
 fn create(main: &PathBuf, creator_only: bool) {

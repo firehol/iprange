@@ -12,6 +12,42 @@ import (
 // open. These cases close the writer before reopening, so the check
 // is not an in-process flag.
 
+func TestSnapshotFollowsUnprotectedDatabase(t *testing.T) {
+	requireLiveCreation(t)
+	dir := t.TempDir()
+	source := filepath.Join(dir, "plain.iprdb")
+	tag, err := NewValueTag([]byte("asn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := unix.Umask(0)
+	created, err := CreateLive(source, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 2, nil, false)
+	unix.Umask(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.State != CreationStateCreated {
+		t.Fatalf("state = %v", created.State)
+	}
+	destination := filepath.Join(dir, "snap.iprdb")
+	result, err := SnapshotTo(source, SnapshotSourceLive, destination, PolicyFailIfExists, &SnapshotBudget{
+		MaxHeapBytes: 16 << 20, MaxOutputPages: 100_000, MaxOpenFiles: 4,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("publication = %v", result.Publication.Publication)
+	}
+	info, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() == 0o600 {
+		t.Fatal("snapshot of an unprotected database was forced to mode 0600")
+	}
+}
+
 func TestCreatorOnlyFlagCreateCloseReopen(t *testing.T) {
 	requireLiveCreation(t)
 	dir := t.TempDir()

@@ -38,8 +38,12 @@ type indirectOutputContext struct {
 // destination against the source generation and runs the analysis,
 // then the family build streams the mode output.
 func indirectConstruct(mode indirectMode, m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink) (*Construction, *constructionFailure) {
+	return indirectConstructFollowing(mode, m, sourceMeta, builder, budget, check, sink, true)
+}
+
+func indirectConstructFollowing(mode indirectMode, m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, creatorOnly bool) (*Construction, *constructionFailure) {
 	analysis, failure := prepareConstruction(builder, sourceMeta, mode.kind, func() (any, *analysisFailure) {
-		result, failed := indirectAnalyze(m, sourceMeta, budget, check, sink, mode.kind)
+		result, failed := indirectAnalyzeFollowing(m, sourceMeta, budget, check, sink, mode.kind, creatorOnly)
 		if failed != nil {
 			return nil, failed
 		}
@@ -56,14 +60,14 @@ func indirectConstruct(mode indirectMode, m *mapping.Mapping, sourceMeta format.
 	if !ok {
 		return nil, constructionFailureOf(builder, &format.Error{Code: format.CodeFormatInvalid, Detail: "recovery indirect family is invalid"}, indirect.report, nil)
 	}
-	return indirectBuild(mode, codec, m, sourceMeta, builder, budget, check, sink, indirect)
+	return indirectBuild(mode, codec, m, sourceMeta, builder, budget, check, sink, indirect, creatorOnly)
 }
 
 // indirectBuild runs the family build over one completed analysis
 // (Rust indirect_build::build: the structure proof, the recovered
 // catalog feeds, the retained tables heap, and the complete-ranges
 // finish over the mode output).
-func indirectBuild(mode indirectMode, codec rangeCodec, m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, analysis *indirectAnalysis) (*Construction, *constructionFailure) {
+func indirectBuild(mode indirectMode, codec rangeCodec, m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, analysis *indirectAnalysis, creatorOnly bool) (*Construction, *constructionFailure) {
 	if err := analysis.catalog.forEach(analysis.tables, func(entry catalogFeed) error {
 		return builder.PushFeed(string(entry.name), entry.index)
 	}); err != nil {
@@ -91,7 +95,8 @@ func indirectBuild(mode indirectMode, codec rangeCodec, m *mapping.Mapping, sour
 				// external sort when it lives in scratch (Rust
 				// indirect_build: SortReuse::area over
 				// tables.scratch_region()).
-				sortReuse: analysis.tables.scratchRegion(),
+				sortReuse:   analysis.tables.scratchRegion(),
+				creatorOnly: creatorOnly,
 			},
 			pages:       analysis.pages,
 			memberships: analysis.memberships,

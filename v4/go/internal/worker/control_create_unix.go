@@ -17,17 +17,12 @@ import (
 // can never make the control file unopenable by the worker. Every
 // failure maps to the worker's Conflict class exactly like Rust
 // namespace_error over create_file.
-func createControlFile(path string, profile security.Profile) (*os.File, error) {
+func createControlFile(path string, _ security.Profile) (*os.File, error) {
 	// O_NONBLOCK is promptness for the open; calleropen clears it before
 	// handing the handle back, so the control page stays out of the
 	// runtime network poller (wave-19.25 design section 5).
-	f, err := calleropen.Open(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, 0o600)
+	f, err := calleropen.Open(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, 0o666)
 	if err != nil {
-		return nil, workerSecurityFailure(err)
-	}
-	if err := security.SecureCreatorOnly(f, profile); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
 		return nil, workerSecurityFailure(err)
 	}
 	return f, nil

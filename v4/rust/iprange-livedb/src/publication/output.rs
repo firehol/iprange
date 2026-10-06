@@ -57,16 +57,25 @@ pub(crate) struct CreatedOutput {
 }
 
 impl CreatedOutput {
+    #[cfg(test)]
     pub(crate) fn create(path: &Path) -> Result<Self, Error> {
-        Self::create_with(path, false)
+        Self::create_following(path, true)
+    }
+
+    pub(crate) fn create_following(path: &Path, creator_only: bool) -> Result<Self, Error> {
+        Self::create_with(path, false, creator_only)
     }
 
     pub(crate) fn create_absent(path: &Path) -> Result<Self, Error> {
-        Self::create_with(path, true)
+        Self::create_absent_following(path, true)
     }
 
-    fn create_with(path: &Path, require_absent: bool) -> Result<Self, Error> {
-        let destination = Destination::bind(path).map_err(Error::Namespace)?;
+    pub(crate) fn create_absent_following(path: &Path, creator_only: bool) -> Result<Self, Error> {
+        Self::create_with(path, true, creator_only)
+    }
+
+    fn create_with(path: &Path, require_absent: bool, creator_only: bool) -> Result<Self, Error> {
+        let destination = Destination::bind_following(path, creator_only).map_err(Error::Namespace)?;
         if require_absent {
             destination
                 .require_fail_if_exists_available()

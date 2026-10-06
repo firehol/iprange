@@ -64,6 +64,10 @@ func (a *PublishAttempt) Close() {
 // owners). policy is the published policy of the caller surface; the
 // attempt machine carries its reservation-wire peer.
 func CreatePublishAttempt(destinationPath string, policy PublicationPolicy) (*PublishAttempt, *PublicationPreparationFailure) {
+	return CreatePublishAttemptFollowing(destinationPath, policy, true)
+}
+
+func CreatePublishAttemptFollowing(destinationPath string, policy PublicationPolicy, creatorOnly bool) (*PublishAttempt, *PublicationPreparationFailure) {
 	reservation, ok := reservationPolicyOf(policy)
 	if !ok {
 		return nil, earlyPreparationFailure(
@@ -76,9 +80,9 @@ func CreatePublishAttempt(destinationPath string, policy PublicationPolicy) (*Pu
 	var created *createdOutput
 	var err error
 	if reservation == reservationPolicyFailIfExists {
-		created, err = createOutputAbsent(destinationPath)
+		created, err = createOutputAbsentFollowing(destinationPath, creatorOnly)
 	} else {
-		created, err = createOutput(destinationPath)
+		created, err = createOutputFollowing(destinationPath, creatorOnly)
 	}
 	if err != nil {
 		// Rust create: Problem::output, no discard (nothing exists).

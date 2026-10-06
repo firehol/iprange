@@ -32,6 +32,7 @@ type sortRequest struct {
 	readableRecords   uint64
 	check             func() error
 	initialArea       *sortArea
+	creatorOnly       bool
 }
 
 // sortArea is one scratch region usable as a sort area (Rust
@@ -62,7 +63,7 @@ func sortAndEmit(codec rangeCodec, m *mapping.Mapping, request sortRequest, page
 	}
 	scratch := pages.takeScratch()
 	if scratch == nil {
-		scratch, err = startSortScratch(request.meta, request.budget)
+		scratch, err = startSortScratch(request.meta, request.budget, request.creatorOnly)
 		if err != nil {
 			return nil, pageFailure(pages, err)
 		}
@@ -388,11 +389,11 @@ func finishSort(scratch *scratch, result error) (*scratchCleanup, *externalSortF
 
 // startSortScratch starts the scratch attempt of the external sort
 // (Rust start_scratch).
-func startSortScratch(meta format.Meta, budget *RecoveryBudget) (*scratch, error) {
+func startSortScratch(meta format.Meta, budget *RecoveryBudget, creatorOnly bool) (*scratch, error) {
 	if budget.ScratchDirectory == "" {
 		return nil, budgetError("recovery unordered ranges")
 	}
-	return scratchStart(budget.ScratchDirectory, meta, budget.MaxScratchBytes, budget.MaxScratchFiles, budget.MaxOpenFiles)
+	return scratchStartFollowing(budget.ScratchDirectory, meta, budget.MaxScratchBytes, budget.MaxScratchFiles, budget.MaxOpenFiles, creatorOnly)
 }
 
 // pageFailure folds one pre-sort failure through the page-set

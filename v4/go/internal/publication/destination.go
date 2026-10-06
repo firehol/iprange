@@ -23,6 +23,7 @@ type destination struct {
 	coordination       string
 	basenameCommitment [32]byte
 	security           security.Profile
+	creatorOnly        bool
 }
 
 // bindDestination binds one destination path (Rust Destination::bind):
@@ -32,6 +33,10 @@ type destination struct {
 // as a retained directory, both names must fit the name_max proof,
 // and the basename commitment must encode.
 func bindDestination(path string) (*destination, error) {
+	return bindDestinationFollowing(path, true)
+}
+
+func bindDestinationFollowing(path string, creatorOnly bool) (*destination, error) {
 	component, ok := mainComponent(path)
 	if !ok {
 		return nil, &live.NamespaceError{Kind: live.NamespaceInvalidName}
@@ -64,6 +69,7 @@ func bindDestination(path string) (*destination, error) {
 		coordination:       coordination,
 		basenameCommitment: commitment,
 		security:           profile,
+		creatorOnly:        creatorOnly,
 	}, nil
 }
 
@@ -99,7 +105,12 @@ func (d *destination) basenameCommitmentValue() [32]byte { return d.basenameComm
 // securityCommitment returns the captured creator-only security
 // commitment (Rust Destination::security_commitment, stored in the
 // reservation record).
-func (d *destination) securityCommitment() [32]byte { return d.security.Commitment() }
+func (d *destination) securityCommitment() [32]byte {
+	if !d.creatorOnly {
+		return [32]byte{}
+	}
+	return d.security.Commitment()
+}
 
 // directory returns the retained parent directory.
 func (d *destination) directory() *live.Directory { return d.dir }
@@ -109,12 +120,15 @@ func (d *destination) directory() *live.Directory { return d.dir }
 // selects the unprotected 0600 create plus post-proof or the protected
 // descriptor create).
 func (d *destination) create(name string) (*os.File, error) {
-	return destinationCreate(d.dir, name, d.security)
+	return destinationCreate(d.dir, name, d.security, d.creatorOnly)
 }
 
 // secureCreated applies the creator-only policy to one created
 // artifact (Rust Destination::secure_created).
 func (d *destination) secureCreated(f *os.File) error {
+	if !d.creatorOnly {
+		return nil
+	}
 	if err := security.SecureCreatorOnly(f, d.security); err != nil {
 		return securityNamespaceError(err)
 	}
@@ -124,6 +138,9 @@ func (d *destination) secureCreated(f *os.File) error {
 // verifyCreated proves one created artifact still carries the
 // destination creator commitment (Rust Destination::verify_created).
 func (d *destination) verifyCreated(f *os.File) error {
+	if !d.creatorOnly {
+		return nil
+	}
 	commitment, err := security.CreatorOnlyCommitment(f)
 	if err != nil {
 		return securityNamespaceError(err)

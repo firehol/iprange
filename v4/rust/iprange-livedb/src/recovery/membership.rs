@@ -42,6 +42,26 @@ pub(crate) fn analyze<S: RecoverySink>(
     sink: &mut S,
     expected_kind: ValueKind,
 ) -> std::result::Result<IndirectAnalysis, super::construction::AnalysisFailure> {
+    analyze_following(
+        mapping,
+        meta,
+        budget,
+        cancellation,
+        sink,
+        expected_kind,
+        true,
+    )
+}
+
+pub(crate) fn analyze_following<S: RecoverySink>(
+    mapping: &Mapping,
+    meta: MetaV4,
+    budget: &RecoveryBudget,
+    cancellation: &CancellationToken,
+    sink: &mut S,
+    expected_kind: ValueKind,
+    creator_only: bool,
+) -> std::result::Result<IndirectAnalysis, super::construction::AnalysisFailure> {
     if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
         return Err(super::construction::analysis_failure(
             cause,
@@ -62,7 +82,13 @@ pub(crate) fn analyze<S: RecoverySink>(
     let mut reporter = Reporter::new(sink);
     let page_heap = budget.max_heap_bytes / 2;
     let mut pages =
-        match PageSet::for_recovery(page_heap, meta.page_count.min(physical_pages), meta, budget) {
+        match PageSet::for_recovery_following(
+            page_heap,
+            meta.page_count.min(physical_pages),
+            meta,
+            budget,
+            creator_only,
+        ) {
             Ok(pages) => pages,
             Err(cause) => {
                 return Err(super::construction::analysis_failure(

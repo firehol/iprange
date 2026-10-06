@@ -193,14 +193,6 @@ impl Directory {
             None => security::create_unprotected(path, write_through),
         };
         created.map_err(|error| match error {
-        &self,
-        name: &Name,
-        profile: &security::Profile,
-    ) -> Result<File, NamespaceError> {
-        self.check_creator()?;
-        self.require_name_lengths(&[name])?;
-        let path = self.entry_path(name)?;
-        self.create_file(&path, Some(profile), true)
             NamespaceError::IoAt { source, .. }
                 if source.raw_os_error()
                     == Some(windows_sys::Win32::Foundation::ERROR_FILE_EXISTS as i32) =>
@@ -209,6 +201,27 @@ impl Directory {
             }
             error => error,
         })
+    }
+
+    pub(crate) fn create(
+        &self,
+        name: &Name,
+        profile: &security::Profile,
+    ) -> Result<File, NamespaceError> {
+        self.create_following(name, profile, true)
+    }
+
+    pub(crate) fn create_following(
+        &self,
+        name: &Name,
+        profile: &security::Profile,
+        creator_only: bool,
+    ) -> Result<File, NamespaceError> {
+        self.check_creator()?;
+        self.require_name_lengths(&[name])?;
+        let path = self.entry_path(name)?;
+        let selected = if creator_only { Some(profile) } else { None };
+        self.create_file(&path, selected, true)
     }
 
     pub(crate) fn open_regular(

@@ -61,6 +61,7 @@ pub(super) struct RangeBuild<'a> {
     pub(super) ordered: bool,
     pub(super) retained_heap_bytes: u64,
     pub(super) sort_reuse: SortReuse,
+    pub(super) creator_only: bool,
 }
 
 #[allow(clippy::result_large_err)]
@@ -191,6 +192,7 @@ fn build_external<K: DirectKey, O: RangeOutput<K>>(
             readable_records: request.readable_records,
             cancellation: request.cancellation,
             initial_area: request.sort_reuse.area,
+            creator_only: request.creator_only,
         },
         pages,
         |record| output.push(record),

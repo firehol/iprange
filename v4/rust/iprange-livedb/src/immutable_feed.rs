@@ -143,7 +143,11 @@ where
     cancellation
         .check()
         .map_err(|cause| Box::new(ImmutableFeedPreparationFailure::early(cause)))?;
-    let (attempt, file) = crate::publication::workflow::create(destination, publication_policy)
+    let (attempt, file) = crate::publication::workflow::create_following(
+        destination,
+        publication_policy,
+        false,
+    )
         .map_err(failure_from_early)?;
     let built = match unordered::build::<K, S>(
         file,

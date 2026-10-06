@@ -161,13 +161,14 @@ fn complete(
         Coordination::Malformed { .. } => unreachable!("checked above"),
     };
     let sidecar_identity = crate::live_namespace::public_identity(sidecar.local_identity());
+    let creator_only = sidecar.requires_creator_only();
 
     let (main_file, main_identity) = match main {
         Main::Exact { file, identity } => (file, crate::live_namespace::public_identity(identity)),
         Main::Absent => {
             let created = match crate::live_namespace::create_private(
                 path,
-                true,
+                creator_only,
                 CleanupAuthority {
                     attempt_id: supplied.database_id,
                     ordinal: 0,

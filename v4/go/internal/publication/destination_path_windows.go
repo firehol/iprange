@@ -47,6 +47,9 @@ func platformEncodedBytes(name string) []byte {
 // Destination::create windows arm: security::create_private with
 // write-through); the secureCreated proof then verifies the live
 // commitment, exactly like the Rust flow.
-func destinationCreate(dir *live.Directory, name string, profile security.Profile) (*os.File, error) {
-	return dir.CreateSecured(name, profile)
+func destinationCreate(dir *live.Directory, name string, profile security.Profile, creatorOnly bool) (*os.File, error) {
+	if creatorOnly {
+		return dir.CreateSecured(name, profile)
+	}
+	return dir.CreateMode(name, 0o666)
 }

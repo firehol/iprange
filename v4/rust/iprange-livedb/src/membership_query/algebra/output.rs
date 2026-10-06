@@ -83,7 +83,8 @@ pub(crate) fn publish(
     let prepared = Prepared::new(algebra, operation, mode, reserved_heap_bytes, cancellation)
         .map_err(|cause| Box::new(AlgebraPreparationFailure::early(cause)))?;
     let (attempt, file) =
-        crate::publication::workflow::create(destination, policy).map_err(failure_from_early)?;
+        crate::publication::workflow::create_following(destination, policy, false)
+            .map_err(failure_from_early)?;
     let built = match build(
         algebra,
         file,

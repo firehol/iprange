@@ -324,12 +324,9 @@ fn decode<P: ByteSource>(block: P) -> Result<Header, Problem> {
 }
 
 fn decode_security<P: ByteSource>(block: P) -> Result<[u8; 32], Problem> {
-    let commitment = array(block, SECURITY_COMMITMENT_OFFSET);
-    if commitment == [0; 32] {
-        Err(Problem::Security)
-    } else {
-        Ok(commitment)
-    }
+    // Zero is the unprotected choice. A nonzero value is the creator-only
+    // commitment and is checked against the file by the inspection path.
+    Ok(array(block, SECURITY_COMMITMENT_OFFSET))
 }
 
 fn decode_core<P: ByteSource>(block: P) -> Result<CoreFields, Problem> {

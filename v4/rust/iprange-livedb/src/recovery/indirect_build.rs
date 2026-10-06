@@ -8,7 +8,7 @@ use crate::key::{Ipv4Key, Ipv6Key};
 use crate::mapping::Mapping;
 
 use super::construction::{self, Construction, Failure};
-use super::membership::{analyze, IndirectAnalysis};
+use super::membership::{analyze_following, IndirectAnalysis};
 use super::membership_index::MembershipIndex;
 use super::membership_output::MembershipKey;
 use super::page_set::PageSet;
@@ -52,14 +52,35 @@ pub(super) fn construct<M: Mode, S: RecoverySink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> std::result::Result<Construction, Failure> {
+    construct_following::<M, S>(
+        mapping,
+        source_meta,
+        builder,
+        budget,
+        cancellation,
+        sink,
+        true,
+    )
+}
+
+pub(super) fn construct_following<M: Mode, S: RecoverySink>(
+    mapping: &Mapping,
+    source_meta: MetaV4,
+    builder: Builder,
+    budget: &RecoveryBudget,
+    cancellation: &CancellationToken,
+    sink: &mut S,
+    creator_only: bool,
+) -> std::result::Result<Construction, Failure> {
     let (builder, analysis) = construction::prepare(builder, source_meta, M::VALUE_KIND, || {
-        analyze(
+        analyze_following(
             mapping,
             source_meta,
             budget,
             cancellation,
             sink,
             M::VALUE_KIND,
+            creator_only,
         )
     })?;
     match source_meta.address_family {
@@ -71,6 +92,7 @@ pub(super) fn construct<M: Mode, S: RecoverySink>(
             cancellation,
             sink,
             analysis,
+            creator_only,
         ),
         AddressFamily::Ipv6 => build::<M, Ipv6Key, S>(
             mapping,
@@ -80,6 +102,7 @@ pub(super) fn construct<M: Mode, S: RecoverySink>(
             cancellation,
             sink,
             analysis,
+            creator_only,
         ),
     }
 }
@@ -93,6 +116,7 @@ fn build<M, K, S>(
     cancellation: &CancellationToken,
     sink: &mut S,
     analysis: IndirectAnalysis,
+    creator_only: bool,
 ) -> std::result::Result<Construction, Failure>
 where
     M: Mode,
@@ -144,6 +168,7 @@ where
                     ordered,
                     retained_heap_bytes: retained,
                     sort_reuse,
+                    creator_only,
                 },
                 pages,
                 memberships: &memberships,

@@ -422,7 +422,8 @@ fn create(
         ValueTag::new(tag).ok_or("fixed fixture tag is invalid")?,
         8,
         &CancellationToken::new(),
-        )
+        true,
+    )
     .map(|_| ())
     .map_err(|error| format!("create {label}: {error}"))
 }

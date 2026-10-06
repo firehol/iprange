@@ -342,7 +342,8 @@ pub(super) fn populated(label: &str, ranges: usize, feeds: usize) -> Result<Test
         ValueTag::new(b"membership").ok_or_else(|| "invalid benchmark value tag".to_owned())?,
         1,
         &CancellationToken::new(),
-        )
+        true,
+    )
     .map_err(display)?;
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(
@@ -446,7 +447,8 @@ fn create_membership_file(database: &TestDatabase) -> Result<(), String> {
         ValueTag::new(b"membership").ok_or_else(|| "invalid benchmark value tag".to_owned())?,
         1,
         &CancellationToken::new(),
-        )
+        true,
+    )
     .map_err(display)?;
     Ok(())
 }

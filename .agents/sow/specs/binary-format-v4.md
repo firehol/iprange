@@ -2362,9 +2362,13 @@ A live database created with the creator-only flag uses creator-only
 access. POSIX mode is exactly `0600`, independent of umask; Windows uses
 a protected descriptor for the effective user. A live database created
 without the flag uses the process umask and the directory default.
-Publication reservations and recovery scratch remain creator-only.
-Opens never silently change existing access. Every descriptor is
-close-on-exec or non-inheritable.
+Every other product file follows that same choice. A publication
+reservation, snapshot private file, recovery scratch file, worker
+control file, and garbage-collection envelope are creator-only only when
+the source database is. A file with no source database uses the process
+mode. An unclassified source fails closed to creator-only. Opens never
+silently change existing access. Every descriptor is close-on-exec or
+non-inheritable.
 
 For POSIX creation-security kind 1, the engine removes an inherited extended
 access ACL, applies mode `0600`, and verifies the retained regular inode is
@@ -2470,7 +2474,7 @@ of the page are reserved and MUST be zero. The record layout is:
 | 452 | 8 | previous byte length | present only under replacement policies |
 | 460 | 2 | creation security kind | `1` |
 | 462 | 2 | reserved | zero |
-| 464 | 32 | security commitment | creator-only commitment, nonzero |
+| 464 | 32 | security commitment | creator-only commitment, or zero when unprotected |
 | 496 | 8 | sequence | `1` with state `1`, `2` with state `2` |
 | 504 | 4 | reserved | zero |
 | 508 | 4 | CRC-32C | complete page with this field zero |
@@ -3692,6 +3696,9 @@ CRC covers the complete 4,096-byte block with `[508,512)` zero. Every reserved
 byte is zero. Reservation ID is the operation's random nonzero
 publication-attempt ID. The creation-security kind/commitment is fixed at
 attempt start and matches every engine-created inode in that attempt.
+A zero commitment means the attempt followed an unprotected source and
+did not apply creator-only access. A nonzero commitment is the
+creator-only proof from section 15.6.
 
 The publisher exclusively creates and sizes
 `.iprange-reservation-<id>.tmp`, obtains its local identity, writes and

@@ -29,6 +29,14 @@ pub(crate) fn create(
     path: &Path,
     policy: PublicationPolicy,
 ) -> Result<(OutputAttempt, File), EarlyFailure> {
+    create_following(path, policy, true)
+}
+
+pub(crate) fn create_following(
+    path: &Path,
+    policy: PublicationPolicy,
+    creator_only: bool,
+) -> Result<(OutputAttempt, File), EarlyFailure> {
     if policy == PublicationPolicy::ReplaceExisting {
         super::namespace::require_exchange_available().map_err(|_| EarlyFailure {
             cause: Problem::sdk(&crate::error::Error::DurabilityUnsupported(
@@ -38,9 +46,9 @@ pub(crate) fn create(
         })?;
     }
     let created = match policy {
-        PublicationPolicy::FailIfExists => CreatedOutput::create_absent(path),
+        PublicationPolicy::FailIfExists => CreatedOutput::create_absent_following(path, creator_only),
         PublicationPolicy::ReplaceExisting | PublicationPolicy::ReplaceExistingNoRollback => {
-            CreatedOutput::create(path)
+            CreatedOutput::create_following(path, creator_only)
         }
     }
     .map_err(|cause| EarlyFailure {

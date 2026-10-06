@@ -14,7 +14,11 @@ import (
 // membershipConstruct builds one canonical membership output from one
 // recovery source (Rust membership_build::construct).
 func membershipConstruct(m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink) (*Construction, *constructionFailure) {
-	return indirectConstruct(indirectMode{
+	return membershipConstructFollowing(m, sourceMeta, builder, budget, check, sink, true)
+}
+
+func membershipConstructFollowing(m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, creatorOnly bool) (*Construction, *constructionFailure) {
+	return indirectConstructFollowing(indirectMode{
 		kind: format.ValueKindMembership,
 		checkStructures: func(structures *structureIndex) error {
 			if structures != nil {
@@ -38,5 +42,5 @@ func membershipConstruct(m *mapping.Mapping, sourceMeta format.Meta, builder *wr
 			}
 			return buildRanges(codec, context.request, context.pages, &components{check: context.request.check, codec: codec, policy: policy})
 		},
-	}, m, sourceMeta, builder, budget, check, sink)
+	}, m, sourceMeta, builder, budget, check, sink, creatorOnly)
 }

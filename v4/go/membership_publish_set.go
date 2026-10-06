@@ -263,7 +263,7 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	// Rust publication::workflow::create: the exchange probe, the
 	// creation, and the security proof fold their discard evidence into
 	// the preparation failure ledger.
-	attempt, failure := publication.CreatePublishAttempt(destination, policy)
+	attempt, failure := publication.CreatePublishAttemptFollowing(destination, policy, false)
 	if failure != nil {
 		return zero, algebraFailureOf(failure)
 	}

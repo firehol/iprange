@@ -210,7 +210,7 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 	// creation, and the security proof fold their discard evidence into
 	// the preparation failure ledger (the source is released by
 	// failSource below).
-	attempt, failure := publication.CreatePublishAttempt(destinationPath, policy)
+	attempt, failure := publication.CreatePublishAttemptFollowing(destinationPath, policy, sourceIsCreatorOnly(sourcePath))
 	if failure != nil {
 		// Rust fail_source over workflow::create Failure::Early: the
 		// failure facts and the source-release residue fold together.
@@ -339,6 +339,15 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 // refusal before path access (the machine ran it before budget
 // validation, the Rust api.rs position); the immutable mode opens the
 // ordinary reader.
+func sourceIsCreatorOnly(path string) bool {
+	reader, err := live.OpenLiveReaderPolicy(path, nil, false)
+	if err != nil {
+		return true
+	}
+	defer reader.Close()
+	return reader.CreatorOnly()
+}
+
 func openSource(path string, mode SourceMode, check func() error) (source, *Failure, func() sourceEnd) {
 	switch mode {
 	case SourceImmutable:

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use memmap2::{MmapOptions, MmapRaw};
 
 use crate::error::{Error, Result};
-use crate::publication::security::{self, Profile};
+
 use crate::random;
 
 pub(super) const CONTROL_LEN: usize = 1024 * 1024;
@@ -805,18 +805,15 @@ fn create_file(nonce: [u8; 16]) -> Result<(PathBuf, File)> {
         .read(true)
         .write(true)
         .create_new(true)
-        .mode(security::CREATOR_MODE)
+        .mode(0o666)
         .open(&path)?;
-    let profile = Profile::capture().map_err(namespace_error)?;
-    security::secure_creator_only(&file, &profile).map_err(namespace_error)?;
     Ok((path, file))
 }
 
 #[cfg(windows)]
 fn create_file(nonce: [u8; 16]) -> Result<(PathBuf, File)> {
     let path = control_path(nonce);
-    let profile = Profile::capture().map_err(namespace_error)?;
-    let file = security::create_private(&path, &profile, false).map_err(namespace_error)?;
+    let file = security::create_unprotected(&path, false).map_err(namespace_error)?;
     Ok((path, file))
 }
 
@@ -828,10 +825,6 @@ fn control_path(nonce: [u8; 16]) -> PathBuf {
     }
     name.push_str(".ctl");
     std::env::temp_dir().join(name)
-}
-
-fn namespace_error(_error: crate::publication::namespace::NamespaceError) -> Error {
-    Error::Conflict("worker control access policy could not be established")
 }
 
 #[cfg(unix)]

@@ -95,10 +95,18 @@ pub(crate) struct Destination {
     coordination: Name,
     basename_commitment: [u8; 32],
     security: security::Profile,
+    creator_only: bool,
 }
 
 impl Destination {
     pub(crate) fn bind(path: &Path) -> Result<Self, NamespaceError> {
+        Self::bind_following(path, true)
+    }
+
+    pub(crate) fn bind_following(
+        path: &Path,
+        creator_only: bool,
+    ) -> Result<Self, NamespaceError> {
         let component = path.file_name().ok_or(NamespaceError::InvalidName)?;
         path::validate_main_name(component).map_err(|_| NamespaceError::InvalidName)?;
         let (main, coordination, encoding) = platform::destination_names(component)?;
@@ -112,6 +120,7 @@ impl Destination {
             coordination,
             basename_commitment,
             security: security::Profile::capture()?,
+            creator_only,
         })
     }
 
@@ -132,18 +141,32 @@ impl Destination {
     }
 
     pub(crate) fn security_commitment(&self) -> [u8; 32] {
-        self.security.commitment()
+        if self.creator_only {
+            self.security.commitment()
+        } else {
+            [0; 32]
+        }
     }
 
     pub(crate) fn secure_created(&self, file: &File) -> Result<(), NamespaceError> {
+        if !self.creator_only {
+            return Ok(());
+        }
         security::secure_creator_only(file, &self.security)
     }
 
     pub(crate) fn create(&self, name: &Name) -> Result<File, NamespaceError> {
-        self.directory.create(name, &self.security)
+        if self.creator_only {
+            self.directory.create(name, &self.security)
+        } else {
+            self.directory.create_unprotected(name)
+        }
     }
 
     pub(crate) fn verify_created(&self, file: &File) -> Result<(), NamespaceError> {
+        if !self.creator_only {
+            return Ok(());
+        }
         if security::creator_only_commitment(file)? != self.security.commitment() {
             return Err(NamespaceError::AccessPolicy);
         }

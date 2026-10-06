@@ -94,6 +94,7 @@ pub(crate) struct Scratch {
     max_open_files: u32,
     retained_bytes: u64,
     owned: [Option<Owned>; MAX_OWNED],
+    creator_only: bool,
 }
 
 struct Owned {
@@ -117,6 +118,17 @@ impl Scratch {
         max_bytes: u64,
         max_files: u32,
         max_open_files: u32,
+    ) -> Result<Self> {
+        Self::start_following(directory, source, max_bytes, max_files, max_open_files, true)
+    }
+
+    pub(crate) fn start_following(
+        directory: &Path,
+        source: MetaV4,
+        max_bytes: u64,
+        max_files: u32,
+        max_open_files: u32,
+        creator_only: bool,
     ) -> Result<Self> {
         if max_files == 0 || max_open_files < 3 {
             return Err(Error::BudgetExceeded(
@@ -142,6 +154,7 @@ impl Scratch {
             max_open_files,
             retained_bytes: 0,
             owned: [None, None],
+            creator_only,
         };
         crate::worker::start_scratch_checkpoint(
             scratch.attempt_id,
@@ -161,7 +174,9 @@ impl Scratch {
         let header = header(self.source, self.attempt_id, ordinal, &self.profile);
         let owned = self.owned[slot].as_ref().expect("scratch owner installed");
         let file = &owned.shared.file;
-        security::secure_creator_only(file, &self.profile).map_err(namespace_error)?;
+        if self.creator_only {
+            security::secure_creator_only(file, &self.profile).map_err(namespace_error)?;
+        }
         owned.shared.write(0, &header)?;
         Ok(ScratchSlot(slot))
     }
@@ -203,10 +218,15 @@ impl Scratch {
         self.compact_mapping_slack(None)?;
         self.require_growth(0, HEADER_SIZE)?;
         let name = scratch_name(self.attempt_id, ordinal)?;
-        let file = self
-            .directory
-            .create(&name, &self.profile)
-            .map_err(namespace_error)?;
+        let file = if self.creator_only {
+            self.directory
+                .create(&name, &self.profile)
+                .map_err(namespace_error)?
+        } else {
+            self.directory
+                .create_unprotected(&name)
+                .map_err(namespace_error)?
+        };
         let identity =
             regular_identity(&file, self.directory.identity()).map_err(namespace_error)?;
         self.owned[slot] = Some(Owned {

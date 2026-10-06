@@ -27,6 +27,17 @@ pub(crate) fn analyze<S: RecoverySink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> std::result::Result<DirectAnalysis, super::construction::AnalysisFailure> {
+    analyze_following(mapping, meta, budget, cancellation, sink, true)
+}
+
+pub(crate) fn analyze_following<S: RecoverySink>(
+    mapping: &Mapping,
+    meta: MetaV4,
+    budget: &RecoveryBudget,
+    cancellation: &CancellationToken,
+    sink: &mut S,
+    creator_only: bool,
+) -> std::result::Result<DirectAnalysis, super::construction::AnalysisFailure> {
     if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
         return Err(super::construction::analysis_failure(
             cause,
@@ -43,11 +54,12 @@ pub(crate) fn analyze<S: RecoverySink>(
     }
     let physical_pages = mapping.len() / PAGE_SIZE as u64;
     let mut reporter = Reporter::new(sink);
-    let mut pages = match PageSet::for_recovery(
+    let mut pages = match PageSet::for_recovery_following(
         budget.max_heap_bytes,
         meta.page_count.min(physical_pages),
         meta,
         budget,
+        creator_only,
     ) {
         Ok(pages) => pages,
         Err(cause) => {

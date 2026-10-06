@@ -134,6 +134,13 @@ pub(in crate::worker) fn recover<S: RecoverySink>(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn source_requires_creator_only(path: &Path) -> bool {
+    match crate::LiveReader::open(path, &crate::CancellationToken::new()) {
+        Ok(reader) => reader.creator_only(),
+        Err(_) => true,
+    }
+}
+
 pub(super) fn recover_once<S: RecoverySink>(
     source_path: &Path,
     candidate: RecoveryCandidate,
@@ -158,7 +165,10 @@ pub(super) fn recover_once<S: RecoverySink>(
     if let Err(cause) = handshake(&mut child, &mut control) {
         return RecoveryAttempt::Early(cause);
     }
-    let created = match CreatedOutput::create_absent(destination_path) {
+    let created = match CreatedOutput::create_absent_following(
+        destination_path,
+        source_requires_creator_only(source_path),
+    ) {
         Ok(created) => created,
         Err(cause) => {
             return RecoveryAttempt::Complete(Err(Box::new(RecoveryPreparationFailure::new(

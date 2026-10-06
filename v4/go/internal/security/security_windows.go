@@ -117,6 +117,27 @@ func CreatePrivate(path string, profile Profile, writeThrough bool) (*os.File, e
 	return os.NewFile(uintptr(handle), path), nil
 }
 
+// CreateUnprotected exclusively creates one file with the process
+// default descriptor. No protected DACL is installed.
+func CreateUnprotected(path string, writeThrough bool) (*os.File, error) {
+	ptr, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, &format.Error{Code: format.CodeNameInvalid, Detail: "invalid file name"}
+	}
+	flags := uint32(windows.FILE_ATTRIBUTE_NORMAL | windows.FILE_FLAG_OPEN_REPARSE_POINT)
+	if writeThrough {
+		flags |= windows.FILE_FLAG_WRITE_THROUGH
+	}
+	handle, err := windows.CreateFile(ptr, fileAllAccess, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.CREATE_NEW, flags, 0)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_FILE_EXISTS) {
+			return nil, &format.Error{Code: format.CodeNameExists, Detail: "destination exists"}
+		}
+		return nil, ioError("create private file", err)
+	}
+	return os.NewFile(uintptr(handle), path), nil
+}
+
 // SecureCreatorOnly proves the creator-only policy of one open
 // artifact against the captured profile (Rust
 // security::secure_creator_only): the artifact's live commitment must

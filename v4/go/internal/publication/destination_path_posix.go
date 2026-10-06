@@ -44,6 +44,9 @@ func platformEncodedBytes(name string) []byte {
 // destinationCreate creates one private name with the unprotected
 // 0600 open; the creator-only proof is applied separately by
 // secureCreated (Rust Destination::create unix arm + secure_created).
-func destinationCreate(dir *live.Directory, name string, _ security.Profile) (*os.File, error) {
-	return dir.Create(name)
+func destinationCreate(dir *live.Directory, name string, _ security.Profile, creatorOnly bool) (*os.File, error) {
+	if creatorOnly {
+		return dir.Create(name)
+	}
+	return dir.CreateMode(name, 0o666)
 }

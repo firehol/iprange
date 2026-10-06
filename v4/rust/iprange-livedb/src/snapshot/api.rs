@@ -9,6 +9,13 @@ use super::{
     SnapshotResult, SnapshotSourceMode,
 };
 
+fn source_requires_creator_only(path: &Path) -> bool {
+    match crate::LiveReader::open(path, &crate::CancellationToken::new()) {
+        Ok(reader) => reader.creator_only(),
+        Err(_) => true,
+    }
+}
+
 pub fn snapshot_to(
     source_path: impl AsRef<Path>,
     source_mode: SnapshotSourceMode,
@@ -62,7 +69,11 @@ mod platform {
             return Err(fail_source(source, cause, None));
         }
         let (attempt, file) =
-            match publication::workflow::create(destination_path, publication_policy) {
+            match publication::workflow::create_following(
+                destination_path,
+                publication_policy,
+                source_requires_creator_only(source_path),
+            ) {
                 Ok(output) => output,
                 Err(failure) => {
                     return Err(fail_source(source, failure.cause, failure.discarded));

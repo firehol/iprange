@@ -27,9 +27,19 @@ package worker
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/recovery"
 )
+
+func sourceIsCreatorOnly(path string) bool {
+	reader, err := live.OpenLiveReaderPolicy(path, nil, false)
+	if err != nil {
+		return true
+	}
+	defer reader.Close()
+	return reader.CreatorOnly()
+}
 
 // recoveryAttempt is one single-session recovery outcome (Rust
 // client/recovery.rs RecoveryAttempt).
@@ -159,7 +169,7 @@ func recoverOnceWorker(sourcePath, destinationPath string, candidate *recovery.R
 	// request is written, so the worker machine resumes the owned
 	// artifact and every interrupted or failed terminal discards it
 	// with the exact facts.
-	created, createFailure := publication.CreatePublishAttempt(destinationPath, publication.PolicyFailIfExists)
+	created, createFailure := publication.CreatePublishAttemptFollowing(destinationPath, publication.PolicyFailIfExists, sourceIsCreatorOnly(sourcePath))
 	if createFailure != nil {
 		child.Abort()
 		// Rust recover_once create/secure arms: the folded publication

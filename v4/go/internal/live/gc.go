@@ -299,11 +299,17 @@ func gcCreate(directory *Directory, authority *gcAuthority, envelopeName, inertN
 	if err != nil {
 		return nil, gcNamespaceProblem(err)
 	}
+	unprotected := authority.creationSecurity.Commitment == [32]byte{}
 	if authority.creationSecurity.Kind != gcCreationSecurityKind() ||
-		authority.creationSecurity.Commitment != profile.Commitment() {
+		(!unprotected && authority.creationSecurity.Commitment != profile.Commitment()) {
 		return nil, gcCleanupConflict("GC source access policy no longer matches the effective user")
 	}
-	file, err := directory.CreateSecured(envelopeName, profile)
+	var file *os.File
+	if unprotected {
+		file, err = directory.CreateMode(envelopeName, 0o666)
+	} else {
+		file, err = directory.CreateSecured(envelopeName, profile)
+	}
 	if err != nil {
 		return nil, gcNamespaceProblem(err)
 	}
@@ -312,9 +318,12 @@ func gcCreate(directory *Directory, authority *gcAuthority, envelopeName, inertN
 		file.Close()
 		return nil, gcNamespaceProblem(err)
 	}
-	if err := security.SecureCreatorOnly(file, profile); err != nil {
-		file.Close()
-		return nil, gcNamespaceProblem(err)
+	if !unprotected {
+		if err := security.SecureCreatorOnly(file, profile); err != nil {
+			file.Close()
+			return nil, gcNamespaceProblem(err)
+		}
+	}
 	}
 	if err := gcCheckpointEnvelope(directory, authority, envelopeName, identity, inertName, observe, observer); err != nil {
 		file.Close()

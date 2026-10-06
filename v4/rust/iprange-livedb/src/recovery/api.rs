@@ -244,7 +244,15 @@ mod platform {
                 ))
             }
         };
-        let built = match build(source.mapping(), meta, builder, budget, cancellation, sink) {
+        let built = match build(
+            source.mapping(),
+            meta,
+            builder,
+            budget,
+            cancellation,
+            sink,
+            source_requires_creator_only(source.path()),
+        ) {
             Ok(built) => built,
             Err(failure) => {
                 let failure = *failure;
@@ -274,6 +282,13 @@ mod platform {
         )
     }
 
+    fn source_requires_creator_only(path: &Path) -> bool {
+        match crate::LiveReader::open(path, &crate::CancellationToken::new()) {
+            Ok(reader) => reader.creator_only(),
+            Err(_) => true,
+        }
+    }
+
     fn build<S: RecoverySink>(
         mapping: &crate::mapping::Mapping,
         meta: MetaV4,
@@ -281,20 +296,41 @@ mod platform {
         budget: &RecoveryBudget,
         cancellation: &CancellationToken,
         sink: &mut S,
+        creator_only: bool,
     ) -> std::result::Result<construction::Construction, Box<construction::Failure>> {
         match meta.value_kind {
             ValueKind::Direct => {
-                direct_build::construct(mapping, meta, builder, budget, cancellation, sink)
-                    .map_err(Box::new)
+                direct_build::construct_following(
+                    mapping,
+                    meta,
+                    builder,
+                    budget,
+                    cancellation,
+                    sink,
+                    creator_only,
+                )
+                .map_err(Box::new)
             }
-            ValueKind::Membership => {
-                membership_build::construct(mapping, meta, builder, budget, cancellation, sink)
-                    .map_err(Box::new)
-            }
-            ValueKind::Structured => {
-                structured_build::construct(mapping, meta, builder, budget, cancellation, sink)
-                    .map_err(Box::new)
-            }
+            ValueKind::Membership => membership_build::construct_following(
+                mapping,
+                meta,
+                builder,
+                budget,
+                cancellation,
+                sink,
+                creator_only,
+            )
+            .map_err(Box::new),
+            ValueKind::Structured => structured_build::construct_following(
+                mapping,
+                meta,
+                builder,
+                budget,
+                cancellation,
+                sink,
+                creator_only,
+            )
+            .map_err(Box::new),
         }
     }
 

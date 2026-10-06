@@ -32,6 +32,10 @@ type indirectAnalysis struct {
 // value-kind proof, the page set over half the heap, and the graph
 // analysis; every later failure carries the page-set terminal).
 func indirectAnalyze(m *mapping.Mapping, meta format.Meta, budget *RecoveryBudget, check func() error, sink RecoverySink, kind uint8) (*indirectAnalysis, *analysisFailure) {
+	return indirectAnalyzeFollowing(m, meta, budget, check, sink, kind, true)
+}
+
+func indirectAnalyzeFollowing(m *mapping.Mapping, meta format.Meta, budget *RecoveryBudget, check func() error, sink RecoverySink, kind uint8, creatorOnly bool) (*indirectAnalysis, *analysisFailure) {
 	if err := budget.validate(); err != nil {
 		return nil, analysisFailureOf(err, RecoveryReport{}, nil)
 	}
@@ -47,7 +51,7 @@ func indirectAnalyze(m *mapping.Mapping, meta format.Meta, budget *RecoveryBudge
 		expected = physicalPages
 	}
 	rep := newReporter(sink)
-	pages, err := forRecovery(budget.MaxHeapBytes/2, expected, meta, budget)
+	pages, err := forRecoveryFollowing(budget.MaxHeapBytes/2, expected, meta, budget, creatorOnly)
 	if err != nil {
 		return nil, analysisFailureOf(err, rep.finish(), nil)
 	}

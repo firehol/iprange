@@ -197,15 +197,10 @@ fn wrong_size_and_crc_corruption_are_distinct() {
 }
 
 #[test]
-fn empty_creation_security_commitment_is_rejected() {
+fn empty_creation_security_commitment_is_unprotected() {
     let mut bytes = one_block(header(Policy::FailIfExists));
     bytes[464..496].fill(0);
     rewrite_crc(&mut bytes[..PAGE_SIZE]);
-    assert!(matches!(
-        select(&bytes),
-        Err(SelectError::NoValidHeader {
-            block0: Problem::Security,
-            ..
-        })
-    ));
+    let selected = select(&bytes).expect("zero commitment is the unprotected choice");
+    assert_eq!(selected.header.security_commitment, [0; 32]);
 }

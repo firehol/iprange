@@ -26,6 +26,15 @@ import (
 // in-process (non-worker) entries keep this client create position;
 // the worker session consumes a parent-created attempt through the
 // Recover*WithAttempt entries instead.
+func sourceIsCreatorOnly(path string) bool {
+	reader, err := live.OpenLiveReaderPolicy(path, nil, false)
+	if err != nil {
+		return true
+	}
+	defer reader.Close()
+	return reader.CreatorOnly()
+}
+
 func recoverPrecreated(sourcePath string, candidate *RecoveryCandidate, destinationPath string, mode sourceMode, budget *RecoveryBudget, check func() error, sink RecoverySink) (*RecoveryResult, *RecoveryPreparationFailure) {
 	check = nonNilCheck(check)
 	effective, failure := validateRecoveryBudget(budget, mode)
@@ -38,7 +47,7 @@ func recoverPrecreated(sourcePath string, candidate *RecoveryCandidate, destinat
 	if err := live.Checkpoint(check); err != nil {
 		return nil, earlyRecoveryFailure(err)
 	}
-	attempt, attemptFailure := publication.CreatePublishAttempt(destinationPath, publication.PolicyFailIfExists)
+	attempt, attemptFailure := publication.CreatePublishAttemptFollowing(destinationPath, publication.PolicyFailIfExists, sourceIsCreatorOnly(sourcePath))
 	if attemptFailure != nil {
 		// Rust recover_once create and secure arms: they run before
 		// the source opens, so no source guard exists and the attempt
@@ -140,7 +149,7 @@ func recoverMachine(sourcePath string, candidate *RecoveryCandidate, destination
 	var construction *Construction
 	var constructionFailure *constructionFailure
 	probeErr := source.mapping().Probe(mapping.RoleSource, func() error {
-		construction, constructionFailure = buildRecoveryKind(source.mapping(), meta, builder, effective, check, sink)
+		construction, constructionFailure = buildRecoveryKind(source.mapping(), meta, builder, effective, check, sink, sourceIsCreatorOnly(sourcePath))
 		return nil
 	})
 	if probeErr != nil {
@@ -236,14 +245,14 @@ func RecoverLiveWithAttempt(sourcePath string, candidate *RecoveryCandidate, des
 
 // buildRecoveryKind constructs one recovery output by the source kind
 // (Rust api.rs build: the direct, membership, and structured arms).
-func buildRecoveryKind(m *mapping.Mapping, meta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink) (*Construction, *constructionFailure) {
+func buildRecoveryKind(m *mapping.Mapping, meta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, creatorOnly bool) (*Construction, *constructionFailure) {
 	switch meta.ValueKind {
 	case format.ValueKindDirect:
-		return directConstruct(m, meta, builder, budget, check, sink)
+		return directConstructFollowing(m, meta, builder, budget, check, sink, creatorOnly)
 	case format.ValueKindMembership:
-		return membershipConstruct(m, meta, builder, budget, check, sink)
+		return membershipConstructFollowing(m, meta, builder, budget, check, sink, creatorOnly)
 	case format.ValueKindStructured:
-		return structuredConstruct(m, meta, builder, budget, check, sink)
+		return structuredConstructFollowing(m, meta, builder, budget, check, sink, creatorOnly)
 	default:
 		return nil, &constructionFailure{cause: &format.Error{Code: format.CodeInvalidEnum, Detail: "recovery value kind is invalid"}}
 	}

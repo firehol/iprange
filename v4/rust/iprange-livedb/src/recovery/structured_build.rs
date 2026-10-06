@@ -61,13 +61,34 @@ pub(crate) fn construct<S: RecoverySink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> std::result::Result<Construction, Failure> {
-    indirect_build::construct::<Structured, S>(
+    construct_following(
         mapping,
         source_meta,
         builder,
         budget,
         cancellation,
         sink,
+        true,
+    )
+}
+
+pub(crate) fn construct_following<S: RecoverySink>(
+    mapping: &Mapping,
+    source_meta: MetaV4,
+    builder: Builder,
+    budget: &RecoveryBudget,
+    cancellation: &CancellationToken,
+    sink: &mut S,
+    creator_only: bool,
+) -> std::result::Result<Construction, Failure> {
+    indirect_build::construct_following::<Structured, S>(
+        mapping,
+        source_meta,
+        builder,
+        budget,
+        cancellation,
+        sink,
+        creator_only,
     )
 }
 

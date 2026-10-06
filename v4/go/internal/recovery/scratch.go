@@ -87,6 +87,7 @@ type scratch struct {
 	maxOpenFiles  uint32
 	retainedBytes uint64
 	owned         [scratchMaxOwned]*scratchOwned
+	creatorOnly   bool
 }
 
 // scratchOwned is one retained scratch slot owner (Rust Owned).
@@ -127,6 +128,10 @@ func (f *scratchSharedFile) close() {
 // directory open, the creator profile capture, the fresh attempt
 // identity, and the worker scratch checkpoint.
 func scratchStart(directoryPath string, source format.Meta, maxBytes uint64, maxFiles uint32, maxOpenFiles uint32) (*scratch, error) {
+	return scratchStartFollowing(directoryPath, source, maxBytes, maxFiles, maxOpenFiles, true)
+}
+
+func scratchStartFollowing(directoryPath string, source format.Meta, maxBytes uint64, maxFiles uint32, maxOpenFiles uint32, creatorOnly bool) (*scratch, error) {
 	if maxFiles == 0 || maxOpenFiles < scratchMinOpenFiles {
 		return nil, &format.Error{Code: format.CodeInsufficientResourceBudget, Detail: "recovery scratch requires one file descriptor"}
 	}
@@ -159,6 +164,7 @@ func scratchStart(directoryPath string, source format.Meta, maxBytes uint64, max
 		maxBytes:     maxBytes,
 		maxFiles:     files,
 		maxOpenFiles: maxOpenFiles,
+		creatorOnly:  creatorOnly,
 	}
 	if err := startScratchCheckpoint(attemptID, scratchLocal(directory.Identity()), &publication.CreationSecurity{
 		Kind:       scratchCreationSecurityKind(),
@@ -186,8 +192,10 @@ func (s *scratch) create() (scratchSlot, error) {
 		return scratchSlot{}, err
 	}
 	headerBytes := scratchHeader(s.source, s.attemptID, ordinal, s.profile.Commitment())
-	if err := security.SecureCreatorOnly(s.owned[slot].shared.file, s.profile); err != nil {
-		return scratchSlot{}, scratchNamespaceError(err)
+	if s.creatorOnly {
+		if err := security.SecureCreatorOnly(s.owned[slot].shared.file, s.profile); err != nil {
+			return scratchSlot{}, scratchNamespaceError(err)
+		}
 	}
 	if err := s.owned[slot].shared.write(0, headerBytes[:]); err != nil {
 		return scratchSlot{}, err
@@ -244,7 +252,7 @@ func (s *scratch) install(slot int, ordinal uint32) error {
 	if err != nil {
 		return err
 	}
-	file, err := scratchCreateFile(s.directory, name, s.profile)
+	file, err := scratchCreateFile(s.directory, name, s.profile, s.creatorOnly)
 	if err != nil {
 		return scratchNamespaceError(err)
 	}

@@ -14,8 +14,8 @@ import (
 // (CREATE_NEW, no inheritance), so no post-create strip exists. Every
 // failure maps to the worker's Conflict class exactly like Rust
 // namespace_error over create_file.
-func createControlFile(path string, profile security.Profile) (*os.File, error) {
-	f, err := security.CreatePrivate(path, profile, false)
+func createControlFile(path string, _ security.Profile) (*os.File, error) {
+	f, err := security.CreateUnprotected(path, false)
 	if err != nil {
 		return nil, workerSecurityFailure(err)
 	}

@@ -25,18 +25,26 @@ type createdOutput struct {
 // createOutput creates one private output for the destination at path
 // (Rust CreatedOutput::create).
 func createOutput(path string) (*createdOutput, error) {
-	return createOutputWith(path, false)
+	return createOutputFollowing(path, true)
+}
+
+func createOutputFollowing(path string, creatorOnly bool) (*createdOutput, error) {
+	return createOutputWith(path, false, creatorOnly)
 }
 
 // createOutputAbsent additionally proves the main and coordination
 // names are absent (Rust CreatedOutput::create_absent; the
 // fail-if-exists publication flow uses it).
 func createOutputAbsent(path string) (*createdOutput, error) {
-	return createOutputWith(path, true)
+	return createOutputAbsentFollowing(path, true)
 }
 
-func createOutputWith(path string, requireAbsent bool) (*createdOutput, error) {
-	d, err := bindDestination(path)
+func createOutputAbsentFollowing(path string, creatorOnly bool) (*createdOutput, error) {
+	return createOutputWith(path, true, creatorOnly)
+}
+
+func createOutputWith(path string, requireAbsent, creatorOnly bool) (*createdOutput, error) {
+	d, err := bindDestinationFollowing(path, creatorOnly)
 	if err != nil {
 		return nil, err
 	}

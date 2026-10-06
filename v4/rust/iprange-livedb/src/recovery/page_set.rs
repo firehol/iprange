@@ -38,6 +38,7 @@ struct Fallback {
     max_files: u32,
     max_open_files: u32,
     wanted_slots: usize,
+    creator_only: bool,
 }
 
 /// Sparse page set which migrates to authorized fixed-slot scratch when needed.
@@ -67,6 +68,16 @@ impl PageSet {
         source: MetaV4,
         budget: &RecoveryBudget,
     ) -> Result<Self> {
+        Self::for_recovery_following(max_heap_bytes, expected_pages, source, budget, true)
+    }
+
+    pub(crate) fn for_recovery_following(
+        max_heap_bytes: u64,
+        expected_pages: u64,
+        source: MetaV4,
+        budget: &RecoveryBudget,
+        creator_only: bool,
+    ) -> Result<Self> {
         #[cfg(any(unix, windows))]
         let fallback = budget.scratch_directory.as_ref().map(|directory| Fallback {
             directory: directory.clone(),
@@ -75,6 +86,7 @@ impl PageSet {
             max_files: budget.max_scratch_files,
             max_open_files: budget.max_open_files,
             wanted_slots: wanted_slots(expected_pages),
+            creator_only,
         });
         #[cfg(not(any(unix, windows)))]
         let fallback = {
@@ -439,12 +451,13 @@ impl Fallback {
 
 #[cfg(any(unix, windows))]
 fn start_scratch(fallback: &Fallback) -> Result<Scratch> {
-    Scratch::start(
+    Scratch::start_following(
         &fallback.directory,
         fallback.source,
         fallback.max_bytes,
         fallback.max_files,
         fallback.max_open_files,
+        fallback.creator_only,
     )
 }
 

@@ -163,7 +163,8 @@ fn create_direct(label: &str, tag: ValueTag, reader_capacity: u32) -> Result<Tes
         tag,
         reader_capacity,
         &CancellationToken::new(),
-        )
+        true,
+    )
     .map_err(display)?;
     Ok(database)
 }
@@ -182,7 +183,8 @@ fn create_direct_v6(
         tag,
         reader_capacity,
         &CancellationToken::new(),
-        )
+        true,
+    )
     .map_err(display)?;
     Ok(database)
 }

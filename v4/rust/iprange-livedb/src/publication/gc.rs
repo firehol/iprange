@@ -315,19 +315,28 @@ fn create(
         .require_absent(&inert_name)
         .map_err(|error| Problem::namespace(&error))?;
     let profile = Profile::capture().map_err(|error| Problem::namespace(&error))?;
+    let unprotected = authority.creation_security.commitment == [0; 32];
     if authority.creation_security.kind != CREATION_SECURITY_KIND
-        || authority.creation_security.commitment != profile.commitment()
+        || (!unprotected && authority.creation_security.commitment != profile.commitment())
     {
         return Err(Problem::cleanup_conflict(
             "GC source access policy no longer matches the effective user",
         ));
     }
-    let file = directory
-        .create(&envelope_name, &profile)
-        .map_err(|error| Problem::namespace(&error))?;
+    let file = if unprotected {
+        directory
+            .create_unprotected(&envelope_name)
+            .map_err(|error| Problem::namespace(&error))?
+    } else {
+        directory
+            .create(&envelope_name, &profile)
+            .map_err(|error| Problem::namespace(&error))?
+    };
     let identity = regular_identity(&file, directory.identity())
         .map_err(|error| Problem::namespace(&error))?;
-    security::secure_creator_only(&file, &profile).map_err(|error| Problem::namespace(&error))?;
+    if !unprotected {
+        security::secure_creator_only(&file, &profile).map_err(|error| Problem::namespace(&error))?;
+    }
     checkpoint_envelope(
         directory,
         authority,
