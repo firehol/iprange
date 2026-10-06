@@ -19,6 +19,11 @@ unsafe fn libc_umask(mask: u32) -> u32 {
     unsafe { umask(mask) }
 }
 
+/// Serializes this binary's tests: they run on parallel threads, and the
+/// switch tests below mutate or assert the process-wide environment, so
+/// an unserialized run could flip the switch under another test's create.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn path(label: &str) -> PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -32,6 +37,7 @@ fn path(label: &str) -> PathBuf {
 
 #[test]
 fn creator_only_switch_defaults_off() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
     std::env::remove_var("IPRANGE_CREATOR_ONLY");
     assert!(!iprange_livedb::creator_only_requested());
@@ -47,6 +53,7 @@ fn creator_only_switch_defaults_off() {
 
 #[test]
 fn snapshot_follows_an_unprotected_database() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let directory = path("snapshot");
     fs::create_dir(&directory).unwrap();
     let source = directory.join("plain.iprdb");
@@ -89,6 +96,7 @@ fn create(main: &PathBuf, creator_only: bool) {
 
 #[test]
 fn protected_create_is_checked_after_close() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let main = path("protected");
     create(&main, true);
     assert_eq!(fs::metadata(&main).unwrap().permissions().mode() & 0o777, 0o600);
@@ -104,6 +112,7 @@ fn protected_create_is_checked_after_close() {
 
 #[test]
 fn unprotected_umask_0600_is_not_checked_after_close() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let main = path("plain");
     let old = unsafe { libc::umask(0) };
     create(&main, false);
