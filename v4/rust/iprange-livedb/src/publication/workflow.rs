@@ -25,13 +25,6 @@ pub(crate) enum Failure {
 }
 
 #[allow(clippy::result_large_err)] // See Failure: this is outside the range hot path.
-pub(crate) fn create(
-    path: &Path,
-    policy: PublicationPolicy,
-) -> Result<(OutputAttempt, File), EarlyFailure> {
-    create_following(path, policy, crate::publication::security::creator_only_requested())
-}
-
 pub(crate) fn create_following(
     path: &Path,
     policy: PublicationPolicy,

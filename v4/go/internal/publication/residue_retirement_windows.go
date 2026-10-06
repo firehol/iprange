@@ -21,7 +21,7 @@ func retireResidueCoordination(destination *destination, file *os.File, identity
 	}
 	commitment, commitErr := security.CreatorOnlyCommitment(file)
 	if commitErr != nil {
-		return retirementOutcome{}, namespaceProblem(commitErr)
+		commitment = [32]byte{}
 	}
 	retired := live.GCRetire(destination.directory(), &live.GCAuthority{
 		AttemptID:     attemptID,

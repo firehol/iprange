@@ -27,6 +27,7 @@ const CHILD_REPLACE: &str = "IPRANGE_V4_PUBLICATION_CRASH_REPLACE";
 
 #[test]
 fn reservation_crashes_leave_one_complete_output_and_selectable_authority() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
     for (point, location, expected_state) in [
         (
             "publication.after_reservation_state1_sync",
@@ -310,6 +311,7 @@ pub(super) fn run_child(main: &Path, point: &str) {
         .arg(CHILD_TEST)
         .env(CHILD_PATH, main)
         .env("IPRANGE_V4_TEST_CRASH_AT", point)
+        .env("IPRANGE_CREATOR_ONLY", "1")
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(86), "{point}");
@@ -323,6 +325,7 @@ pub(super) fn run_replacement_child(main: &Path, point: &str) {
         .env(CHILD_PATH, main)
         .env(CHILD_REPLACE, "1")
         .env("IPRANGE_V4_TEST_CRASH_AT", point)
+        .env("IPRANGE_CREATOR_ONLY", "1")
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(86), "{point}");

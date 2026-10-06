@@ -29,15 +29,14 @@ import (
 // isolated worker exactly like production (the root-package harness
 // precedent).
 var (
-	exportWorkerOnce    sync.Once
-	exportWorkerCleanup sync.Once
-	exportWorkerPath    string
+	exportWorkerOnce sync.Once
+	exportWorkerPath string
 	exportWorkerErr     error
 )
 
 func buildExportWorker() string {
 	exportWorkerOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "iprange-handlers-worker-")
+		dir, err := os.MkdirTemp("", fmt.Sprintf("iprange-handlers-worker-%d-", os.Getpid()))
 		if err != nil {
 			exportWorkerErr = err
 			return
@@ -54,7 +53,12 @@ func buildExportWorker() string {
 			exportWorkerErr = err
 			return
 		}
-		cmd := exec.Command("go", "-C", root, "build", "-buildvcs=false",
+		goTool, err := exec.LookPath("go")
+		if err != nil {
+			exportWorkerErr = err
+			return
+		}
+		cmd := exec.Command(goTool, "-C", root, "build", "-buildvcs=false",
 			"-o", exportWorkerPath, "./cmd/iprange-v4-worker")
 		if output, err := cmd.CombinedOutput(); err != nil {
 			exportWorkerErr = fmt.Errorf("build worker: %v\n%s", err, output)
@@ -88,7 +92,6 @@ func installRealWorker(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		worker.SetWorkerCandidatesForTest(nil)
-		exportWorkerCleanup.Do(func() { _ = os.RemoveAll(filepath.Dir(exportWorkerPath)) })
 	})
 	worker.SetWorkerCandidatesForTest(func() ([]string, error) { return []string{path}, nil })
 }

@@ -122,23 +122,23 @@ type dnsJob struct {
 }
 
 // dnsOutcome is the resolution result of one host. addrs is the
-// first-occurrence list (the synchronous resolve() contract); full is
-// every address the resolver answered, duplicates included, in C
-// insertion order -- one entry per C DNSREP node.
+// first-occurrence list of the resolver walk (the synchronous resolve()
+// contract); full is every address the resolver answered, duplicates
+// included, in C insertion order -- one entry per C DNSREP node.
 //
-// No reversal is applied when building full. The C stacks each answer
-// (src/ipset_dns.c:253-255), so it inserts the answers in the reverse of
-// the order the resolver returned them. Whether Go's answer order equals
-// the reverse of glibc's is a property of the qualification host's NSS
-// configuration, not a Go API guarantee: measured here with
-// CGO_ENABLED=0, LookupIP("localhost") answers ::1 then 127.0.0.1 while
-// the C's files+myhostname chain answers 127.0.0.1 then ::1, so Go's
-// answer order already matches the C's insertion order. Reversing here
-// would insert 127.0.0.1-mapped first and print a NON-OPTIMIZED line the
-// C does not print (measured: -6 -v on a localhost fixture,
-// src/ipset.h:100-121 semantics in src/ipset6.h:96-105). Answer-set and
-// reply-count divergences between resolvers are recorded compatibility
-// exceptions, not silently accepted (SOW-0028, DNS parity scope).
+// full is reversed into that order on purpose. The C stacks each answer
+// (src/ipset_dns.c:253-255) and dns_process_replies() drains the list
+// head-first (:275-281), so an address enters the ipset in the reverse
+// of the order the resolver returned it, and that order decides whether
+// the NON-OPTIMIZED line appears at all (src/ipset.h:100-121,
+// src/ipset6.h:96-105). SOW-0028 skipped the reversal because the
+// toolchain of that day answered LookupIP("localhost") ::1-first, which
+// already equalled the C insertion order; go1.27 answers 127.0.0.1-first
+// like glibc, and the shortcut printed a NON-OPTIMIZED line the C does
+// not print. The port now applies the C mechanism itself, exactly like
+// the Rust reference (legacy/dns.rs AddrSink::finish). Answer-set and
+// reply-count divergences between resolvers remain recorded
+// compatibility exceptions (SOW-0028, DNS parity scope).
 type dnsOutcome struct {
 	addrs []IP128
 	full  []IP128
@@ -655,8 +655,9 @@ func failureLine(fam Family, host string, err error, retriesExhausted bool) (str
 // collectAddrs converts each lookup result with the C family policy
 // (v4: AF_INET only; v6: AAAA raw and A mapped to ::ffff:a.b.c.d)
 // and feeds the sink (debug lines, reply list, dedup list, raw count).
-// It returns the deduplicated list (the resolve() contract), the full
-// per-address reply list, and the raw address count.
+// It returns the deduplicated list of the resolver walk (the resolve()
+// contract), the full per-address reply list in C insertion order
+// (addrSink.finish), and the raw address count.
 func collectAddrs(shared *dnsShared, host string, ips []net.IP) ([]IP128, []IP128, int) {
 	sink := newAddrSink(shared, host)
 	for _, ip := range ips {
@@ -683,13 +684,14 @@ func collectAddrs(shared *dnsShared, host string, ips []net.IP) ([]IP128, []IP12
 		}
 		sink.push(value)
 	}
-	return sink.addrs, sink.full, sink.raw
+	return sink.addrs, sink.finish(), sink.raw
 }
 
 // addrSink collects one reply's addresses: the C per-address debug
-// line (IPv4 only), the full reply list the C stacks (one DNSREP node
-// per address, duplicates kept, in the insertion order documented on
-// dnsOutcome.full), the first-occurrence dedup of that list (the
+// line (IPv4 only, printed during the answer walk), the full reply
+// list the C stacks (one DNSREP node per address, duplicates kept,
+// collected in resolver answer order and reversed into C insertion
+// order by finish), the first-occurrence dedup of that walk (the
 // resolve() contract), and the raw address count (C added, includes
 // per-host duplicates).
 type addrSink struct {
@@ -720,6 +722,19 @@ func (s *addrSink) push(value IP128) bool {
 	s.seen[value] = struct{}{}
 	s.addrs = append(s.addrs, value)
 	return true
+}
+
+// finish returns the reply list in C insertion order: the C stacks one
+// DNSREP node per answer (src/ipset_dns.c:253-255) and
+// dns_process_replies() drains that list head-first (:275-281), so the
+// addresses enter the ipset in the reverse of the resolver's answer
+// order. The Rust reference applies the same reversal
+// (legacy/dns.rs AddrSink::finish).
+func (s *addrSink) finish() []IP128 {
+	for i, j := 0, len(s.full)-1; i < j; i, j = i+1, j-1 {
+		s.full[i], s.full[j] = s.full[j], s.full[i]
+	}
+	return s.full
 }
 
 // mapped6 is the IPv4-mapped IPv6 form of a v4 address (C

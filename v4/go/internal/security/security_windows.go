@@ -12,12 +12,6 @@
 
 package security
 
-// CreatorOnlyRequested reports the process switch. Off unless
-// IPRANGE_CREATOR_ONLY is exactly "1".
-func CreatorOnlyRequested() bool {
-	return os.Getenv("IPRANGE_CREATOR_ONLY") == "1"
-}
-
 import (
 	"crypto/sha256"
 	"encoding/binary"
@@ -29,6 +23,12 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
+
+// CreatorOnlyRequested reports the process switch. Off unless
+// IPRANGE_CREATOR_ONLY is exactly "1".
+func CreatorOnlyRequested() bool {
+	return os.Getenv("IPRANGE_CREATOR_ONLY") == "1"
+}
 
 // aclSupported reports the creator-only machine availability (true on
 // windows: the pure-Go SID/DACL machine below replaces the POSIX ACL

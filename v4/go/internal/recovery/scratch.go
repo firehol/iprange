@@ -131,6 +131,13 @@ func scratchStart(directoryPath string, source format.Meta, maxBytes uint64, max
 	return scratchStartFollowing(directoryPath, source, maxBytes, maxFiles, maxOpenFiles, security.CreatorOnlyRequested())
 }
 
+func scratchRecordedCommitment(s *scratch) [32]byte {
+	if !s.creatorOnly {
+		return [32]byte{}
+	}
+	return s.profile.Commitment()
+}
+
 func scratchStartFollowing(directoryPath string, source format.Meta, maxBytes uint64, maxFiles uint32, maxOpenFiles uint32, creatorOnly bool) (*scratch, error) {
 	if maxFiles == 0 || maxOpenFiles < scratchMinOpenFiles {
 		return nil, &format.Error{Code: format.CodeInsufficientResourceBudget, Detail: "recovery scratch requires one file descriptor"}
@@ -191,7 +198,7 @@ func (s *scratch) create() (scratchSlot, error) {
 	if err := s.install(slot, ordinal); err != nil {
 		return scratchSlot{}, err
 	}
-	headerBytes := scratchHeader(s.source, s.attemptID, ordinal, s.profile.Commitment())
+	headerBytes := scratchHeader(s.source, s.attemptID, ordinal, scratchRecordedCommitment(s))
 	if s.creatorOnly {
 		if err := security.SecureCreatorOnly(s.owned[slot].shared.file, s.profile); err != nil {
 			return scratchSlot{}, scratchNamespaceError(err)

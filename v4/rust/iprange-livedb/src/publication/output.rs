@@ -66,10 +66,6 @@ impl CreatedOutput {
         Self::create_with(path, false, creator_only)
     }
 
-    pub(crate) fn create_absent(path: &Path) -> Result<Self, Error> {
-        Self::create_absent_following(path, crate::publication::security::creator_only_requested())
-    }
-
     pub(crate) fn create_absent_following(path: &Path, creator_only: bool) -> Result<Self, Error> {
         Self::create_with(path, true, creator_only)
     }

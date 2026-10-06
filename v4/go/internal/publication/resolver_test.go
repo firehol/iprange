@@ -453,6 +453,7 @@ func TestResolverMalformedExactPrivateReservationFromResultIsNeverRemovedOnline(
 // Proven ports
 // valid_later_reservation_is_retained_when_old_desired_main_is_proven.
 func TestResolverValidLaterReservationIsRetainedWhenOldDesiredMainIsProven(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	dir := t.TempDir()
 	main := filepath.Join(dir, "result.v4")
 	original := resolverTestPublish(t, main)

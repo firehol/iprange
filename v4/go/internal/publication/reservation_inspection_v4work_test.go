@@ -24,6 +24,7 @@ import (
 // authority discover arm): the placement, state, inode identity,
 // output binding, creator-only access, and the held operation lock.
 func TestDiscoverAfterReservationCrashPoints(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	cases := []struct {
 		point     string
 		canonical bool

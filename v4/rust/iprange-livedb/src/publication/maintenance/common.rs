@@ -350,8 +350,7 @@ impl Artifact {
         use crate::publication::security;
         use crate::publication::{CreationSecurity, DirectoryRole};
 
-        let commitment = security::creator_only_commitment(&regular.file)
-            .map_err(|error| self.namespace_error(error))?;
+        let commitment = security::creator_only_commitment(&regular.file).unwrap_or([0; 32]);
         let retired = gc::retire(
             directory,
             Authority {

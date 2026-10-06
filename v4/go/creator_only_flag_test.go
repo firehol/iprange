@@ -3,11 +3,10 @@ package iprangedb
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/security"
-
-	"golang.org/x/sys/unix"
 )
 
 // The create flag is recorded in the sidecar and honored on a later
@@ -37,9 +36,9 @@ func TestSnapshotFollowsUnprotectedDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := unix.Umask(0)
+	old := setUmask(0)
 	created, err := CreateLive(source, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, tag, 2, nil, false)
-	unix.Umask(old)
+	setUmask(old)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +83,7 @@ func TestCreatorOnlyFlagCreateCloseReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("protected mode = %o, want 0600", info.Mode().Perm())
 	}
 	reader, err := OpenLiveReader(main, nil)
@@ -93,6 +92,9 @@ func TestCreatorOnlyFlagCreateCloseReopen(t *testing.T) {
 	}
 	reader.Close()
 
+	if runtime.GOOS == "windows" {
+		return
+	}
 	if err := os.Chmod(main, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -103,8 +105,8 @@ func TestCreatorOnlyFlagCreateCloseReopen(t *testing.T) {
 
 func TestUnprotectedCreateSkipsProofEvenAtMode0600(t *testing.T) {
 	requireLiveCreation(t)
-	old := unix.Umask(0)
-	defer unix.Umask(old)
+	old := setUmask(0)
+	defer setUmask(old)
 	dir := t.TempDir()
 	main := filepath.Join(dir, "plain.iprdb")
 	tag, err := NewValueTag([]byte("asn"))

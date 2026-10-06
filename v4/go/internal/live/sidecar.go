@@ -63,7 +63,7 @@ func requireCreatorOnlyIfRecorded(path string, sidecar *Sidecar) error {
 	if sidecar.header.policy == policyUnprotected {
 		return nil
 	}
-	f, err := os.Open(path)
+	f, err := openForCreatorProof(path)
 	if err != nil {
 		return err
 	}

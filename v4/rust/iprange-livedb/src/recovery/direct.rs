@@ -20,23 +20,6 @@ pub(crate) struct DirectAnalysis {
 
 // A partial report must survive sink, I/O, and budget failures without allocating then.
 #[allow(clippy::result_large_err)]
-pub(crate) fn analyze<S: RecoverySink>(
-    mapping: &Mapping,
-    meta: MetaV4,
-    budget: &RecoveryBudget,
-    cancellation: &CancellationToken,
-    sink: &mut S,
-) -> std::result::Result<DirectAnalysis, super::construction::AnalysisFailure> {
-    analyze_following(
-        mapping,
-        meta,
-        budget,
-        cancellation,
-        sink,
-        crate::creator_only_requested(),
-    )
-}
-
 pub(crate) fn analyze_following<S: RecoverySink>(
     mapping: &Mapping,
     meta: MetaV4,

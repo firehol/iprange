@@ -120,7 +120,12 @@ pub(super) fn private(
     let Some(inspected) = private_owned(destination, header, cancellation)? else {
         return Ok(None);
     };
-    if inspected.access != AccessPolicy::CreatorOnly {
+    let expected = if header.security_commitment == [0; 32] {
+        AccessPolicy::ChangedOrUnproven
+    } else {
+        AccessPolicy::CreatorOnly
+    };
+    if inspected.access != expected {
         return Err(conflict(
             "private publication output access no longer matches its reservation",
         ));

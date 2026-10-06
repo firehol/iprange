@@ -22,7 +22,7 @@ func (s *scratch) cleanupPlatform() *scratchCleanup {
 		attemptID:                  s.attemptID,
 		directoryIdentity:          directoryIdentity,
 		creationSecurityKind:       scratchCreationSecurityKind(),
-		creationSecurityCommitment: s.profile.Commitment(),
+		creationSecurityCommitment: scratchRecordedCommitment(s),
 	}
 	var removed [scratchMaxOwned]bool
 	var problems [scratchMaxOwned]*scratchProblem

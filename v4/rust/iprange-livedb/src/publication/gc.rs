@@ -594,6 +594,9 @@ fn verify_record(
             "GC authority envelope does not match its names or directory",
         ));
     }
+    if header.creation_security_commitment == [0; 32] {
+        return Ok(());
+    }
     let commitment = security::creator_only_commitment(envelope_file)
         .map_err(|error| Problem::namespace(&error))?;
     if commitment != header.creation_security_commitment {

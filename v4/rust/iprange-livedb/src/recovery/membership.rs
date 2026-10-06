@@ -34,25 +34,6 @@ pub(crate) struct IndirectAnalysis {
 }
 
 #[allow(clippy::result_large_err)]
-pub(crate) fn analyze<S: RecoverySink>(
-    mapping: &Mapping,
-    meta: MetaV4,
-    budget: &RecoveryBudget,
-    cancellation: &CancellationToken,
-    sink: &mut S,
-    expected_kind: ValueKind,
-) -> std::result::Result<IndirectAnalysis, super::construction::AnalysisFailure> {
-    analyze_following(
-        mapping,
-        meta,
-        budget,
-        cancellation,
-        sink,
-        expected_kind,
-        crate::creator_only_requested(),
-    )
-}
-
 pub(crate) fn analyze_following<S: RecoverySink>(
     mapping: &Mapping,
     meta: MetaV4,

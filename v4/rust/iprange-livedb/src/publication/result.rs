@@ -184,6 +184,14 @@ impl Seed {
         &self.creation_security
     }
 
+    pub(super) fn recorded_access_policy(&self) -> AccessPolicy {
+        if self.creation_security.commitment == [0; 32] {
+            AccessPolicy::ChangedOrUnproven
+        } else {
+            AccessPolicy::CreatorOnly
+        }
+    }
+
     #[cfg(windows)]
     pub(super) const fn output_payload(&self) -> Option<super::gc_codec::Payload> {
         Some(super::gc_codec::Payload {

@@ -348,8 +348,7 @@ func gcValid(header *gcHeader) bool {
 		header.creationSecurityKind != 1 && header.creationSecurityKind != 2 {
 		return false
 	}
-	if header.directoryIdentity == [32]byte{} || header.artifactIdentity == [32]byte{} ||
-		header.creationSecurityCommit == [32]byte{} {
+	if header.directoryIdentity == [32]byte{} || header.artifactIdentity == [32]byte{} {
 		return false
 	}
 	if !gcBasenameEncodingKnown(header.basenameEncoding) {

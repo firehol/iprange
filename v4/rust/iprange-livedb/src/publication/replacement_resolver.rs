@@ -307,11 +307,19 @@ fn owner(entry: &Inspected) -> OutputOwner<'_> {
     }
 }
 
+fn expected_replacement_access(header: Header) -> AccessPolicy {
+    if header.security_commitment == [0; 32] {
+        AccessPolicy::ChangedOrUnproven
+    } else {
+        AccessPolicy::CreatorOnly
+    }
+}
+
 fn require_output(output: &Inspected, header: Header) -> Result<(), Problem> {
     if output.location != Location::Private
         || output.content != Content::Desired
         || output.identity.encode() != header.output_identity
-        || output.access != AccessPolicy::CreatorOnly
+        || output.access != expected_replacement_access(header)
     {
         return Err(unresolvable(
             "replacement prepared output does not match its reservation",

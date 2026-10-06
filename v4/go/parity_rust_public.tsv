@@ -1,3 +1,4 @@
+lib-reexport	creator_only_requested
 CancellationToken	CancellationToken::cancel
 CancellationToken	CancellationToken::from_poll
 CancellationToken	CancellationToken::is_cancelled
@@ -81,6 +82,7 @@ LastSeenRefresh	LastSeenRefresh::add_ranges_v4_slice
 LastSeenRefresh	LastSeenRefresh::add_ranges_v6
 LastSeenRefresh	LastSeenRefresh::add_ranges_v6_slice
 LastSeenRefresh	LastSeenRefresh::finish_input
+LiveReader	LiveReader::creator_only
 LiveReader	LiveReader::close
 LiveReader	LiveReader::direct_cursor_v4
 LiveReader	LiveReader::direct_cursor_v6

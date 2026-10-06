@@ -463,7 +463,7 @@ mod tests {
         assert_eq!(converted["publication"], json!("published"));
         assert_eq!(converted["destination_content"], json!("desired"));
         assert_eq!(converted["later_canonical"], json!("none"));
-        assert_eq!(converted["main_access_policy"], json!("creator_only"));
+        assert_eq!(converted["main_access_policy"], json!("changed_or_unproven"));
         assert_eq!(converted["coordination_access_policy"], json!("absent"));
         assert_eq!(converted["cleanup"], json!({}));
         assert_eq!(converted["coordination_cleanup"], json!({}));

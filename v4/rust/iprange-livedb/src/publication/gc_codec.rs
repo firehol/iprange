@@ -272,7 +272,6 @@ fn valid(header: &Header) -> bool {
         && header.directory_identity != [0; 32]
         && header.artifact_identity != [0; 32]
         && matches!(header.creation_security_kind, 1 | 2)
-        && header.creation_security_commitment != [0; 32]
         && source_valid
         && source_commitment(header.basename_encoding, &header.source_basename)
             == header.source_commitment

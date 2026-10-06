@@ -249,6 +249,7 @@ func createScratchCheckpointFixture(t *testing.T, directory string, alias bool) 
 // through the publication seam inside the worker, the discard facts
 // travel the cleanup-wire result, and the private artifact is gone.
 func TestCleanupOpcodeRealBinary(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	binary := buildRealWorker(t)
 	workerCandidatesHook = func() ([]string, error) { return []string{binary}, nil }
 	t.Cleanup(func() { workerCandidatesHook = nil })
@@ -303,6 +304,7 @@ func TestCleanupOpcodeRealBinary(t *testing.T) {
 // against the real worker binary: the complete class returns the
 // decoded discard facts and no scratch cleanup.
 func TestDiscardRecoveryAttemptRealBinary(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	binary := buildRealWorker(t)
 	workerCandidatesHook = func() ([]string, error) { return []string{binary}, nil }
 	t.Cleanup(func() { workerCandidatesHook = nil })
@@ -334,6 +336,7 @@ func TestDiscardRecoveryAttemptRealBinary(t *testing.T) {
 // machine inside the worker session (Rust worker/client/recovery.rs
 // cleanup_checkpoint over remove_checkpointed_scratch).
 func TestDiscardRecoveryAttemptRealBinaryScratch(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	binary := buildRealWorker(t)
 	workerCandidatesHook = func() ([]string, error) { return []string{binary}, nil }
 	t.Cleanup(func() { workerCandidatesHook = nil })

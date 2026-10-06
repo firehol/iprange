@@ -172,6 +172,18 @@ impl Directory {
         self.identity
     }
 
+    pub(crate) fn create_with_mode(
+        &self,
+        name: &Name,
+        mode: u32,
+    ) -> Result<File, NamespaceError> {
+        if mode == 0o600 {
+            let profile = security::Profile::capture()?;
+            return self.create(name, &profile);
+        }
+        self.create_unprotected(name)
+    }
+
     pub(crate) fn create_unprotected(
         &self,
         name: &Name,

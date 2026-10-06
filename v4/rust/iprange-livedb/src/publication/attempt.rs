@@ -596,6 +596,7 @@ fn finish_published_observed(
     observer: &mut impl FnMut(PublicationCheckpoint<'_>) -> std::result::Result<(), Problem>,
 ) -> PublicationResult {
     let reservation_identity = published.reservation.identity;
+    let recorded_access = seed.recorded_access_policy();
     let retirement = if observe {
         published.retire_observed(|artifact| {
             observe_published_housekeeping(&seed, reservation_identity, artifact, observer)
@@ -610,7 +611,7 @@ fn finish_published_observed(
                 main_namespace_may_have_been_attempted: true,
                 publication: PublicationStatus::Published,
                 destination_content: DestinationContent::Desired,
-                main_access_policy: AccessPolicy::CreatorOnly,
+                main_access_policy: recorded_access,
                 coordination_access_policy: AccessPolicy::Absent,
             },
             CleanupArtifacts::new(),
@@ -711,7 +712,7 @@ fn observe_published_housekeeping(
             main_namespace_may_have_been_attempted: true,
             publication: PublicationStatus::Published,
             destination_content: DestinationContent::Desired,
-            main_access_policy: AccessPolicy::CreatorOnly,
+            main_access_policy: seed.recorded_access_policy(),
             coordination_access_policy: AccessPolicy::ChangedOrUnproven,
         },
         cleanup,

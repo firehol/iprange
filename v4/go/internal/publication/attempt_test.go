@@ -106,6 +106,7 @@ func assertAttemptFacts(t *testing.T, result *PublicationResult, prepared *prepa
 }
 
 func TestAttemptSuccessReturnsExactPublishedFactsAndNoResidue(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	dir := t.TempDir()
 	prepared, sum := attemptTestPrepared(t, dir, "result.v4")
 	defer prepared.Close()

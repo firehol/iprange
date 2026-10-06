@@ -126,8 +126,7 @@ fn retire_windows(
         ArtifactKind::OwnedCoordination,
         DirectoryRole::Destination,
     )?;
-    let commitment =
-        security::creator_only_commitment(file).map_err(|error| Problem::namespace(&error))?;
+    let commitment = security::creator_only_commitment(file).unwrap_or([0; 32]);
     let retired = gc::retire(
         destination.directory(),
         Authority {

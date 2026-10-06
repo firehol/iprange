@@ -134,11 +134,8 @@ pub(in crate::worker) fn recover<S: RecoverySink>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn source_requires_creator_only(path: &Path) -> bool {
-    match crate::LiveReader::open(path, &crate::CancellationToken::new()) {
-        Ok(reader) => reader.creator_only(),
-        Err(_) => crate::creator_only_requested(),
-    }
+fn source_requires_creator_only(_path: &Path) -> bool {
+    crate::creator_only_requested()
 }
 
 pub(super) fn recover_once<S: RecoverySink>(

@@ -27,13 +27,8 @@ import (
 // in-process (non-worker) entries keep this client create position;
 // the worker session consumes a parent-created attempt through the
 // Recover*WithAttempt entries instead.
-func sourceIsCreatorOnly(path string) bool {
-	reader, err := live.OpenLiveReaderPolicy(path, nil, false)
-	if err != nil {
-		return security.CreatorOnlyRequested()
-	}
-	defer reader.Close()
-	return reader.CreatorOnly()
+func sourceIsCreatorOnly(string) bool {
+	return security.CreatorOnlyRequested()
 }
 
 func recoverPrecreated(sourcePath string, candidate *RecoveryCandidate, destinationPath string, mode sourceMode, budget *RecoveryBudget, check func() error, sink RecoverySink) (*RecoveryResult, *RecoveryPreparationFailure) {

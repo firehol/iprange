@@ -270,7 +270,7 @@ func observePublished(s *seed, reservationIdentity live.FileIdentity, enabled bo
 		mainNamespaceMayHaveBeenAttempted: true,
 		publication:                       PublicationPublished,
 		destinationContent:                DestinationContentDesired,
-		mainAccessPolicy:                  AccessPolicyCreatorOnly,
+		mainAccessPolicy:                  s.recordedAccessPolicy(),
 		coordinationAccessPolicy:          AccessPolicyChangedOrUnproven,
 	}, cleanup, problem)
 	return observer(&publicationCheckpoint{result: &result})
@@ -339,7 +339,7 @@ func finishPublished(s seed, published publishedMain, cause error) PublicationRe
 			mainNamespaceMayHaveBeenAttempted: true,
 			publication:                       PublicationPublished,
 			destinationContent:                DestinationContentDesired,
-			mainAccessPolicy:                  AccessPolicyCreatorOnly,
+			mainAccessPolicy:                  s.recordedAccessPolicy(),
 			coordinationAccessPolicy:          AccessPolicyAbsent,
 		}, newCleanupArtifacts(), retirement.housekeeping, retirement.visibleHousekeeping, cause)
 		_ = published.reservation.Close()

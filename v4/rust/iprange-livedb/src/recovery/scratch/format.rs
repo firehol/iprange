@@ -2,7 +2,6 @@ use crate::contract::{u16_le, u32_le, MetaV4};
 use crate::crc32c;
 use crate::error::{Error, Result};
 use crate::publication::namespace::{Name, CREATION_SECURITY_KIND};
-use crate::publication::security::Profile;
 
 pub(crate) const HEADER_SIZE: u64 = 128;
 const HEADER_BYTES: usize = HEADER_SIZE as usize;
@@ -39,7 +38,7 @@ pub(super) fn header(
     source: MetaV4,
     attempt: [u8; 16],
     ordinal: u32,
-    profile: &Profile,
+    commitment: [u8; 32],
 ) -> [u8; HEADER_BYTES] {
     let mut bytes = [0; HEADER_BYTES];
     bytes[MAGIC_OFFSET..VERSION_OFFSET].copy_from_slice(&MAGIC);
@@ -55,7 +54,7 @@ pub(super) fn header(
     bytes[CREATION_SECURITY_KIND_OFFSET..CREATION_SECURITY_KIND_OFFSET + 2]
         .copy_from_slice(&CREATION_SECURITY_KIND.to_le_bytes());
     bytes[CREATION_SECURITY_COMMITMENT_OFFSET..CREATION_SECURITY_COMMITMENT_END]
-        .copy_from_slice(&profile.commitment());
+        .copy_from_slice(&commitment);
     let checksum = crc32c::crc32c_with_zeroed(&bytes, HEADER_CRC_OFFSET, HEADER_CRC_SIZE)
         .expect("fixed scratch header");
     bytes[HEADER_CRC_OFFSET..HEADER_BYTES].copy_from_slice(&checksum.to_le_bytes());
@@ -78,9 +77,6 @@ pub(crate) fn decode_header(bytes: &[u8; HEADER_BYTES]) -> Option<DecodedHeader>
     let valid = fixed_header_valid(bytes, owner_kind)
         && reserved_header_valid(bytes)
         && attempt_id != [0; 16]
-        && bytes[CREATION_SECURITY_COMMITMENT_OFFSET..CREATION_SECURITY_COMMITMENT_END]
-            .iter()
-            .any(|&byte| byte != 0)
         && header_crc_valid(bytes);
     valid.then_some(DecodedHeader {
         owner_kind,

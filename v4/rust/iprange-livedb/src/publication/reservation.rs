@@ -189,7 +189,6 @@ pub(crate) enum Problem {
     Output,
     Previous,
     Basename,
-    Security,
     Sequence,
 }
 

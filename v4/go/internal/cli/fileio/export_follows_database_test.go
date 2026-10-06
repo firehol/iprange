@@ -3,10 +3,10 @@ package fileio
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
-	"golang.org/x/sys/unix"
 )
 
 func TestExportWriterFollowsSourceDatabase(t *testing.T) {
@@ -15,20 +15,20 @@ func TestExportWriterFollowsSourceDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := unix.Umask(0)
+	old := setUmask(0)
 	unprotected := filepath.Join(dir, "plain.iprdb")
 	created, err := iprangedb.CreateLive(unprotected, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 2, nil, false)
 	if err != nil {
-		unix.Umask(old)
+		setUmask(old)
 		t.Fatal(err)
 	}
 	if created.State != iprangedb.CreationStateCreated {
-		unix.Umask(old)
+		setUmask(old)
 		t.Fatalf("state = %v", created.State)
 	}
 	protected := filepath.Join(dir, "protected.iprdb")
 	created, err = iprangedb.CreateLive(protected, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 2, nil, true)
-	unix.Umask(old)
+	setUmask(old)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestExportWriterFollowsSourceDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("protected source mode = %o, want 0600", info.Mode().Perm())
 	}
 }

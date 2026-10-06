@@ -43,7 +43,7 @@ func (a *maintenanceArtifact) resumePlatform(dir *live.Directory, attempt [16]by
 func (a *maintenanceArtifact) retirePlatform(dir *live.Directory, name string, regular *live.RegularFile, attempt [16]byte, expected live.FileIdentity, ordinal uint32, kind live.ArtifactKind, payload *maintenanceRetirementPayload) (AbandonedArtifactRemoval, error) {
 	commitment, err := security.CreatorOnlyCommitment(regular.File)
 	if err != nil {
-		return AbandonedArtifactRemoval{}, a.namespaceError(err)
+		commitment = [32]byte{}
 	}
 	retirement := live.GCRetire(dir, &live.GCAuthority{
 		AttemptID:     attempt,

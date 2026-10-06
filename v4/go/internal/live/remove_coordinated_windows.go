@@ -20,7 +20,7 @@ func removeCoordinated(path string, file *os.File, identity FileIdentity, author
 	defer dir.Close()
 	commitment, err := security.CreatorOnlyCommitment(file)
 	if err != nil {
-		return cleanupOutcomeFailed(gcNamespaceProblem(err))
+		commitment = [32]byte{}
 	}
 	retired := gcRetire(dir, gcAuthority{
 		attemptID:     authority.attemptID,

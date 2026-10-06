@@ -10,7 +10,6 @@ import (
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
-	"golang.org/x/sys/unix"
 )
 
 func TestMetadataFollowsUnprotectedDatabase(t *testing.T) {
@@ -21,9 +20,9 @@ func TestMetadataFollowsUnprotectedDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := unix.Umask(0)
+	old := setUmask(0)
 	created, err := iprangedb.CreateLive(source, iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 2, nil, false)
-	unix.Umask(old)
+	setUmask(old)
 	if err != nil {
 		t.Fatal(err)
 	}

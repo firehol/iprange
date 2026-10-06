@@ -324,7 +324,6 @@ func gcCreate(directory *Directory, authority *gcAuthority, envelopeName, inertN
 			return nil, gcNamespaceProblem(err)
 		}
 	}
-	}
 	if err := gcCheckpointEnvelope(directory, authority, envelopeName, identity, inertName, observe, observer); err != nil {
 		file.Close()
 		return nil, err
@@ -583,6 +582,9 @@ func gcVerifyRecord(directory *Directory, envelopeFile *os.File, attemptID [16]b
 		!gcRoleMatches(header.kind, header.directoryRole) ||
 		!gcNameMatches(header.kind, attemptID, ordinal, sourceName) {
 		return gcCleanupConflict("GC authority envelope does not match its names or directory")
+	}
+	if header.creationSecurityCommit == [32]byte{} {
+		return nil
 	}
 	commitment, err := security.CreatorOnlyCommitment(envelopeFile)
 	if err != nil {

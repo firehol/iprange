@@ -112,6 +112,7 @@ struct SharedFile {
 }
 
 impl Scratch {
+    #[cfg(test)]
     pub(crate) fn start(
         directory: &Path,
         source: MetaV4,
@@ -174,11 +175,24 @@ impl Scratch {
         Ok(scratch)
     }
 
+    fn recorded_commitment(&self) -> [u8; 32] {
+        if self.creator_only {
+            self.profile.commitment()
+        } else {
+            [0; 32]
+        }
+    }
+
     pub(crate) fn create(&mut self) -> Result<ScratchSlot> {
         let slot = self.free_slot()?;
         let ordinal = self.take_ordinal()?;
         self.install(slot, ordinal)?;
-        let header = header(self.source, self.attempt_id, ordinal, &self.profile);
+        let header = header(
+            self.source,
+            self.attempt_id,
+            ordinal,
+            self.recorded_commitment(),
+        );
         let owned = self.owned[slot].as_ref().expect("scratch owner installed");
         let file = &owned.shared.file;
         if self.creator_only {
@@ -344,7 +358,7 @@ impl Scratch {
             attempt_id: self.attempt_id,
             directory_identity,
             creation_security_kind: CREATION_SECURITY_KIND,
-            creation_security_commitment: self.profile.commitment(),
+            creation_security_commitment: self.recorded_commitment(),
             residues,
             housekeeping: crate::publication::Housekeeping::None,
             visible_housekeeping: Vec::new(),
@@ -359,6 +373,7 @@ impl Scratch {
         };
 
         let directory_identity = local(self.directory.identity());
+        let commitment = self.recorded_commitment();
         let mut residues = Vec::new();
         let mut housekeeping = Housekeeping::None;
         let mut visible_housekeeping: Vec<HousekeepingArtifact> = Vec::new();
@@ -375,7 +390,7 @@ impl Scratch {
                     identity: owner.identity,
                     creation_security: CreationSecurity {
                         kind: CREATION_SECURITY_KIND,
-                        commitment: self.profile.commitment(),
+                        commitment,
                     },
                     payload: None,
                 },
@@ -399,7 +414,7 @@ impl Scratch {
             attempt_id: self.attempt_id,
             directory_identity,
             creation_security_kind: CREATION_SECURITY_KIND,
-            creation_security_commitment: self.profile.commitment(),
+            creation_security_commitment: commitment,
             residues,
             housekeeping,
             visible_housekeeping,

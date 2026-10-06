@@ -373,11 +373,18 @@ func replacementOwnerOf(entry *inspectedReplacement) outputOwner {
 // longer matches the reservation (Rust require_output: private
 // placement, desired content, recorded identity, creator-only
 // access).
+func expectedReplacementAccess(header reservationHeader) AccessPolicy {
+	if header.securityCommitment == [32]byte{} {
+		return AccessPolicyChangedOrUnproven
+	}
+	return AccessPolicyCreatorOnly
+}
+
 func requireOutputReplacement(output *inspectedReplacement, header reservationHeader) error {
 	if output.location != outputLocationPrivate ||
 		output.content != replacementContentDesired ||
 		reservationIdentityBytes(output.identity) != header.outputIdentity ||
-		output.access != AccessPolicyCreatorOnly {
+		output.access != expectedReplacementAccess(header) {
 		return unresolvable("replacement prepared output does not match its reservation")
 	}
 	return nil

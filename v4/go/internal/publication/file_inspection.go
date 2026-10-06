@@ -134,7 +134,11 @@ func inspectPrivateOutputExact(destination *destination, header reservationHeade
 	if inspected == nil {
 		return nil, nil
 	}
-	if inspected.access != AccessPolicyCreatorOnly {
+	expected := AccessPolicyCreatorOnly
+	if header.securityCommitment == [32]byte{} {
+		expected = AccessPolicyChangedOrUnproven
+	}
+	if inspected.access != expected {
 		_ = inspected.Close()
 		return nil, conflictProblem("private publication output access no longer matches its reservation")
 	}

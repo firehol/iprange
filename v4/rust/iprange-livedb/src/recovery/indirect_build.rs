@@ -44,25 +44,6 @@ pub(super) trait Mode {
 }
 
 #[allow(clippy::result_large_err)]
-pub(super) fn construct<M: Mode, S: RecoverySink>(
-    mapping: &Mapping,
-    source_meta: MetaV4,
-    builder: Builder,
-    budget: &RecoveryBudget,
-    cancellation: &CancellationToken,
-    sink: &mut S,
-) -> std::result::Result<Construction, Failure> {
-    construct_following::<M, S>(
-        mapping,
-        source_meta,
-        builder,
-        budget,
-        cancellation,
-        sink,
-        crate::creator_only_requested(),
-    )
-}
-
 pub(super) fn construct_following<M: Mode, S: RecoverySink>(
     mapping: &Mapping,
     source_meta: MetaV4,

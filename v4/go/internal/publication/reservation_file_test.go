@@ -20,6 +20,7 @@ import (
 )
 
 func TestInitializeReservationHasExactHeaderSecurityAndLock(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	dir := t.TempDir()
 	prepared, _, _ := prepareTestOutput(t, dir)
 	draft, err := createReservationDraft(prepared)
@@ -284,6 +285,7 @@ func TestCanonicalConflictNeverOverwritesAndReturnsPrivateOwner(t *testing.T) {
 }
 
 func TestInitializationFailureReturnsCreatedReservation(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	dir := t.TempDir()
 	prepared, privatePath, _ := prepareTestOutput(t, dir)
 	draft, err := createReservationDraft(prepared)

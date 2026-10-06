@@ -92,6 +92,7 @@ func itoa(v int) string { return strconv.Itoa(v) }
 // header, classifies creator-only evidence, and holds the operation
 // lock (Rust crash discover canonical arms).
 func TestDiscoverCanonicalAcquiredReservation(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	dir := t.TempDir()
 	prepared, _, _ := prepareTestOutput(t, dir)
 	draft, err := createReservationDraft(prepared)
@@ -205,6 +206,7 @@ func TestDiscoverArmedReservation(t *testing.T) {
 // taken, the name is re-proved, and the header must match the caller
 // expectation exactly (Rust exact_private happy path).
 func TestExactPrivateOnInitializedReservation(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	dir := t.TempDir()
 	prepared, _, _ := prepareTestOutput(t, dir)
 	draft, err := createReservationDraft(prepared)
@@ -649,6 +651,7 @@ func TestRelockAfterExternalLockStealConflict(t *testing.T) {
 // that breaks the exact creator evidence turns it into
 // ChangedOrUnproven (Rust inspected creator_only_commitment arm).
 func TestInspectedAccessClassification(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	dir := t.TempDir()
 	prepared, _, _ := prepareTestOutput(t, dir)
 	draft, err := createReservationDraft(prepared)

@@ -12,6 +12,7 @@ use crate::publication::output::CreatedOutput;
 
 #[test]
 fn initialized_reservation_has_exact_header_security_and_lock() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
     let directory = TempDirectory::new();
     let (output, _) = prepared_output(&directory.path);
     let draft = ReservationDraft::create(&output).unwrap();
@@ -104,6 +105,7 @@ fn canonical_conflict_never_overwrites_and_returns_private_owner() {
 
 #[test]
 fn initialization_failure_returns_the_created_reservation() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
     let directory = TempDirectory::new();
     let (output, output_path) = prepared_output(&directory.path);
     let draft = ReservationDraft::create(&output).unwrap();

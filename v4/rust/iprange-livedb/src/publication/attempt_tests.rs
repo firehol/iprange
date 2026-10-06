@@ -18,6 +18,7 @@ use crate::validation::LocalFileIdentity;
 
 #[test]
 fn success_returns_exact_published_facts_and_no_residue() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
     let directory = TempDirectory::new();
     let (output, paths) = prepared_output(&directory.path);
     let expected_attempt = output.attempt.attempt_id();

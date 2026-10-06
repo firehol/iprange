@@ -592,6 +592,7 @@ pub(crate) fn refuse_output_over_source(
     Ok(())
 }
 
+#[cfg(test)]
 pub fn metadata_output(
     path: &Path,
     bytes: &[u8],
@@ -599,7 +600,14 @@ pub fn metadata_output(
     max_output_bytes: u64,
     max_open_files: u32,
 ) -> Result<Value, HandlerError> {
-    metadata_output_following(path, bytes, policy, max_output_bytes, max_open_files, false)
+    metadata_output_following(
+        path,
+        bytes,
+        policy,
+        max_output_bytes,
+        max_open_files,
+        iprange_livedb::creator_only_requested(),
+    )
 }
 
 pub fn metadata_output_following(

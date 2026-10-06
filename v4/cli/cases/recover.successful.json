@@ -186,7 +186,7 @@
       "$ignore": true
      },
      "later_canonical": "none",
-     "main_access_policy": "creator_only",
+     "main_access_policy": "changed_or_unproven",
      "main_namespace_may_have_been_attempted": true,
      "visible_housekeeping": {
       "$ignore": true

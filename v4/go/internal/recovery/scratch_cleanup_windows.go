@@ -24,7 +24,7 @@ func (s *scratch) cleanupPlatform() *scratchCleanup {
 		attemptID:                  s.attemptID,
 		directoryIdentity:          directoryIdentity,
 		creationSecurityKind:       scratchCreationSecurityKind(),
-		creationSecurityCommitment: s.profile.Commitment(),
+		creationSecurityCommitment: scratchRecordedCommitment(s),
 	}
 	for index := 0; index < scratchMaxOwned; index++ {
 		owner := s.owned[index]
@@ -42,7 +42,7 @@ func (s *scratch) cleanupPlatform() *scratchCleanup {
 			Identity:      owner.identity,
 			CreationSecurity: publication.CreationSecurity{
 				Kind:       scratchCreationSecurityKind(),
-				Commitment: s.profile.Commitment(),
+				Commitment: scratchRecordedCommitment(s),
 			},
 			Payload: nil,
 		})

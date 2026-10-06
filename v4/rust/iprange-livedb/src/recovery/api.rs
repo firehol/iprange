@@ -251,7 +251,7 @@ mod platform {
             budget,
             cancellation,
             sink,
-            source_requires_creator_only(source.path()),
+            crate::creator_only_requested(),
         ) {
             Ok(built) => built,
             Err(failure) => {
@@ -280,13 +280,6 @@ mod platform {
             meta.value_tag,
             meta.feed_index_limit,
         )
-    }
-
-    fn source_requires_creator_only(path: &Path) -> bool {
-        match crate::LiveReader::open(path, &crate::CancellationToken::new()) {
-            Ok(reader) => reader.creator_only(),
-            Err(_) => crate::creator_only_requested(),
-        }
     }
 
     fn build<S: RecoverySink>(

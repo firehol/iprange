@@ -75,6 +75,17 @@ type dnsCase struct {
 	// whether `NON-OPTIMIZED`/`Optimizing` appear, so a case with needs is
 	// only comparable on a host that answers the same way; requireDNSAnswers
 	// measures that first and reports the case as scoped otherwise.
+	//
+	// The order is the RESOLVER's answer order, not the loader's insertion
+	// order: the C stacks each answer (src/ipset_dns.c:253-255) and drains
+	// head-first (:275-281), so the loader adds the answers reversed, and
+	// addrSink.finish applies the same reversal. The v6 localhost pins were
+	// measured against the C's glibc chain answering 127.0.0.1 first
+	// (insertion therefore ::1 first, which is why the pins carry no
+	// NON-OPTIMIZED line for l1.txt); a host whose resolver answers ::1
+	// first — Windows' Go resolver does — is scoped out with its measured
+	// order, because reversing its answers cannot reproduce the pinned C
+	// bytes there.
 	resolverNeeds []dnsAnswer
 
 	// numericForms marks a case whose hostnames are answered only by the
@@ -97,7 +108,7 @@ type dnsCase struct {
 // dnsAnswer is one name whose addresses a case's pinned bytes depend on.
 type dnsAnswer struct {
 	host  string
-	addrs []string // in reply order, the order the loader adds them
+	addrs []string // in resolver reply order; the loader adds them reversed
 }
 
 // dnsFixtures recreates the directory the C was measured over. A numeric-form
@@ -156,7 +167,7 @@ var dnsBookkeepingByte = []dnsCase{
 	{
 		label: "dns one host v6 localhost",
 		resolverNeeds: []dnsAnswer{{host: "localhost",
-			addrs: []string{"::1", "::ffff:127.0.0.1"}}},
+			addrs: []string{"::ffff:127.0.0.1", "::1"}}},
 		argv:   []string{"-6", "-v", "l1.txt"},
 		rc:     0,
 		stdout: "::1\n::ffff:127.0.0.1\n",
@@ -182,7 +193,7 @@ var dnsBookkeepingByte = []dnsCase{
 	{
 		label: "dns one host v6 binary header",
 		resolverNeeds: []dnsAnswer{{host: "localhost",
-			addrs: []string{"::1", "::ffff:127.0.0.1"}}},
+			addrs: []string{"::ffff:127.0.0.1", "::1"}}},
 		argv:   []string{"-6", "-v", "--print-binary", "l1.txt"},
 		rc:     0,
 		stdout: "iprange binary format v2.0\nipv6\noptimized\nrecord size 32\nrecords 2\nbytes 68\nlines 2\nunique ips 2\nM<+\x1a\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x7f\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x7f\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
@@ -218,7 +229,7 @@ var dnsInterleaveDependent = []dnsCase{
 	{
 		label: "dns same host twice v6",
 		resolverNeeds: []dnsAnswer{{host: "localhost",
-			addrs: []string{"::1", "::ffff:127.0.0.1"}}},
+			addrs: []string{"::ffff:127.0.0.1", "::1"}}},
 		argv:   []string{"-6", "-v", "l2.txt"},
 		rc:     0,
 		stdout: "::1\n::ffff:127.0.0.1\n",
@@ -1062,6 +1073,27 @@ func TestDNSBookkeepingSinkKeepsEveryAnswer(t *testing.T) {
 	}
 	if sink.raw != 3 {
 		t.Fatalf("C `added` counts duplicates: raw=%d", sink.raw)
+	}
+}
+
+// TestDNSBookkeepingFinishReversesIntoCInsertionOrder pins the reply-stack
+// reversal itself: the C drains its DNSREP list head-first
+// (src/ipset_dns.c:275-281 over the stack built at :253-255), so the
+// addresses must enter the ipset in the reverse of the resolver's answer
+// order -- the order that decides whether NON-OPTIMIZED appears
+// (src/ipset.h:100-121, src/ipset6.h:96-105; Rust dns.rs AddrSink::finish).
+func TestDNSBookkeepingFinishReversesIntoCInsertionOrder(t *testing.T) {
+	shared := testShared(V6, false)
+	sink := newAddrSink(shared, "localhost")
+	mapped := mapped6(0x7F00_0001)
+	loop := IP128{Lo: 1}
+	// glibc files order: 127.0.0.1 answers first, ::1 second.
+	sink.push(mapped)
+	sink.push(loop)
+	got := sink.finish()
+	want := []IP128{loop, mapped}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("finish() = %v, want %v (C insertion order)", got, want)
 	}
 }
 

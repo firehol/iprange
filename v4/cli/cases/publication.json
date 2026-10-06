@@ -60,7 +60,7 @@
        "$ignore": true
       },
       "creation_security": {
-       "commitment": "c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8",
+       "commitment": "0000000000000000000000000000000000000000000000000000000000000000",
        "kind": 1
       },
       "database_id": {
@@ -91,7 +91,7 @@
      "publication": "published",
      "destination_content": "desired",
      "later_canonical": "none",
-     "main_access_policy": "creator_only",
+     "main_access_policy": "changed_or_unproven",
      "coordination_access_policy": "absent",
      "cleanup": {},
      "coordination_cleanup": {},

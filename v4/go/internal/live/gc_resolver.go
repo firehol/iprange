@@ -91,12 +91,18 @@ func gcMovePayload(directory *Directory, envelope *gcEnvelope, retainedSource *o
 		regular.File.Close()
 		return gcCleanupConflict("GC artifact identity is malformed")
 	}
-	commitment, err := security.CreatorOnlyCommitment(regular.File)
-	if err != nil {
-		regular.File.Close()
-		return gcNamespaceProblem(err)
+	if envelope.header.creationSecurityCommit != [32]byte{} {
+		commitment, err := security.CreatorOnlyCommitment(regular.File)
+		if err != nil {
+			regular.File.Close()
+			return gcNamespaceProblem(err)
+		}
+		if commitment != envelope.header.creationSecurityCommit {
+			regular.File.Close()
+			return gcCleanupConflict("GC source identity or access policy changed")
+		}
 	}
-	if regular.Identity != expected || commitment != envelope.header.creationSecurityCommit {
+	if regular.Identity != expected {
 		regular.File.Close()
 		return gcCleanupConflict("GC source identity or access policy changed")
 	}
@@ -190,13 +196,17 @@ func gcObserve(directory *Directory, name string, expected FileIdentity, expecte
 		if openErr != nil || regular == nil {
 			exact = false
 		} else {
-			commitment, commitErr := security.CreatorOnlyCommitment(regular.File)
-			regular.File.Close()
-			if commitErr != nil {
-				exact = false
+			if expectedSecurity == [32]byte{} {
+				exact = regular.Identity == expected
 			} else {
-				exact = regular.Identity == expected && commitment == expectedSecurity
+				commitment, commitErr := security.CreatorOnlyCommitment(regular.File)
+				if commitErr != nil {
+					exact = false
+				} else {
+					exact = regular.Identity == expected && commitment == expectedSecurity
+				}
 			}
+			regular.File.Close()
 		}
 	}
 	identity := entry.Identity

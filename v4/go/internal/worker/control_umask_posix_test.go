@@ -14,6 +14,7 @@ import (
 // (Rust control.rs create_file + security::secure_creator_only), so the
 // worker can always reopen it read-write.
 func TestCreateParentModeIndependentOfUmask(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	previous := unix.Umask(0o077)
 	defer unix.Umask(previous)
 	c, err := CreateParent()

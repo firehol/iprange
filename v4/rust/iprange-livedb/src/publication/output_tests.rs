@@ -132,6 +132,7 @@ fn private_name_replacement_returns_the_original_owned_inode() {
 
 #[test]
 fn changed_access_policy_fails_before_digest() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
     let directory = TempDirectory::new();
     let (attempt, finished, _) = built_output(&directory.path);
     finished

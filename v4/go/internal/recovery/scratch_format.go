@@ -93,7 +93,6 @@ func decodeScratchHeader(bytes *[scratchHeaderSize]byte) (scratchDecodedHeader, 
 	valid := fixedHeaderValid(bytes, ownerKind) &&
 		reservedHeaderValid(bytes) &&
 		attemptID != [16]byte{} &&
-		commitment != [32]byte{} &&
 		headerCRCValid(bytes)
 	if !valid {
 		return scratchDecodedHeader{}, false

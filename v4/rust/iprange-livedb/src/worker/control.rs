@@ -813,7 +813,8 @@ fn create_file(nonce: [u8; 16]) -> Result<(PathBuf, File)> {
 #[cfg(windows)]
 fn create_file(nonce: [u8; 16]) -> Result<(PathBuf, File)> {
     let path = control_path(nonce);
-    let file = security::create_unprotected(&path, false).map_err(namespace_error)?;
+    let file = crate::publication::security::create_unprotected(&path, false)
+        .map_err(crate::live_namespace::namespace_error)?;
     Ok((path, file))
 }
 

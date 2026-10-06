@@ -204,13 +204,6 @@ impl Source {
         }
     }
 
-    pub(crate) fn path(&self) -> &Path {
-        match self {
-            Self::Basic(source) => &source.path,
-            Self::Live(source) => &source.path,
-        }
-    }
-
     pub(crate) fn mapping(&self) -> &Mapping {
         match self {
             Self::Basic(source) => &source.mapping,

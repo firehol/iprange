@@ -308,7 +308,7 @@ pub(crate) fn access_policy_error(error: crate::publication::namespace::Namespac
     namespace_error(error)
 }
 
-fn namespace_error(error: NamespaceError) -> Error {
+pub(crate) fn namespace_error(error: NamespaceError) -> Error {
     match error {
         NamespaceError::InvalidName => Error::NameInvalid,
         NamespaceError::Exists => Error::NameExists,

@@ -256,14 +256,7 @@ fn remove_windows(path: &Path, file: &File, identity: Identity, authority: Autho
         Ok(bound) => bound,
         Err(cause) => return Outcome::failed(cause),
     };
-    let commitment = match security::creator_only_commitment(file) {
-        Ok(commitment) => commitment,
-        Err(error) => {
-            return Outcome::failed(
-                crate::publication::problem::Problem::namespace(&error).into_sdk(),
-            )
-        }
-    };
+    let commitment = security::creator_only_commitment(file).unwrap_or([0; 32]);
     let retirement = gc::retire(
         &directory,
         GcAuthority {

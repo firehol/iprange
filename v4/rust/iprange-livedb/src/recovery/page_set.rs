@@ -62,6 +62,7 @@ pub(crate) enum PageClaim {
 }
 
 impl PageSet {
+    #[cfg(test)]
     pub(crate) fn for_recovery(
         max_heap_bytes: u64,
         expected_pages: u64,

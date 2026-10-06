@@ -18,6 +18,7 @@ import (
 )
 
 func TestDestinationCreateIsExclusiveNofollowAndCreatorOnly(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	dir := t.TempDir()
 	d, err := bindDestination(filepath.Join(dir, "output.v4"))
 	if err != nil {

@@ -48,6 +48,7 @@ impl Mode for Membership {
 }
 
 #[allow(clippy::result_large_err)]
+#[cfg(test)]
 pub(crate) fn construct<S: RecoverySink>(
     mapping: &Mapping,
     source_meta: MetaV4,

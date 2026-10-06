@@ -61,20 +61,11 @@ func TestAttemptPostBoundarySuccessAllocatesNoHeap(t *testing.T) {
 		}
 	}
 	// The measured minimum is the machine's own cost over the
-	// accepted syscall boundary: every allocation is a name or
-	// attribute NUL-copy of an x/sys call (Entry/VerifyName/
-	// RequireAbsent/UnlinkExact/RenameNoReplace probes and the
-	// Fgetxattr attribute-name copies), a rename boundary class, or
-	// the portable result plumbing. Escape analysis shows zero
-	// machine-logic escapes on the success path (the measured 57 has
-	// no unaccounted class; the machine adds nothing on top of the
-	// boundary, matching Rust's zero modulo the x/sys string
-	// conversion convention recorded in slices F/G/H; the 58-to-57
-	// step came from the seed artifact builder copying the creation
-	// security out of the seed instead of borrowing it, so the
-	// observed not-published artifact no longer forces the seed to
-	// the heap).
-	if minimum != 57 {
-		t.Fatalf("fromPrivate success path allocates %d objects (min of %d windows), want 57", minimum, attemptPinWindows)
+	// accepted syscall boundary on the default unprotected path.
+	// Creator-only is off unless IPRANGE_CREATOR_ONLY=1, so this pin
+	// no longer counts the protected-descriptor probes. The drop from
+	// 57 to 40 is that omitted work, not a new allocation class.
+	if minimum != 40 {
+		t.Fatalf("fromPrivate success path allocates %d objects (min of %d windows), want 40", minimum, attemptPinWindows)
 	}
 }

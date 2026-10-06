@@ -47,6 +47,7 @@ const REPLACEMENT_POST_MAIN: &[&str] = &[
 
 #[test]
 fn complete_resumes_every_pre_main_crash_state() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
     for point in PRE_MAIN {
         let directory = TempDirectory::new(point);
         let main = directory.path.join("result.v4");
@@ -91,6 +92,7 @@ fn remove_discards_every_pre_main_crash_state() {
 #[test]
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn replacement_complete_resumes_every_pre_main_crash_state() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
     for point in PRE_MAIN {
         let directory = TempDirectory::new(point);
         let main = directory.path.join("result.v4");
@@ -148,6 +150,7 @@ fn replacement_both_modes_finish_every_post_exchange_crash_state() {
 
 #[test]
 fn complete_restores_a_private_state2_reservation_before_publication() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
     let directory = TempDirectory::new("private-state2");
     let main = directory.path.join("result.v4");
     run_child(&main, "publication.after_reservation_state2_selection");
@@ -308,6 +311,7 @@ fn malformed_exact_private_reservation_from_result_is_never_removed_online() {
 
 #[test]
 fn valid_later_reservation_is_retained_when_old_desired_main_is_proven() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
     let directory = TempDirectory::new("later-reservation");
     let main = directory.path.join("result.v4");
     let original = publish(&main, [41; 16], 42);
@@ -520,6 +524,7 @@ fn contended_reservation_lock_wait_observes_cancellation() {
 
 #[test]
 fn resolver_does_not_replace_explicit_structural_validation() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
     use std::io::{Seek, SeekFrom, Write};
 
     let directory = TempDirectory::new("no-implicit-validation");

@@ -165,6 +165,41 @@ func (d *Directory) CreateSecured(name string, profile security.Profile) (*os.Fi
 	return f, nil
 }
 
+// Create creates one name exclusively with the process default descriptor.
+// Creator-only callers use CreateSecured. Close-on-exec stays either way.
+func (d *Directory) Create(name string) (*os.File, error) {
+	return d.CreateMode(name, 0o666)
+}
+
+// CreateMode is Create with an explicit permission. Windows has no Unix
+// mode bits; 0600 selects the protected descriptor and any other mode
+// selects the process default. The mode is not stored.
+func (d *Directory) CreateMode(name string, mode uint32) (*os.File, error) {
+	if mode == 0o600 {
+		profile, err := security.Capture()
+		if err != nil {
+			return nil, err
+		}
+		return d.CreateSecured(name, profile)
+	}
+	if err := d.RequireNameLengths(name); err != nil {
+		return nil, err
+	}
+	path, err := d.entryPath(name)
+	if err != nil {
+		return nil, err
+	}
+	f, err := security.CreateUnprotected(path, true)
+	if err != nil {
+		var fe *format.Error
+		if errors.As(err, &fe) && fe.Code == format.CodeNameExists {
+			return nil, nsExistsError()
+		}
+		return nil, nsIoError("create private file", err)
+	}
+	return f, nil
+}
+
 // OpenRegular opens one name without following symlinks and proves the
 // retained regular identity with the single-link and cross-volume
 // rules (Rust Directory::open_regular + regular_identity). An absent

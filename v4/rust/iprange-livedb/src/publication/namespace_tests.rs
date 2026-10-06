@@ -29,6 +29,7 @@ fn binding_uses_raw_posix_bytes_and_exact_attempt_names() {
 
 #[test]
 fn private_creation_is_exclusive_nofollow_and_creator_only() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
     let directory = TempDirectory::new();
     let destination = Destination::bind(&directory.path.join("output.v4")).unwrap();
     let name = destination.output_name([1; 16]).unwrap();
@@ -62,6 +63,7 @@ fn private_creation_is_exclusive_nofollow_and_creator_only() {
 #[cfg(target_os = "linux")]
 #[test]
 fn inherited_extended_access_acl_is_removed() {
+    let _guard = crate::publication::security::CreatorOnlyGuard::on();
     let directory = TempDirectory::new();
     let destination = Destination::bind(&directory.path.join("output.v4")).unwrap();
     let name = destination.output_name([9; 16]).unwrap();

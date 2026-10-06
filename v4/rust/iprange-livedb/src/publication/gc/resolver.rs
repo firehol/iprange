@@ -71,11 +71,16 @@ fn move_payload(
         .map_err(|error| Problem::namespace(&error))?
         .ok_or_else(|| Problem::cleanup_conflict("GC source disappeared before its move"))?;
     let expected = envelope_identity(envelope)?;
-    if regular.identity != expected
-        || security::creator_only_commitment(&regular.file)
-            .map_err(|error| Problem::namespace(&error))?
-            != envelope.header.creation_security_commitment
-    {
+    if envelope.header.creation_security_commitment != [0; 32] {
+        let commitment = security::creator_only_commitment(&regular.file)
+            .map_err(|error| Problem::namespace(&error))?;
+        if commitment != envelope.header.creation_security_commitment {
+            return Err(Problem::cleanup_conflict(
+                "GC source identity or access policy changed",
+            ));
+        }
+    }
+    if regular.identity != expected {
         return Err(Problem::cleanup_conflict(
             "GC source identity or access policy changed",
         ));
@@ -179,7 +184,8 @@ fn observe(
                     .flatten()
                     .is_some_and(|regular| {
                         regular.identity == expected
-                            && regular.creator_only_commitment().ok() == Some(expected_security)
+                            && (expected_security == [0; 32]
+                                || regular.creator_only_commitment().ok() == Some(expected_security))
                     });
             Observation {
                 presence: ArtifactPresence::Present,

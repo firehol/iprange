@@ -33,6 +33,13 @@ type seedNames struct {
 // publication attempt (Rust result.rs Seed). The inventory is
 // consumed exactly once by the publication result or the preparation
 // failure; cleanup draws its ledger artifact facts from it.
+func (s seed) recordedAccessPolicy() AccessPolicy {
+	if s.creationSecurity.Commitment == [32]byte{} {
+		return AccessPolicyChangedOrUnproven
+	}
+	return AccessPolicyCreatorOnly
+}
+
 type seed struct {
 	databaseID            [16]byte
 	transactionID         uint64
