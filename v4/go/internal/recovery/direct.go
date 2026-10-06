@@ -10,6 +10,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
@@ -31,7 +32,7 @@ type directAnalysis struct {
 // the metadata read; every later failure carries the page-set
 // terminal).
 func directAnalyze(m *mapping.Mapping, meta format.Meta, budget *RecoveryBudget, check func() error, sink RecoverySink) (*directAnalysis, *analysisFailure) {
-	return directAnalyzeFollowing(m, meta, budget, check, sink, true)
+	return directAnalyzeFollowing(m, meta, budget, check, sink, security.CreatorOnlyRequested())
 }
 
 func directAnalyzeFollowing(m *mapping.Mapping, meta format.Meta, budget *RecoveryBudget, check func() error, sink RecoverySink, creatorOnly bool) (*directAnalysis, *analysisFailure) {
@@ -88,7 +89,7 @@ func directCodec(family uint8) (rangeCodec, bool) {
 // destination against the source generation, the analysis runs, and
 // the family build folds the range stream and the finish).
 func directConstruct(m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink) (*Construction, *constructionFailure) {
-	return directConstructFollowing(m, sourceMeta, builder, budget, check, sink, true)
+	return directConstructFollowing(m, sourceMeta, builder, budget, check, sink, security.CreatorOnlyRequested())
 }
 
 func directConstructFollowing(m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, creatorOnly bool) (*Construction, *constructionFailure) {

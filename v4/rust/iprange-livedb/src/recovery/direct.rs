@@ -27,7 +27,14 @@ pub(crate) fn analyze<S: RecoverySink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> std::result::Result<DirectAnalysis, super::construction::AnalysisFailure> {
-    analyze_following(mapping, meta, budget, cancellation, sink, true)
+    analyze_following(
+        mapping,
+        meta,
+        budget,
+        cancellation,
+        sink,
+        crate::creator_only_requested(),
+    )
 }
 
 pub(crate) fn analyze_following<S: RecoverySink>(

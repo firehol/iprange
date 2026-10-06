@@ -23,6 +23,7 @@ import (
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
+	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/live"
 )
 
@@ -290,7 +291,7 @@ func DatabaseCreate(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Han
 	}
 	// Absent means unprotected. A present non-boolean is a parameter
 	// error, not a silent default.
-	creatorOnly := false
+	creatorOnly := security.CreatorOnlyRequested()
 	if _, present := object["creator_only"]; present {
 		creatorOnly, err = asBool(object, "creator_only")
 		if err != nil {

@@ -8,13 +8,14 @@ package recovery
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
 // membershipConstruct builds one canonical membership output from one
 // recovery source (Rust membership_build::construct).
 func membershipConstruct(m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink) (*Construction, *constructionFailure) {
-	return membershipConstructFollowing(m, sourceMeta, builder, budget, check, sink, true)
+	return membershipConstructFollowing(m, sourceMeta, builder, budget, check, sink, security.CreatorOnlyRequested())
 }
 
 func membershipConstructFollowing(m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, creatorOnly bool) (*Construction, *constructionFailure) {

@@ -131,7 +131,7 @@ Open-source reference evidence:
 
 Open decisions:
 
-- Resolved by the user: no exceptions. Unclassified source fails closed to creator-only. No new public flag for these files.
+- Resolved by the user, 2026-10-06, second instruction: no protected default anywhere. The process switch is `IPRANGE_CREATOR_ONLY=1`. It is off unless that exact value is set. A missing JSON-RPC flag, a missing sidecar, and an unclassified source follow that switch.
 
 ## Implications And Decisions
 
@@ -155,6 +155,7 @@ Open decisions:
 - Immutable feed and algebra publish have no source database, so they use the process mode.
 - The worker control file has no source database, so it uses the process mode.
 - Detecting tests: Rust `snapshot_follows_an_unprotected_database`; Go `TestSnapshotFollowsUnprotectedDatabase`. Both passed. Windows was not executed.
+- User rejected every remaining protected default. `IPRANGE_CREATOR_ONLY=1` is the only process switch. It is off unless that exact value is set. Missing JSON-RPC `creator_only`, a missing sidecar during repair, and an unclassified source follow that switch. Rust `creator_only_switch_defaults_off` and Go `TestCreatorOnlySwitchDefaultsOff` passed.
 
 ## Validation
 

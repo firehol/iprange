@@ -18,6 +18,7 @@ import (
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
 )
@@ -64,7 +65,7 @@ func (a *PublishAttempt) Close() {
 // owners). policy is the published policy of the caller surface; the
 // attempt machine carries its reservation-wire peer.
 func CreatePublishAttempt(destinationPath string, policy PublicationPolicy) (*PublishAttempt, *PublicationPreparationFailure) {
-	return CreatePublishAttemptFollowing(destinationPath, policy, true)
+	return CreatePublishAttemptFollowing(destinationPath, policy, security.CreatorOnlyRequested())
 }
 
 func CreatePublishAttemptFollowing(destinationPath string, policy PublicationPolicy, creatorOnly bool) (*PublishAttempt, *PublicationPreparationFailure) {

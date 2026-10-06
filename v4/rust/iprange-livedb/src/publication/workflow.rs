@@ -29,7 +29,7 @@ pub(crate) fn create(
     path: &Path,
     policy: PublicationPolicy,
 ) -> Result<(OutputAttempt, File), EarlyFailure> {
-    create_following(path, policy, true)
+    create_following(path, policy, crate::publication::security::creator_only_requested())
 }
 
 pub(crate) fn create_following(

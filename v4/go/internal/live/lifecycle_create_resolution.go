@@ -13,6 +13,7 @@ import (
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
 // mainObservedKind classifies the creation main (Rust
@@ -171,7 +172,7 @@ func completeCreate(path string, supplied *CreateResult, main *mainObserved, coo
 		state = coordination.state
 	case coordinationAbsent:
 		var failure *privateCreationFailure
-		sidecar, failure = reserve(path, supplied.DatabaseID, supplied.SidecarID, supplied.ReaderCapacity, true)
+		sidecar, failure = reserve(path, supplied.DatabaseID, supplied.SidecarID, supplied.ReaderCapacity, security.CreatorOnlyRequested())
 		if failure != nil {
 			var sidecarIdentity *FileIdentity
 			if failure.identity != nil {

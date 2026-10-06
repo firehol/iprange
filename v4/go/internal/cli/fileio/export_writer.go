@@ -27,6 +27,7 @@ import (
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/pathname"
 
 	"github.com/firehol/iprange/v4/go/internal/calleropen"
@@ -108,7 +109,7 @@ func SourceIsCreatorOnly(source string) bool {
 func sourceIsCreatorOnly(source string) bool {
 	reader, err := iprangedb.OpenLiveReaderPolicy(source, nil, false)
 	if err != nil {
-		return true
+		return security.CreatorOnlyRequested()
 	}
 	defer reader.Close()
 	return reader.CreatorOnly()

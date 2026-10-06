@@ -9,6 +9,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
 // indirectAnalysis is the membership-backed recovery analysis (Rust
@@ -32,7 +33,7 @@ type indirectAnalysis struct {
 // value-kind proof, the page set over half the heap, and the graph
 // analysis; every later failure carries the page-set terminal).
 func indirectAnalyze(m *mapping.Mapping, meta format.Meta, budget *RecoveryBudget, check func() error, sink RecoverySink, kind uint8) (*indirectAnalysis, *analysisFailure) {
-	return indirectAnalyzeFollowing(m, meta, budget, check, sink, kind, true)
+	return indirectAnalyzeFollowing(m, meta, budget, check, sink, kind, security.CreatorOnlyRequested())
 }
 
 func indirectAnalyzeFollowing(m *mapping.Mapping, meta format.Meta, budget *RecoveryBudget, check func() error, sink RecoverySink, kind uint8, creatorOnly bool) (*indirectAnalysis, *analysisFailure) {

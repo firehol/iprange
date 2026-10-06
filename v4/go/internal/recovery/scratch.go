@@ -128,7 +128,7 @@ func (f *scratchSharedFile) close() {
 // directory open, the creator profile capture, the fresh attempt
 // identity, and the worker scratch checkpoint.
 func scratchStart(directoryPath string, source format.Meta, maxBytes uint64, maxFiles uint32, maxOpenFiles uint32) (*scratch, error) {
-	return scratchStartFollowing(directoryPath, source, maxBytes, maxFiles, maxOpenFiles, true)
+	return scratchStartFollowing(directoryPath, source, maxBytes, maxFiles, maxOpenFiles, security.CreatorOnlyRequested())
 }
 
 func scratchStartFollowing(directoryPath string, source format.Meta, maxBytes uint64, maxFiles uint32, maxOpenFiles uint32, creatorOnly bool) (*scratch, error) {

@@ -12,6 +12,12 @@
 
 package security
 
+// CreatorOnlyRequested reports the process switch. Off unless
+// IPRANGE_CREATOR_ONLY is exactly "1".
+func CreatorOnlyRequested() bool {
+	return os.Getenv("IPRANGE_CREATOR_ONLY") == "1"
+}
+
 import (
 	"crypto/sha256"
 	"encoding/binary"

@@ -68,7 +68,13 @@ impl PageSet {
         source: MetaV4,
         budget: &RecoveryBudget,
     ) -> Result<Self> {
-        Self::for_recovery_following(max_heap_bytes, expected_pages, source, budget, true)
+        Self::for_recovery_following(
+            max_heap_bytes,
+            expected_pages,
+            source,
+            budget,
+            crate::creator_only_requested(),
+        )
     }
 
     pub(crate) fn for_recovery_following(

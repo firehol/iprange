@@ -137,7 +137,7 @@ pub(in crate::worker) fn recover<S: RecoverySink>(
 fn source_requires_creator_only(path: &Path) -> bool {
     match crate::LiveReader::open(path, &crate::CancellationToken::new()) {
         Ok(reader) => reader.creator_only(),
-        Err(_) => true,
+        Err(_) => crate::creator_only_requested(),
     }
 }
 

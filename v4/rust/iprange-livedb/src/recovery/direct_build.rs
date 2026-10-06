@@ -30,7 +30,7 @@ pub(crate) fn construct<S: RecoverySink>(
         budget,
         cancellation,
         sink,
-        true,
+        crate::creator_only_requested(),
     )
 }
 

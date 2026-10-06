@@ -19,6 +19,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/pathname"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/reader"
+	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
@@ -342,7 +343,7 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 func sourceIsCreatorOnly(path string) bool {
 	reader, err := live.OpenLiveReaderPolicy(path, nil, false)
 	if err != nil {
-		return true
+		return security.CreatorOnlyRequested()
 	}
 	defer reader.Close()
 	return reader.CreatorOnly()

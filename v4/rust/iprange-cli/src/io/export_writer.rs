@@ -35,14 +35,13 @@ mod unix_test_mode {
     }
 }
 
-/// Read the source database's recorded choice. An immutable file and a
-/// pre-decision sidecar are creator-only. Open failure is creator-only
-/// too: an output must not become world-readable because the source
-/// could not be classified.
+/// Read the source database's recorded choice. A missing or unreadable
+/// source follows the process switch, which is off unless
+/// `IPRANGE_CREATOR_ONLY=1`.
 pub(crate) fn source_is_creator_only(source: &Path) -> bool {
     match LiveReader::open(source, &CancellationToken::new()) {
         Ok(reader) => reader.creator_only(),
-        Err(_) => true,
+        Err(_) => iprange_livedb::creator_only_requested(),
     }
 }
 

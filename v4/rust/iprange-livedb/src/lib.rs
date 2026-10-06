@@ -134,6 +134,7 @@ pub use membership_query::{
     MembershipScope, UncoveredFeed, UncoveredSide,
 };
 pub use membership_view::MembershipView;
+pub use publication::security::creator_only_requested;
 pub use publication::{
     inspect_publication_residue, remove_publication_residue, resolve_publication,
     PublicationPolicy, PublicationResidueCoordination, PublicationResidueHandle,

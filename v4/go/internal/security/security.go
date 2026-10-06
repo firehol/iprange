@@ -25,6 +25,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// CreatorOnlyRequested reports the process switch. Off unless
+// IPRANGE_CREATOR_ONLY is exactly "1". A database that already records
+// the choice still follows that record.
+func CreatorOnlyRequested() bool {
+	return os.Getenv("IPRANGE_CREATOR_ONLY") == "1"
+}
+
 // CreatorMode is the only permitted mode of a creator-only artifact
 // (Rust security CREATOR_MODE).
 const CreatorMode = 0o600

@@ -88,7 +88,7 @@ pub fn database_create(state: &mut SessionState, params: Value) -> Result<Value,
     let reader_capacity = u32_value(object.get("reader_capacity").unwrap_or(&Value::Null))
         .map_err(HandlerError::invalid_params)?;
     let creator_only = match object.get("creator_only") {
-        None | Some(Value::Null) => false,
+        None | Some(Value::Null) => iprange_livedb::creator_only_requested(),
         Some(Value::Bool(value)) => *value,
         Some(_) => {
             return Err(HandlerError::invalid_params(

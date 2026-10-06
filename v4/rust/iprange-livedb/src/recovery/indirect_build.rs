@@ -59,7 +59,7 @@ pub(super) fn construct<M: Mode, S: RecoverySink>(
         budget,
         cancellation,
         sink,
-        true,
+        crate::creator_only_requested(),
     )
 }
 

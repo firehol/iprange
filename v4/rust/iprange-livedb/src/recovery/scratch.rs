@@ -119,7 +119,14 @@ impl Scratch {
         max_files: u32,
         max_open_files: u32,
     ) -> Result<Self> {
-        Self::start_following(directory, source, max_bytes, max_files, max_open_files, true)
+        Self::start_following(
+            directory,
+            source,
+            max_bytes,
+            max_files,
+            max_open_files,
+            crate::publication::security::creator_only_requested(),
+        )
     }
 
     pub(crate) fn start_following(

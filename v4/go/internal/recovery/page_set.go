@@ -14,6 +14,7 @@ import (
 	"math/bits"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/validation"
 )
 
@@ -86,7 +87,7 @@ func newPageSet(maxHeapBytes uint64, expectedPages uint64, fallback *pageFallbac
 // validated, the fallback captures the scratch directory facts, and
 // the heap table is the smaller power of two.
 func forRecovery(maxHeapBytes uint64, expectedPages uint64, source format.Meta, budget *RecoveryBudget) (*pageSet, error) {
-	return forRecoveryFollowing(maxHeapBytes, expectedPages, source, budget, true)
+	return forRecoveryFollowing(maxHeapBytes, expectedPages, source, budget, security.CreatorOnlyRequested())
 }
 
 func forRecoveryFollowing(maxHeapBytes uint64, expectedPages uint64, source format.Meta, budget *RecoveryBudget, creatorOnly bool) (*pageSet, error) {

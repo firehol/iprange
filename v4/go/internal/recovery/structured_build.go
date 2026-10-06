@@ -8,13 +8,14 @@ package recovery
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
 // structuredConstruct builds one canonical structured output from one
 // recovery source (Rust structured_build::construct).
 func structuredConstruct(m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink) (*Construction, *constructionFailure) {
-	return structuredConstructFollowing(m, sourceMeta, builder, budget, check, sink, true)
+	return structuredConstructFollowing(m, sourceMeta, builder, budget, check, sink, security.CreatorOnlyRequested())
 }
 
 func structuredConstructFollowing(m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, creatorOnly bool) (*Construction, *constructionFailure) {

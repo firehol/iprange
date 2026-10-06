@@ -9,6 +9,7 @@ package recovery
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/writer"
 )
 
@@ -38,7 +39,7 @@ type indirectOutputContext struct {
 // destination against the source generation and runs the analysis,
 // then the family build streams the mode output.
 func indirectConstruct(mode indirectMode, m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink) (*Construction, *constructionFailure) {
-	return indirectConstructFollowing(mode, m, sourceMeta, builder, budget, check, sink, true)
+	return indirectConstructFollowing(mode, m, sourceMeta, builder, budget, check, sink, security.CreatorOnlyRequested())
 }
 
 func indirectConstructFollowing(mode indirectMode, m *mapping.Mapping, sourceMeta format.Meta, builder *writer.OutputBuilder, budget *RecoveryBudget, check func() error, sink RecoverySink, creatorOnly bool) (*Construction, *constructionFailure) {

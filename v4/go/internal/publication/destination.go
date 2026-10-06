@@ -33,7 +33,7 @@ type destination struct {
 // as a retained directory, both names must fit the name_max proof,
 // and the basename commitment must encode.
 func bindDestination(path string) (*destination, error) {
-	return bindDestinationFollowing(path, true)
+	return bindDestinationFollowing(path, security.CreatorOnlyRequested())
 }
 
 func bindDestinationFollowing(path string, creatorOnly bool) (*destination, error) {

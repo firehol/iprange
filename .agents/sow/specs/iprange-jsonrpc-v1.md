@@ -590,8 +590,9 @@ Params:
 ```
 
 `structure_kind` must be `network_enrichment_v1` only with structured values
-and `none` otherwise. `creator_only` defaults to false when omitted. True
-requests the creator-only proof. False leaves permissions to the process.
+and `none` otherwise. `creator_only`, when omitted, follows `IPRANGE_CREATOR_ONLY`.
+That variable is off unless it is exactly `1`. True requests the
+creator-only proof. False leaves permissions to the process.
 Creation no longer always uses creator-only security,
 creates an empty database, and leaves metadata absent. A client that needs
 initial metadata calls `database.metadata.replace` after successful creation.

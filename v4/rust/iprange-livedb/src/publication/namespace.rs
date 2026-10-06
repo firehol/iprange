@@ -100,7 +100,7 @@ pub(crate) struct Destination {
 
 impl Destination {
     pub(crate) fn bind(path: &Path) -> Result<Self, NamespaceError> {
-        Self::bind_following(path, true)
+        Self::bind_following(path, crate::publication::security::creator_only_requested())
     }
 
     pub(crate) fn bind_following(

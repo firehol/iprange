@@ -49,7 +49,7 @@ pub(crate) fn analyze<S: RecoverySink>(
         cancellation,
         sink,
         expected_kind,
-        true,
+        crate::creator_only_requested(),
     )
 }
 

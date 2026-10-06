@@ -5,12 +5,29 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/firehol/iprange/v4/go/internal/security"
+
 	"golang.org/x/sys/unix"
 )
 
 // The create flag is recorded in the sidecar and honored on a later
 // open. These cases close the writer before reopening, so the check
 // is not an in-process flag.
+
+func TestCreatorOnlySwitchDefaultsOff(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "")
+	if security.CreatorOnlyRequested() {
+		t.Fatal("empty switch requested creator-only")
+	}
+	t.Setenv("IPRANGE_CREATOR_ONLY", "0")
+	if security.CreatorOnlyRequested() {
+		t.Fatal("zero switch requested creator-only")
+	}
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
+	if !security.CreatorOnlyRequested() {
+		t.Fatal("IPRANGE_CREATOR_ONLY=1 did not request creator-only")
+	}
+}
 
 func TestSnapshotFollowsUnprotectedDatabase(t *testing.T) {
 	requireLiveCreation(t)

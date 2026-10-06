@@ -31,6 +31,16 @@ fn path(label: &str) -> PathBuf {
 }
 
 #[test]
+fn creator_only_switch_defaults_off() {
+    std::env::remove_var("IPRANGE_CREATOR_ONLY");
+    assert!(!iprange_livedb::creator_only_requested());
+    std::env::set_var("IPRANGE_CREATOR_ONLY", "0");
+    assert!(!iprange_livedb::creator_only_requested());
+    std::env::set_var("IPRANGE_CREATOR_ONLY", "1");
+    assert!(iprange_livedb::creator_only_requested());
+    std::env::remove_var("IPRANGE_CREATOR_ONLY");
+}
+
 fn snapshot_follows_an_unprotected_database() {
     let directory = path("snapshot");
     fs::create_dir(&directory).unwrap();

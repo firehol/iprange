@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
 // createdOutput is one freshly created private publication output
@@ -25,7 +26,7 @@ type createdOutput struct {
 // createOutput creates one private output for the destination at path
 // (Rust CreatedOutput::create).
 func createOutput(path string) (*createdOutput, error) {
-	return createOutputFollowing(path, true)
+	return createOutputFollowing(path, security.CreatorOnlyRequested())
 }
 
 func createOutputFollowing(path string, creatorOnly bool) (*createdOutput, error) {
@@ -36,7 +37,7 @@ func createOutputFollowing(path string, creatorOnly bool) (*createdOutput, error
 // names are absent (Rust CreatedOutput::create_absent; the
 // fail-if-exists publication flow uses it).
 func createOutputAbsent(path string) (*createdOutput, error) {
-	return createOutputAbsentFollowing(path, true)
+	return createOutputAbsentFollowing(path, security.CreatorOnlyRequested())
 }
 
 func createOutputAbsentFollowing(path string, creatorOnly bool) (*createdOutput, error) {

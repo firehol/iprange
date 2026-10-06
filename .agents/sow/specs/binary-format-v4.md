@@ -2365,10 +2365,11 @@ without the flag uses the process umask and the directory default.
 Every other product file follows that same choice. A publication
 reservation, snapshot private file, recovery scratch file, worker
 control file, and garbage-collection envelope are creator-only only when
-the source database is. A file with no source database uses the process
-mode. An unclassified source fails closed to creator-only. Opens never
-silently change existing access. Every descriptor is close-on-exec or
-non-inheritable.
+the source database is, or when the process switch
+`IPRANGE_CREATOR_ONLY=1` is set. The switch is off by default. A file
+with no source database, and a source that cannot be classified, follow
+that switch. Opens never silently change existing access. Every
+descriptor is close-on-exec or non-inheritable.
 
 For POSIX creation-security kind 1, the engine removes an inherited extended
 access ACL, applies mode `0600`, and verifies the retained regular inode is

@@ -130,7 +130,7 @@ fn complete(
                 supplied.database_id,
                 supplied.sidecar_id,
                 supplied.reader_capacity,
-                true,
+                crate::creator_only_requested(),
             ) {
                 Ok(sidecar) => sidecar,
                 Err(failure) => {
