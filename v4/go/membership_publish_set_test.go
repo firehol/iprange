@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
@@ -645,5 +647,47 @@ func TestMergeErrorsKeepsPrimaryCause(t *testing.T) {
 	}
 	if got := merged.Error(); !strings.Contains(got, "already exists") || !strings.Contains(got, "close failed") {
 		t.Fatalf("Error() = %q, want both the primary and the secondary details", got)
+	}
+}
+
+// TestPublishSetFollowsTheProcessSwitch pins the algebra publish's
+// no-source switch rule (spec 15.6): the publish output has no source
+// database of its own, so with the switch on and umask 0 it is exactly
+// 0600 and with the switch off it keeps the process default.
+func TestPublishSetFollowsTheProcessSwitch(t *testing.T) {
+	requirePublicationSecurity(t)
+	previous := unix.Umask(0)
+	defer unix.Umask(previous)
+	helpers := publishAlgebraV4(t, 1)
+	defer helpers.closeFn()
+
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
+	switchedOn := publishDest(t, "switch-on.iprdb")
+	result, err := publishV4(t, helpers, switchedOn, AlgebraSetUnion(AlgebraFeedSelectionAll()), AlgebraOutputModePreserveFeeds(), nil, PolicyFailIfExists, outputBudget())
+	if err != nil {
+		t.Fatal("publish:", err)
+	}
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("publication status %v", result.Publication.Publication)
+	}
+	info, err := os.Stat(switchedOn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("switch-on publish mode = %#o, want 0600 (a switch-ignoring publish stays 0666 under umask 0)", mode)
+	}
+
+	t.Setenv("IPRANGE_CREATOR_ONLY", "")
+	switchedOff := publishDest(t, "switch-off.iprdb")
+	if _, err := publishV4(t, helpers, switchedOff, AlgebraSetUnion(AlgebraFeedSelectionAll()), AlgebraOutputModePreserveFeeds(), nil, PolicyFailIfExists, outputBudget()); err != nil {
+		t.Fatal("publish:", err)
+	}
+	info, err = os.Stat(switchedOff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode == 0o600 {
+		t.Fatal("switch-off publish forced mode 0600")
 	}
 }

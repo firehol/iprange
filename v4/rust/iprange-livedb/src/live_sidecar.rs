@@ -41,10 +41,31 @@ pub fn source_creator_only(main: &Path) -> bool {
         Ok(sidecar) => sidecar,
         Err(_) => return crate::creator_only_requested(),
     };
-    let file = match File::open(&sidecar) {
+    // Prompt open (O_NONBLOCK): a FIFO planted at the sidecar name must
+    // refuse instead of wedging the calling request thread; regular
+    // files ignore the flag. The regular-file check then rejects any
+    // non-regular node the open reached.
+    let file = match {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&sidecar)
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::File::open(&sidecar)
+        }
+    } {
         Ok(file) => file,
         Err(_) => return crate::creator_only_requested(),
     };
+    match file.metadata() {
+        Ok(metadata) if metadata.is_file() => {}
+        _ => return crate::creator_only_requested(),
+    }
     match read_header(&file) {
         Ok((_, header)) => header.policy != Policy::Unprotected,
         Err(_) => crate::creator_only_requested(),

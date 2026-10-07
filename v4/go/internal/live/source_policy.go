@@ -13,9 +13,11 @@ import (
 // live_sidecar::source_creator_only). Pre-decision (generation 0) and
 // generation-1 protected count as protected; generation-1 unprotected
 // counts as unprotected. A missing or unreadable sidecar — every
-// immutable source has none — and any corrupt header follow the process
-// switch, exactly like an unclassified source. This is an advisory
-// policy read for output creation, never an access check.
+// immutable source has none — and any corrupt header (including a
+// valid-CRC header whose identities are zero, the full read_header
+// rule) follow the process switch, exactly like an unclassified
+// source. This is an advisory policy read for output creation, never
+// an access check.
 func SourceCreatorOnly(main string) bool {
 	path, err := CanonicalSidecarPath(main)
 	if err != nil {
@@ -38,7 +40,7 @@ func SourceCreatorOnly(main string) bool {
 	if err != nil {
 		return security.CreatorOnlyRequested()
 	}
-	if !headerShapeValid(page) || !headerChecksumValid(page) {
+	if !headerShapeValid(page) || !headerChecksumValid(page) || !headerIdentitiesValid(page) {
 		return security.CreatorOnlyRequested()
 	}
 	policy, err := decodePolicy(page)
@@ -46,4 +48,10 @@ func SourceCreatorOnly(main string) bool {
 		return security.CreatorOnlyRequested()
 	}
 	return policy != policyUnprotected
+}
+
+// headerIdentitiesValid proves the nonzero database and sidecar
+// identities (the Rust read_header identity rule).
+func headerIdentitiesValid(page []byte) bool {
+	return !allZero(page, databaseIDOff, 16) && !allZero(page, sidecarIDOff, 16)
 }

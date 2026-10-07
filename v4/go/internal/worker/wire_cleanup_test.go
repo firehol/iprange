@@ -329,3 +329,29 @@ func TestScratchCleanupWireRejections(t *testing.T) {
 	_, err = readScratchCleanup(r2)
 	wantCode(t, err, format.CodeFormatInvalid)
 }
+
+// TestCleanupRequestRoundTripsTheZeroCommitment pins the recorded
+// choice on the wire (Rust wire_cleanup tests twin): an unprotected
+// scratch records the zero commitment, and the request decoder must
+// accept it — re-tightening scratchSecurityValid would refuse the
+// cleanup of every default-configuration recovery.
+func TestCleanupRequestRoundTripsTheZeroCommitment(t *testing.T) {
+	scratch := testScratchCheckpoint()
+	scratch.CreationSecurity.Commitment = [32]byte{}
+	directory := "/tmp/scratch-dir"
+	c, err := CreateParent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := WriteCleanupRequest(c, "/tmp/output.v4", testOutputAttempt(), &directory, scratch); err != nil {
+		t.Fatal("write request:", err)
+	}
+	request, err := ReadCleanupRequest(c)
+	if err != nil {
+		t.Fatal("zero-commitment request refused:", err)
+	}
+	if request.Scratch == nil || request.Scratch.CreationSecurity.Commitment != [32]byte{} {
+		t.Fatalf("scratch = %+v, want the zero commitment", request.Scratch)
+	}
+}

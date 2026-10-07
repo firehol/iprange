@@ -6,7 +6,6 @@ use crate::error::{Error, ErrorCode};
 use crate::publication::namespace::CREATION_SECURITY_KIND;
 #[cfg(unix)]
 use crate::publication::namespace::{regular_link_count, Directory, NamespaceError};
-use crate::publication::security::Profile;
 use crate::validation::LocalFileIdentity;
 
 #[cfg(unix)]
@@ -85,12 +84,10 @@ fn conflict(detail: &'static str) -> ScratchProblem {
 
 pub(super) fn residue(
     directory_identity: LocalFileIdentity,
-    profile: &Profile,
     recorded: [u8; 32],
     owner: Owned,
     problem: ScratchProblem,
 ) -> ScratchResidue {
-    let _ = profile;
     ScratchResidue {
         ordinal: owner.ordinal,
         directory_identity,

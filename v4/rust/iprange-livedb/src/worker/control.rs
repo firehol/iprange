@@ -885,3 +885,57 @@ fn parent_alive(expected: u32) -> bool {
     let _ = unsafe { CloseHandle(handle) };
     state == WAIT_TIMEOUT
 }
+
+#[cfg(all(test, unix))]
+mod mode_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    // The control file follows the process switch (spec 15.6): under
+    // umask 0 the switch-on arm produces exactly 0600 (a switch-ignoring
+    // 0666 create would stay 0666) and the switch-off arm keeps the
+    // process default. Rust twin of TestCreateParentModeIndependentOfUmask.
+    #[test]
+    fn control_file_follows_the_process_switch() {
+        let _guard = crate::publication::security::CreatorOnlyGuard::on();
+        let previous = unsafe { umask0() };
+        let control = Control::create_parent().unwrap();
+        let mode = std::fs::metadata(control.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        drop(control);
+        unsafe { restore_umask(previous) };
+        assert_eq!(mode, 0o600, "switch-on control file mode {mode:o}, want 0600 under umask 0");
+    }
+
+    #[test]
+    fn control_file_keeps_the_process_default_without_the_switch() {
+        std::env::remove_var("IPRANGE_CREATOR_ONLY");
+        let previous = unsafe { umask0() };
+        let control = Control::create_parent().unwrap();
+        let mode = std::fs::metadata(control.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        drop(control);
+        unsafe { restore_umask(previous) };
+        assert_eq!(mode, 0o666, "switch-off control file mode {mode:o}, want the 0666 process default under umask 0");
+    }
+
+    unsafe fn umask0() -> u32 {
+        extern "C" {
+            fn umask(mask: u32) -> u32;
+        }
+        unsafe { umask(0) }
+    }
+
+    unsafe fn restore_umask(mask: u32) {
+        extern "C" {
+            fn umask(mask: u32) -> u32;
+        }
+        unsafe { umask(mask) };
+    }
+}

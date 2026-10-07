@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // sliceSource4 is one finite caller-owned IPv4 batch source over a
@@ -402,4 +404,61 @@ func feedFailureCode(t *testing.T, err error) ErrorCode {
 		t.Fatalf("cause not a public *Error: %v", failure.Cause)
 	}
 	return public.Code
+}
+
+// TestImmutableFeedPublishFollowsTheProcessSwitch pins the feed
+// publish's no-source switch rule (spec 15.6): with the switch on and
+// umask 0 the published output is exactly 0600, and with the switch off
+// it keeps the process default. The feed publish has no source
+// database, so the switch is its only input.
+func TestImmutableFeedPublishFollowsTheProcessSwitch(t *testing.T) {
+	requireLiveCreation(t)
+	previous := unix.Umask(0)
+	defer unix.Umask(previous)
+
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
+	destination := filepath.Join(t.TempDir(), "switched-on.v4")
+	valueTag, err := NewValueTag([]byte("downloaded"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	feedName, err := NewFeedName("current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := CreateImmutableFeedV4(destination, valueTag, feedName, nil, PolicyFailIfExists, &sliceSource4{
+		{From: 0x0a000001, To: 0x0a00000a},
+	}, &ImmutableFeedBudget{MaxHeapBytes: 1 << 20, MaxOutputPages: 20_000, MaxWorkspacePages: 20_000, MaxOpenFiles: 3}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("publication = %v", result.Publication.Publication)
+	}
+	info, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("switch-on feed mode = %#o, want 0600 (a switch-ignoring publish stays 0666 under umask 0)", mode)
+	}
+
+	t.Setenv("IPRANGE_CREATOR_ONLY", "")
+	plain := filepath.Join(t.TempDir(), "switched-off.v4")
+	result, err = CreateImmutableFeedV4(plain, valueTag, feedName, nil, PolicyFailIfExists, &sliceSource4{
+		{From: 0x0a000001, To: 0x0a00000a},
+	}, &ImmutableFeedBudget{MaxHeapBytes: 1 << 20, MaxOutputPages: 20_000, MaxWorkspacePages: 20_000, MaxOpenFiles: 3}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("publication = %v", result.Publication.Publication)
+	}
+	info, err = os.Stat(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode == 0o600 {
+		t.Fatal("switch-off feed forced mode 0600")
+	}
 }

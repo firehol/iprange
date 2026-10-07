@@ -403,7 +403,6 @@ impl Scratch {
             if let Some(problem) = retirement.problem {
                 residues.push(cleanup::residue(
                     directory_identity,
-                    &self.profile,
                     commitment,
                     owner,
                     ScratchProblem {
@@ -482,7 +481,6 @@ impl Scratch {
             // record the same scratch writes.
             residues.push(residue(
                 directory_identity,
-                &self.profile,
                 self.recorded_commitment(),
                 owner,
                 problem,

@@ -608,8 +608,6 @@ func scratchNamespaceError(err error) error {
 }
 
 // scratchResidueOf builds the residue of one failed removal (Rust
-// cleanup::residue).
-// scratchResidueOf builds the residue of one failed removal (Rust
 // cleanup::residue). The commitment is the recorded choice, matching
 // the top-level cleanup record the same scratch writes.
 func scratchResidueOf(directoryIdentity publication.LocalFileIdentity, recorded [32]byte, owner *scratchOwned, problem scratchProblem) scratchResidue {

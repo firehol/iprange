@@ -38,6 +38,14 @@ func ValidateDatabaseCreateParams(params json.RawMessage) error {
 	if err != nil {
 		return err
 	}
+	// The frozen oracle types the member boolean-only, and null is not
+	// omission: reject it at the validation boundary so the refusal
+	// carries the invalid-params transport code (the Rust twin's rule).
+	if _, present := object["creator_only"]; present {
+		if _, err := asBool(object, "creator_only"); err != nil {
+			return err
+		}
+	}
 	path, err := asString(object, "path")
 	if err != nil {
 		return err
@@ -291,12 +299,15 @@ func DatabaseCreate(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Han
 	if err != nil {
 		return nil, rpc.InvalidParamsError("reader_capacity must be a u32 integer")
 	}
-	// Absent means unprotected. A present non-boolean is a parameter
-	// error, not a silent default.
+	// Absent follows the process switch. A present non-boolean is a
+	// parameter error, not a silent default; the type check lives in
+	// the validator (matching the Rust twin and the boolean-only
+	// oracle) so the refusal carries the invalid-params transport code.
 	creatorOnly := security.CreatorOnlyRequested()
-	if _, present := object["creator_only"]; present {
+	if value, present := object["creator_only"]; present {
 		creatorOnly, err = asBool(object, "creator_only")
 		if err != nil {
+			_ = value
 			return nil, rpc.InvalidParamsError("creator_only must be a boolean")
 		}
 	}

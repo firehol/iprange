@@ -254,8 +254,7 @@ fn valid_identity(identity: crate::validation::LocalFileIdentity) -> bool {
 // A zero commitment is the valid unprotected record: the scratch
 // writers record it when their database did not ask for creator-only
 // (the control-page twin accepts it the same way).
-fn valid_security(kind: u16, commitment: [u8; 32]) -> bool {
-    let _ = commitment;
+fn valid_security(kind: u16, _commitment: [u8; 32]) -> bool {
     kind == crate::publication::namespace::CREATION_SECURITY_KIND
 }
 
