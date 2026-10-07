@@ -73,4 +73,24 @@ func TestExportWriterFollowsSourceDatabase(t *testing.T) {
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("protected source mode = %o, want 0600", info.Mode().Perm())
 	}
+
+	// The unprotected exact-default arm (parity round 8): the export
+	// output's umask default is pinned exactly — 0666 & ~0200 == 0466 —
+	// because every earlier pin was a != 0600 negation and a hard-coded
+	// 0644 passed the whole tree while the true default is 0466 here.
+	plainExact := filepath.Join(dir, "plain-exact.out")
+	writer, herr = NewExportWriterFollowing(plainExact, unprotected, iprangedb.PolicyFailIfExists, budget)
+	if herr != nil {
+		t.Fatal(herr.Message)
+	}
+	if _, herr := writer.Finish(); herr != nil {
+		t.Fatal(herr.Message)
+	}
+	info, err = os.Stat(plainExact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o466 {
+		t.Fatalf("unprotected export mode = %o, want the exact umask default 0466 (a hard-coded 0644 would fail this arm)", info.Mode().Perm())
+	}
 }

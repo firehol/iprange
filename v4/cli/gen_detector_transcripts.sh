@@ -23,13 +23,13 @@ entry() {  # entry <heading> <cwd> <command...>
   echo
   local out rc
   out=$(cd "$cwd" && "$@" 2>&1); rc=$?
-  echo "$out" | rg "^test |^--- |test result|^ok |^PASS|^FAIL" | head -60
+  echo "$out" | rg "^test |^--- |test result|^ok |^PASS|^FAIL|^self-test " | head -80
   echo "rc=$rc"
   if [ "$rc" -ne 0 ]; then
     echo "GENERATOR-REFUSED: rc=$rc — this entry is NOT attestable" >&2
     exit 1
   fi
-  if ! echo "$out" | rg -q "^test |^--- |^ok "; then
+  if ! echo "$out" | rg -q "^test |^--- |^ok |^PASS |^self-test "; then
     echo "GENERATOR-REFUSED: no named results — this entry is NOT attestable" >&2
     exit 1
   fi
@@ -72,12 +72,7 @@ entry "Go export follows-source twin (umask 0200 hostile arm)" \
 entry "Go control-file mode twin" \
   "$REPO/v4/go" env GOFLAGS=-buildvcs=false go test -count=1 -v -run TestCreateParentModeIndependentOfUmask ./internal/worker/
 
-echo "## create-mode shape gate self-test (verifier controls)"
-echo "cwd: $REPO"
-echo "command: python3 v4/cli/check_create_mode_shape.py --self-test"
-nice python3 "$REPO/v4/cli/check_create_mode_shape.py" --self-test 2>&1 | rg "self-test|PASS|controls"
-rc=$?
-echo "rc=$rc"
-[ "$rc" -eq 0 ] || { echo "GENERATOR-REFUSED: create-mode self-test rc=$rc" >&2; exit 1; }
+entry "create-mode shape gate self-test (verifier controls incl. switched presence)" \
+  "$REPO" nice python3 v4/cli/check_create_mode_shape.py --self-test
 } > "$OUT"
 echo "staged $OUT"

@@ -1468,6 +1468,15 @@ COMMITTED_REPORT_WRITERS = {
         "tier": SHARED_TIER,
         "owner": "gate-c",
     },
+    "check_create_mode_shape.py": {
+        # The create-mode shape gate (round 6): its committed report is
+        # registered the moment it rotates, or the next audit reddens
+        # with "uncommitted report from an unregistered writer".
+        "artifacts": ("create-mode.json",),
+        "screened": ("--go", "--rust", "--work", "--json-report"),
+        "tier": SHARED_TIER,
+        "owner": "gate-c",
+    },
     "check_refusal_class_parity.py": {
         # The parity gate sweeps its descriptor-pressure axis at one
         # coverage per run: the routine 12-profile subset by default,

@@ -2618,7 +2618,8 @@ def create_mode_evidence(path, report, problems):
     The shape gate owns the openat-mode observation; the kind gate owns
     the identity invariants: one schema, a pass verdict, both engines
     with both passes (default and switched), and every per-pass verdict
-    pass. A purchased verdict fails here.
+    pass; a report whose verdict was purchased by editing fields fails
+    here.
     """
     if report.get("schema") != "iprange-cli-create-mode-report-v1":
         problems.append(f"create-mode {path}: unexpected schema "
@@ -2635,12 +2636,35 @@ def create_mode_evidence(path, report, problems):
         problems.append(f"create-mode {path}: engines {sorted(engines)}; "
                         "both engines must be attested")
         return
+    # The (engine, pass) set is exact: the switched pass is the round-7
+    # security surface, and a default-only report must not consume
+    # cleanly (round-8 forges accepted exactly that shape).
+    seen = {(entry.get("engine"), entry.get("pass"))
+            for entry in report.get("engines", [])
+            if isinstance(entry, dict)}
+    want = {(engine, subject)
+            for engine in ("rust", "go")
+            for subject in ("default pass (creator-only export temp)",
+                            "switched pass (creator-only "
+                            "main/readers/control/temp)")}
+    if seen != want:
+        problems.append(f"create-mode {path}: (engine, pass) set "
+                        f"{sorted(map(str, seen))}; want exactly "
+                        f"{sorted(map(str, want))}")
+        return
     for entry in report.get("engines", []):
         if entry.get("verdict") != "pass" or not entry.get("temp_creates"):
             problems.append(
                 f"create-mode {path}: {entry.get('engine')} pass "
                 f"{entry.get('pass')!r} verdict {entry.get('verdict')!r} "
                 "with no watched creates")
+        watched = entry.get("watched") or {}
+        if "switched" in str(entry.get("pass")) and sorted(watched) != [
+                "control", "main", "readers", "temp"]:
+            problems.append(
+                f"create-mode {path}: {entry.get('engine')} switched "
+                f"watched classes {sorted(watched)}; want all four of "
+                "control/main/readers/temp")
 
 
 def fifo_surface_evidence(path, report, implementation_of, ledger, problems,
@@ -2996,7 +3020,8 @@ BATTERY_MANIFEST_FILE_NAME = "battery-manifest.json"
 CONSUMED_ROLES = ("matrix", "crash", "crash-negative", "fifo-surface",
                   "throughput", "refusal-class-parity", "coverage-go",
                   "windows-housekeeping", "windows-guard", "resource",
-                  "golden", "sensitivity", "guard-posix", "race-battery")
+                  "golden", "sensitivity", "guard-posix", "race-battery",
+                  "create-mode")
 
 # Standard file names, used when a class is discovered beside the supplied
 # battery instead of being named on the command line.
@@ -3011,6 +3036,7 @@ CONSUMED_FILE_NAMES = {
     "sensitivity": ("sensitivity.json",),
     "guard-posix": ("guard-posix.json",),
     "race-battery": ("race-battery.json",),
+    "create-mode": ("create-mode.json",),
 }
 
 # A negative control is one report per faked role, so a battery keeps more
@@ -5327,6 +5353,7 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
         "crash-negative": crash_negative_paths,
         "fifo-surface": list(fifo_paths),
         "throughput": list(throughput_paths),
+        "create-mode": list(create_mode_paths),
         "refusal-class-parity": parity_paths,
         "coverage-go": coverage_paths,
         "windows-housekeeping": windows_paths,

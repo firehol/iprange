@@ -821,8 +821,7 @@ fn create_file(nonce: [u8; 16]) -> Result<(PathBuf, File)> {
         .open(&path)?;
     if !creator_only {
         use std::os::unix::fs::PermissionsExt as _;
-        let floored = file
-            .metadata()
+        file.metadata()
             .and_then(|metadata| {
                 let mode = metadata.permissions().mode() | 0o600;
                 file.set_permissions(std::fs::Permissions::from_mode(mode))
@@ -834,7 +833,6 @@ fn create_file(nonce: [u8; 16]) -> Result<(PathBuf, File)> {
                 let _ = std::fs::remove_file(&path);
                 error
             })?;
-        let _ = floored;
     }
     if creator_only {
         let profile = Profile::capture().map_err(|error| {

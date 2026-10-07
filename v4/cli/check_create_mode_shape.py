@@ -184,8 +184,9 @@ def verifier(creates, engine, findings, patterns=TEMP_PATTERNS,
     """
     names = set(extra_names)
     temps = {path: modes for path, modes in creates.items()
-             if path in names
-             or any(pattern.search(path) for pattern in patterns)}
+             if os.path.basename(path) in names
+             or any(pattern.search(os.path.basename(path))
+                    for pattern in patterns)}
     record = {"pass": subject, "engine": engine,
               "temp_creates": {path: [oct(m) for m in modes]
                                for path, modes in sorted(temps.items())}}
@@ -196,6 +197,34 @@ def verifier(creates, engine, findings, patterns=TEMP_PATTERNS,
             "gate cannot attest the mode")
         record["verdict"] = "fail"
         return record
+    # Presence is per artifact, not per set: a trace that lost exactly
+    # one watched create (strace loss, a rename, a tamper) must fail,
+    # not pass with the remaining three (security/fit-for-purpose
+    # round 8). The main file is matched by basename suffix so an
+    # absolute or dirfd-relative spelling is watched either way.
+    watched_labels = {}
+    for path in temps:
+        base = os.path.basename(path)
+        if base in names:
+            watched_labels.setdefault("main", []).append(base)
+        elif TEMP_PATTERNS[0].search(base) or TEMP_PATTERNS[1].search(base):
+            watched_labels.setdefault("temp", []).append(base)
+        elif SWITCHED_PATTERNS[2].search(base):
+            watched_labels.setdefault("readers", []).append(base)
+        elif SWITCHED_PATTERNS[3].search(base):
+            watched_labels.setdefault("control", []).append(base)
+    record["watched"] = {label: len(paths) for label, paths
+                         in sorted(watched_labels.items())}
+    if patterns is SWITCHED_PATTERNS:
+        missing = [label for label in ("main", "temp", "readers", "control")
+                   if not watched_labels.get(label)]
+        if missing:
+            findings.append(
+                f"{engine} ({subject}): the switched pass must watch all "
+                f"four artifact classes; missing {missing} — a trace that "
+                "lost a watched create is not attestable")
+            record["verdict"] = "fail"
+            return record
     bad = {path: [oct(m) for m in modes if m != 0o600]
            for path, modes in temps.items() if any(m != 0o600 for m in modes)}
     if bad:
@@ -266,6 +295,39 @@ SELF_TEST_TRACES = {
 SELF_TEST_EXPECT = {"pass": "pass", "window": "fail", "no-export": "fail",
                     "unrelated-only": "fail"}
 
+SWITCHED_SELF_TEST_TRACES = {
+    "switched-pass": {
+        "work/source-rust.v4": [0o600],
+        "work/source-rust.v4.readers": [0o600],
+        "/tmp/.iprange-v4-worker-abc.ctl": [0o600],
+        "work/.1.export.tmp": [0o600],
+    },
+    # A trace that lost exactly one watched create is NOT attestable.
+    "switched-missing-control": {
+        "work/source-rust.v4": [0o600],
+        "work/source-rust.v4.readers": [0o600],
+        "work/.1.export.tmp": [0o600],
+    },
+    # The main create spelled absolutely: still watched (suffix match).
+    "switched-absolute-main": {
+        "/abs/work/source-rust.v4": [0o600],
+        "work/source-rust.v4.readers": [0o600],
+        "/tmp/.iprange-v4-worker-abc.ctl": [0o600],
+        "work/.1.export.tmp": [0o600],
+    },
+    # The main create spelled absolutely AND regressed: must fail.
+    "switched-absolute-window": {
+        "/abs/work/source-rust.v4": [0o666],
+        "work/source-rust.v4.readers": [0o600],
+        "/tmp/.iprange-v4-worker-abc.ctl": [0o600],
+        "work/.1.export.tmp": [0o600],
+    },
+}
+SWITCHED_SELF_TEST_EXPECT = {"switched-pass": "pass",
+                             "switched-missing-control": "fail",
+                             "switched-absolute-main": "pass",
+                             "switched-absolute-window": "fail"}
+
 
 def self_test():
     """Offline: the verifier's table, doctored one mutation at a time."""
@@ -274,6 +336,17 @@ def self_test():
         findings = []
         record = verifier(creates, "self-test", findings)
         want = SELF_TEST_EXPECT[label]
+        if record["verdict"] != want:
+            failures.append(f"self-test {label}: verdict "
+                            f"{record['verdict']}, want {want}")
+        print(f"self-test {label}: {record['verdict']}")
+    for label, creates in SWITCHED_SELF_TEST_TRACES.items():
+        findings = []
+        record = verifier(creates, "self-test", findings,
+                          patterns=SWITCHED_PATTERNS,
+                          subject="switched self-test",
+                          extra_names=("source-rust.v4",))
+        want = SWITCHED_SELF_TEST_EXPECT[label]
         if record["verdict"] != want:
             failures.append(f"self-test {label}: verdict "
                             f"{record['verdict']}, want {want}")
@@ -339,7 +412,8 @@ def main():
     write_committed_report(args.json_report, report,
                            caller_paths=(("--go", args.go),
                                          ("--rust", args.rust),
-                                         ("--work", args.work)))
+                                         ("--work", args.work),
+                                         ("--json-report", args.json_report)))
     print(f"CREATE-MODE verdict={report['verdict']} "
           f"report={os.path.relpath(args.json_report)}")
     return 0 if not findings else 1

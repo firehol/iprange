@@ -120,7 +120,15 @@ pub(crate) fn create_private(
     };
     let (directory, name) = bind_path(path).map_err(failure)?;
     let profile = Profile::capture().map_err(|error| failure(namespace_error(error)))?;
-    let mode = if creator_only { 0o600 } else { 0o666 };
+    // One named constant for the creator-only live create mode: the
+    // publication namespace's CREATOR_MODE is the same value, and the
+    // switched create-mode gate watches this site — a second hand-typed
+    // literal here is exactly how a wrong-site mutation goes unnoticed.
+    let mode = if creator_only {
+        crate::publication::security::CREATOR_MODE
+    } else {
+        0o666
+    };
     let file = if creator_only {
         directory
             .create_with_mode(&name, mode)

@@ -27,6 +27,9 @@ func createPolicySource(t *testing.T, main string, creatorOnly bool) {
 // ship on Windows, so it runs everywhere (Rust twin:
 // live_sidecar.rs classifier_rejects_a_zero_identity_header).
 func TestSourceCreatorOnlyRejectsZeroIdentityHeader(t *testing.T) {
+	if err := CreationSupported(); err != nil {
+		t.Skipf("live database creation is not supported on this platform: %v", err)
+	}
 	t.Setenv("IPRANGE_CREATOR_ONLY", "0")
 	dir := t.TempDir()
 	main := filepath.Join(dir, "crafted.iprdb")

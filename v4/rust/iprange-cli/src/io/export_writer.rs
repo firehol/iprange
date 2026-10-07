@@ -837,6 +837,58 @@ mod tests {
         );
     }
 
+    // The unprotected exact-default arm (parity round 8; Go twin: the
+    // 0466 assertion in export_follows_database_test.go): the export
+    // output's umask default is pinned exactly — 0666 & ~0200 == 0466 —
+    // because a hard-coded 0644 passed the full suite while the true
+    // default is 0466 here. Runs in a child for the same process-global
+    // umask reason as the protected arm above.
+    #[cfg(unix)]
+    #[test]
+    fn unprotected_output_keeps_the_exact_umask_default() {
+        let inner = "io::export_writer::tests::unprotected_output_umask_default_inner";
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", inner, "--test-threads=1", "--quiet"])
+            .env("IPRANGE_UNPROTECTED_DEFAULT_INNER", "1")
+            .status()
+            .expect("spawn the exact-default child");
+        assert!(
+            status.success(),
+            "the exact-default child failed: {status} (a hard-coded unprotected mode would fail the 0466 expectation)"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unprotected_output_umask_default_inner() {
+        if std::env::var_os("IPRANGE_UNPROTECTED_DEFAULT_INNER").is_none() {
+            return; // driven by unprotected_output_keeps_the_exact_umask_default
+        }
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "iprange-export-default-{unique}-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let hostile = unsafe { unix_test_mode::libc_umask(0o200) };
+        let file = create_output_file(&directory.join("default.out"), false).unwrap();
+        unsafe { unix_test_mode::libc_umask(hostile) };
+        let mode = fs::metadata(directory.join("default.out"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        drop(file);
+        let _ = fs::remove_dir_all(&directory);
+        assert_eq!(
+            mode, 0o466,
+            "unprotected output under umask 0200 is {mode:o}, want the exact umask default 0466"
+        );
+    }
+
     fn lines(from: u128, to: u128, filter: &PrefixFilter) -> (Vec<String>, Vec<Cardinality129>) {
         let mut output = Vec::new();
         let mut spans = Vec::new();

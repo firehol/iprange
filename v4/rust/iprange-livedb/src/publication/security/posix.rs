@@ -20,7 +20,6 @@ mod acl;
 #[path = "linux.rs"]
 mod acl;
 
-pub(crate) const CREATOR_MODE: u32 = 0o600;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Profile {
@@ -43,7 +42,7 @@ impl Profile {
 }
 
 pub(crate) fn secure_creator_only(file: &File, profile: &Profile) -> Result<(), NamespaceError> {
-    let mode = CREATOR_MODE as libc::mode_t;
+    let mode = super::CREATOR_MODE as libc::mode_t;
     if unsafe { libc::fchmod(file.as_raw_fd(), mode) } != 0 {
         return Err(last_error("apply creator-only mode"));
     }
@@ -63,7 +62,7 @@ pub(crate) fn creator_only_commitment(file: &File) -> Result<[u8; 32], Namespace
 fn creator_only_metadata(file: &File) -> Result<std::fs::Metadata, NamespaceError> {
     acl::require_trivial(file)?;
     let metadata = file.metadata().map_err(NamespaceError::Io)?;
-    if !metadata.is_file() || metadata.nlink() != 1 || metadata.mode() & 0o7777 != CREATOR_MODE {
+    if !metadata.is_file() || metadata.nlink() != 1 || metadata.mode() & 0o7777 != super::CREATOR_MODE {
         return Err(NamespaceError::AccessPolicy);
     }
     Ok(metadata)
@@ -73,7 +72,7 @@ fn commitment(uid: u32) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(COMMITMENT_DOMAIN);
     hasher.update(uid.to_le_bytes());
-    hasher.update(CREATOR_MODE.to_le_bytes());
+    hasher.update(super::CREATOR_MODE.to_le_bytes());
     hasher.finalize().into()
 }
 

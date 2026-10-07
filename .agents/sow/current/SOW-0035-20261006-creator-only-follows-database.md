@@ -231,6 +231,17 @@ Open decisions:
   - (performance P2, kit hygiene) The round-7 audit found 14 farms containing a `.git` symlink into the live gitdir (roles adding git access to `git archive` farms). All removed (verified: zero remain; index clean); REVIEWS.md now prohibits any `.git` entry in farms and prescribes read-only `git -C` for repository questions.
   - (ffp R7-F3, followup mapping) SOW-0036 (pending) records the relative-path finding with the corrected framing the reviews established: spec §Paths:189 permits relative inputs, three inconsistent failure shapes exist across create/export, `outcome_unknown` violates the proof-d taxonomy, the defect is platform-neutral and pre-existing (4966eafd), and the fix is a design decision (support per spec vs amend-and-refuse) that belongs to the user.
 - Round 7 fix batch (this commit): the wedge fold, the switched create-mode pass, the exact-default arms, the umask-0 and platform-gate fixes, the symmetric error arms, the create-mode evidence rotation with kind-gate consumption, the committed generator, the farm audit, and these records.
+- Round 8 (all seven roles at `9ab6c765`): performance PASS; tester, security, portability, fit-for-purpose, operations, parity FAIL — every finding converged across multiple roles with proven negative controls, all in the verification-tooling layer. Findings and resolutions:
+  - (parity P1, mutation-proven both engines) The exact-default pins landed at the recovery site only; the CLI EXPORT site (output_create.go / export_writer.rs) was still negation-pinned — a hard-coded 0644 passed both full suites while the wire default under umask 027 is 0640 (recovery) / 0466 under 0200 (export). Fixed: exact arms in the export twins (Go asserts 0466 in the existing umask-0200 window; Rust gains an unprotected exact-default child test in the same re-exec shape as the protected one). Mutation-verified: the 0644 hard-code fails the new child on Rust (and the Go arm by construction).
+  - (tester/security/portability/ffp/operations/parity — the kind gate's create-mode identity layer did not implement its claims) `create_mode_evidence` never compared the pass set (a default-only forge consumed clean), bound no revision, and sat outside the census/manifest. Fixed: the exact (engine, pass) set is enforced, the switched pass's four watched classes (main/readers/control/temp) are enforced per engine, create-mode joins CONSUMED_ROLES + the shared-git-head census + FRESH_CONSUMED + the manifest names, and the verifier itself now fails per-artifact presence (a trace missing one watched create is not attestable; the main matches by basename suffix so absolute spellings are watched — security's absolute-window shape now fails) with four new self-test controls.
+  - (tester/security/ffp/operations/parity) The generator's 13th entry captured rg's rc through a pipe — the round-6 class inside the tool written to close it. Fixed: routed through the refusing entry() helper (the refusal fired on its own misaligned verification pattern during this fix, proving it live); 13 entries verified.
+  - (security P2) The committed create-mode report failed the repo's own writer audit: the module was not in COMMITTED_REPORT_WRITERS. Fixed: registered (shared tier, screened --go/--rust/--work/--json-report, and the checker now passes --json-report in caller_paths so the screening is real); a fresh report carries all four checked inputs and the audit clears at the next rotation.
+  - (portability P2) The round-7 platform-gate fix silently missed two of four files (a no-op header replace without assert): tests/source_policy.rs had no gate and the Go internal/live test t.Fatal'd on FreeBSD. Fixed with asserts this time: the Rust file gates to the live-supported set; the Go test skips via CreationSupported; freebsd cargo check and GOOS=freebsd go vet are green.
+  - (tester P3) The [21] mismatch lister missed the wedge line's parenthetical suffix (rg " MISMATCH( |$)"); the rc-file-missing NA case now redden like the empty-outcomes case; the serial [0a]/[0b] builds gained timeout --kill-after bounds (1200/1800).
+  - (security P3, operations P3) Cleanups: the dead `let _ = floored;` line class removed for good (the map_err shape now returns nothing); the two live-create 0600 literals fused into the named CREATOR_MODE constant (the wrong-site-mutation confusion operations flagged); the garbled docstring line fixed; the staged mutation report will be regenerated at this HEAD (the old one stamped a pre-switched-pass revision — parity R8-4).
+  - (performance P2) .agents/review-roles/README.md still taught the withdrawn symlink-farm shape; rewritten to the real-copy procedure with the REVIEWS.md pointer. The 21k pre-mandate member-symlink farm residue enters the gate-close removal sweep.
+  - (ffp) The Battery-paragraph Windows-hold disclosure becomes a standing template element (this entry and every future status state it there); the orphaned-descendant residue is mapped in Followup below.
+- Round 8 fix batch (this commit): the export exact-default arms, the kind-gate identity layer, the hardened verifier with presence enforcement, the generator routing, the writer registration, the two missed platform gates, the battery P3 fixes, the cleanups, and these records.
 
 ## Validation
 
@@ -267,6 +278,12 @@ Pending.
   design spec as pending; the file does not exist in pending/ — to be
   created when Phase 2 is scheduled (spec reference to be corrected at
   that time or the SOW created then).
+- Orphaned descendants after a pool kill (ffp round 7/8): a wedged task
+  is killed by the per-task bound, but its already-spawned grandchildren
+  are not signaled. Rejected as a tracked SOW: the battery's own
+  no-owned-process-remains checks and the harness process accounting
+  bound the exposure to a single already-red run, and the wedge class
+  itself now redden deterministically (round 7). Disclosed residue.
 
 ## Regression Log
 

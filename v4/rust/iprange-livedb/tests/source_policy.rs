@@ -8,6 +8,8 @@
 //! source would produce a 0666 artifact, and the FIFO twin is a unix
 //! concept outright.
 
+#![cfg(any(target_os = "linux", target_vendor = "apple", target_os = "windows"))]
+
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;

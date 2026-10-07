@@ -808,7 +808,10 @@ replay() {
       # nonzero rc becomes a synthetic mismatch of its own, so the
       # bounded red the bound promises is the red the battery reports.
       local trc; trc=$(cat "$dir/rc" 2>/dev/null || echo NA)
-      if [ "$trc" != 0 ] && [ "$trc" != NA ]; then
+      if [ "$trc" == NA ]; then
+        echo "STEPRESULT [task $t rc-file] rc=NA expect=zero MISMATCH (outcomes recorded but the rc file is missing — wrapper loss is not a green)"
+        STEPS=$((STEPS+1)); STEPFAIL=$((STEPFAIL+1)); bad=$((bad+1))
+      elif [ "$trc" != 0 ]; then
         echo "STEPRESULT [task $t wedge] rc=$trc expect=zero MISMATCH (task recorded outcomes, then hit the per-task bound)"
         STEPS=$((STEPS+1)); STEPFAIL=$((STEPFAIL+1)); bad=$((bad+1))
       fi
@@ -842,7 +845,7 @@ cat "$R/reports/toolchains.txt"
 if [ "$NEED_BUILD" = 1 ]; then
 echo "### [0a] Go build from clean staging (canonical recipe)"
 rsync -a --delete --exclude 'build-*' "$REPO/v4/go/" "$R/go-stage/"
-nice env CGO_ENABLED=0 go -C "$R/go-stage" build -trimpath -buildvcs=false -o "$R/gobin/" ./cmd/... > "$R/reports/log-go-build.txt" 2>&1
+nice timeout --kill-after=30 1200 env CGO_ENABLED=0 go -C "$R/go-stage" build -trimpath -buildvcs=false -o "$R/gobin/" ./cmd/... > "$R/reports/log-go-build.txt" 2>&1
 record "[0a] go build" $? zero
 tail -2 "$R/reports/log-go-build.txt"
 [ -f "$R/gobin/iprange" ] && [ -f "$R/gobin/iprange-v4-worker" ] || { echo "GO BUILD ARTIFACTS MISSING"; record "[0a] go artifacts" 1 zero; }
@@ -863,7 +866,7 @@ rsync -a --delete --exclude 'target' "$REPO/v4/rust/" "$R/rust-stage/"
 # never by the standard tier.
 clean "$R/rust-target"
 CARGO_TARGET_DIR="$R/rust-target" CARGO_HOME="$REPO/.local/int-prep/cargo-home" \
-  nice cargo build --manifest-path "$R/rust-stage/Cargo.toml" --release --all-features --bins --examples \
+  nice timeout --kill-after=30 1800 cargo build --manifest-path "$R/rust-stage/Cargo.toml" --release --all-features --bins --examples \
   > "$R/reports/log-rust-build.txt" 2>&1
 record "[0b] rust build" $? zero
 tail -2 "$R/reports/log-rust-build.txt"
@@ -2182,6 +2185,7 @@ FRESH_CONSUMED=(\
   --crash-negative "$R/reports/crash-negative-producer-false.json"\
   --crash-negative "$R/reports/crash-negative-consumer-false.json"\
   --fifo-surface "$R/reports/fifo-surface.json" --throughput "$R/reports/throughput.json"\
+  --create-mode "$R/reports/create-mode.json"\
   --refusal-class-parity "$R/reports/refusal-class-parity.json"\
   --coverage-go "$R/reports/coverage-go.json"\
   --windows-housekeeping "$CLI/evidence/windows-housekeeping.json"\
@@ -2762,7 +2766,7 @@ BATTERY_END=$(date +%s.%N)
 echo "BATTERY_TIER=$TIER pool=$POOL_JOBS build=$NEED_BUILD pressure=$([ "$NEED_PRESSURE_FULL" = 1 ] && echo full || echo routine)"
 awk -v s="$BATTERY_START" -v e="$BATTERY_END" 'BEGIN{printf "BATTERY_WALL_SECONDS=%.1f\n", e-s}'
 echo "steps checked: $STEPS   mismatches: $STEPFAIL   deferred: $DEFERRED"
-grep -E "^STEPRESULT" "$LOGF" 2>/dev/null | grep " MISMATCH$" | sed 's/^/  /'
+grep -E "^STEPRESULT" "$LOGF" 2>/dev/null | rg " MISMATCH( |$)" | sed 's/^/  /'
 # A deferred step is not a mismatch and is not a pass: it is an obligation this
 # leg cannot discharge, listed here so a reader cannot miss it.
 grep -E "^STEPRESULT" "$LOGF" 2>/dev/null | grep " DEFERRED " | sed 's/^/  DEFERRED: /'

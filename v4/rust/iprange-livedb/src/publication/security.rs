@@ -70,6 +70,9 @@ pub(crate) use platform::{create_private, create_unprotected};
 #[cfg(windows)]
 #[doc(hidden)]
 pub use platform::create_private_artifact;
-#[cfg(unix)]
-pub(crate) use platform::CREATOR_MODE;
+/// The creator-only creation mode on POSIX platforms (Windows applies
+/// the DACL instead). Platform-independent by value so every create
+/// site names the same constant (the wrong-site-mutation confusion of
+/// round 8 came from two hand-typed literals).
+pub(crate) const CREATOR_MODE: u32 = 0o600;
 pub(crate) use platform::{creator_only_commitment, secure_creator_only, Profile};
