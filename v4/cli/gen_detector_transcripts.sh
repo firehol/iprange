@@ -8,7 +8,7 @@ set -u
 OUT="$1"
 REPO="$(git rev-parse --show-toplevel)"
 {
-echo "# Round-7 detector transcripts (verified generation)"
+echo "# Detector transcripts (verified generation)"
 echo "# Convention per entry: cwd, the exact command, its named results,"
 echo "# then the command's own rc. The generator refuses to stage an"
 echo "# entry whose rc is nonzero or whose output names no tests."

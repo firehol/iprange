@@ -120,12 +120,24 @@ func TestUnprotectedCreateSkipsProofEvenAtMode0600(t *testing.T) {
 	if created.State != CreationStateCreated {
 		t.Fatalf("state = %v, want Created", created.State)
 	}
+	// The unprotected exact-default arm (parity round 9): the LIVE MAIN
+	// file's umask default is pinned exactly — 0666 under umask 0 —
+	// because every earlier pin was a != 0600 negation and a hard-coded
+	// 0644 at the destination creator passed the entire tree while the
+	// spec 15.6 contract says the process default.
 	info, err := os.Stat(main)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() == 0o600 {
-		t.Fatal("unprotected create forced mode 0600; umask 0 must not be overridden")
+	if info.Mode().Perm() != 0o666 {
+		t.Fatalf("unprotected main mode = %o, want the exact umask default 0666 (a hard-coded 0644 would fail this arm)", info.Mode().Perm())
+	}
+	readers, err := os.Stat(main + ".readers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readers.Mode().Perm() != 0o666 {
+		t.Fatalf("unprotected readers mode = %o, want the exact umask default 0666", readers.Mode().Perm())
 	}
 	reader, err := OpenLiveReader(main, nil)
 	if err != nil {

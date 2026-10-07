@@ -812,7 +812,11 @@ fn create_file(nonce: [u8; 16]) -> Result<(PathBuf, File)> {
     // protocol Conflict (parity round 5). Group and other bits keep the
     // process default the umask left.
     let creator_only = crate::publication::security::creator_only_requested();
-    let mode = if creator_only { 0o600 } else { 0o666 };
+    let mode = if creator_only {
+        crate::publication::security::CREATOR_MODE
+    } else {
+        0o666
+    };
     let file = OpenOptions::new()
         .read(true)
         .write(true)

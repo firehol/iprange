@@ -113,12 +113,13 @@ fn recovery_follows_the_source_sidecar_end_to_end() {
         assert_ne!(mode, 0o600, "unprotected source forced mode 0600");
     }
 
-    // The unprotected exact-default arm (parity round 7): spec 15.6
-    // says an unprotected artifact keeps the umask default, and every
-    // earlier pin was a != 0600 negation — a hard-coded 0644 passed the
-    // whole suite while the true default under umask 027 is 0640. This
-    // arm pins the exact mode; the owner-bit floor keeps 0640 (owner
-    // bits present) at 0640.
+    // The unprotected exact-default arm (parity round 7, corrected
+    // round 9): spec 15.6 says an unprotected artifact keeps the umask
+    // default. The window must DISTINGUISH a create-mode hard-code from
+    // the process default: under umask 027 a 0644 hard-code and the
+    // 0666 default both land at 0640, so the earlier arm caught only
+    // the chmod shape. Under umask 0 the default is exactly 0666 and a
+    // hard-coded 0644 (create or chmod) is visible.
     #[cfg(unix)]
     {
         let plain = directory.join("plain.v4");
@@ -130,7 +131,6 @@ fn recovery_follows_the_source_sidecar_end_to_end() {
         )
         .unwrap();
         let candidate = inspection.candidate(0).unwrap().clone();
-        let exact_mask = unsafe { test_umask(0o027) };
         let exact = directory.join("exact-out.v4");
         let result = recover_live(
             &plain,
@@ -143,11 +143,10 @@ fn recovery_follows_the_source_sidecar_end_to_end() {
             &CancellationToken::new(),
         )
         .unwrap();
-        unsafe { test_umask(exact_mask) };
         let mode = fs::metadata(&exact).unwrap().permissions().mode() & 0o777;
         assert_eq!(
-            mode, 0o640,
-            "unprotected recovery mode is {mode:o}, want the exact umask default 0640 (a hard-coded 0644 would fail this arm)"
+            mode, 0o666,
+            "unprotected recovery mode is {mode:o}, want the exact umask default 0666 (a hard-coded 0644 at create or chmod would fail this arm)"
         );
         assert_eq!(
             result.publication.publication,

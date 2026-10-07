@@ -128,9 +128,25 @@ fn unprotected_umask_0600_is_not_checked_after_close() {
     let old = unsafe { libc_umask(0) };
     create(&main, false);
     unsafe { libc_umask(old) };
+    // The unprotected exact-default arm (parity round 9): the LIVE MAIN
+    // file's umask default is pinned exactly — 0666 under umask 0 —
+    // because every earlier pin was a != 0600 negation and a hard-coded
+    // 0644 at the destination creator passed the entire tree while the
+    // spec 15.6 contract says the process default. The readers sidecar
+    // is pinned with it.
     let mode = fs::metadata(&main).unwrap().permissions().mode() & 0o777;
-    assert_ne!(mode, 0o600, "unprotected create forced mode 0600");
+    assert_eq!(
+        mode, 0o666,
+        "unprotected main mode is {mode:o}, want the exact umask default 0666 (a hard-coded 0644 would fail this arm)"
+    );
+    let sidecar = iprange_livedb::sidecar_path(&main).unwrap();
+    let sidecar_mode = fs::metadata(&sidecar).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        sidecar_mode, 0o666,
+        "unprotected readers mode is {sidecar_mode:o}, want the exact umask default 0666"
+    );
     LiveReader::open(&main, &CancellationToken::new())
         .expect("umask 0600 must not make an unprotected file fail open");
     let _ = fs::remove_file(&main);
+    let _ = fs::remove_file(&sidecar);
 }

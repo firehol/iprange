@@ -2630,6 +2630,18 @@ def create_mode_evidence(path, report, problems):
                         f"{report.get('verdict')!r}; a creator-only create "
                         "below 0600 is a product defect")
         return
+    binaries = report.get("binaries") or {}
+    if not isinstance(binaries, dict) or sorted(binaries) != ["go", "rust"]:
+        problems.append(f"create-mode {path}: no binaries table binding "
+                        "the report to the digests that produced it")
+        return
+    for engine, record in sorted(binaries.items()):
+        if not isinstance(record, dict) \
+                or not isinstance(record.get("sha256"), str) \
+                or len(record["sha256"]) != 64:
+            problems.append(f"create-mode {path}: binaries[{engine}] has "
+                            "no 64-hex sha256; a shape-correct report "
+                            "from other binaries is fabrication")
     engines = {entry.get("engine") for entry in report.get("engines", [])
                if isinstance(entry, dict)}
     if engines != {"rust", "go"}:
@@ -2639,9 +2651,14 @@ def create_mode_evidence(path, report, problems):
     # The (engine, pass) set is exact: the switched pass is the round-7
     # security surface, and a default-only report must not consume
     # cleanly (round-8 forges accepted exactly that shape).
+    entries = [entry for entry in report.get("engines", [])
+               if isinstance(entry, dict)]
+    if len(entries) != len(report.get("engines", [])):
+        problems.append(f"create-mode {path}: engines holds a non-object "
+                        "entry; a report is evidence, not a crash")
+        return
     seen = {(entry.get("engine"), entry.get("pass"))
-            for entry in report.get("engines", [])
-            if isinstance(entry, dict)}
+            for entry in entries}
     want = {(engine, subject)
             for engine in ("rust", "go")
             for subject in ("default pass (creator-only export temp)",
@@ -2652,7 +2669,7 @@ def create_mode_evidence(path, report, problems):
                         f"{sorted(map(str, seen))}; want exactly "
                         f"{sorted(map(str, want))}")
         return
-    for entry in report.get("engines", []):
+    for entry in entries:
         if entry.get("verdict") != "pass" or not entry.get("temp_creates"):
             problems.append(
                 f"create-mode {path}: {entry.get('engine')} pass "
@@ -6352,6 +6369,9 @@ def _self_test():
                 })
         return {"schema": "iprange-cli-create-mode-report-v1",
                 "git_head": revision,
+                "binaries": {
+                    "rust": {"implementation": "rust", "sha256": "1" * 64},
+                    "go": {"implementation": "go", "sha256": "2" * 64}},
                 "verdict": "pass", "engines": entries}
 
     def fifo_surface_report():
@@ -8240,7 +8260,8 @@ def _self_test():
         # content-against-binding agreement for every class it reads.  The
         # committed manifest itself is re-emitted by the battery's manifest
         # step, and the CLI gate run -- not the self-test -- is what judges it.
-        def committed_binding(matrices, crashes, fifo, throughput, parity,
+        def committed_binding(matrices, crashes, fifo, create_mode,
+                              throughput, parity,
                               coverage, negative, windows, guard, resource,
                               golden, sensitivity, posix_guard, race):
             """One manifest document over the reports an anchor consumes."""
@@ -8249,6 +8270,7 @@ def _self_test():
                 {"matrix": list(matrices), "crash": list(crashes),
                  "crash-negative": list(negative),
                  "fifo-surface": list(fifo), "throughput": list(throughput),
+                 "create-mode": list(create_mode),
                  "refusal-class-parity": list(parity),
                  "coverage-go": list(coverage),
                  "windows-housekeeping": list(windows),
@@ -8273,6 +8295,7 @@ def _self_test():
             race_paths=[genuine_race],
             battery_manifest=committed_binding(
                 genuine_matrix_paths, genuine_crash_reports, genuine_fifo,
+                genuine_create_mode,
                 genuine_throughput, [genuine_parity], [genuine_coverage],
                 list(genuine_negative), [genuine_windows], [genuine_guard],
                 [genuine_resource], [genuine_golden], [genuine_sensitivity],
@@ -10866,6 +10889,7 @@ def _self_test():
             race_paths=[genuine_race],
             battery_manifest=committed_binding(
                 genuine_matrix_paths, genuine_crash_reports, genuine_fifo,
+                genuine_create_mode,
                 genuine_throughput, [genuine_parity], [genuine_coverage],
                 list(genuine_negative), [genuine_windows], [genuine_guard],
                 [genuine_resource], [genuine_golden], [genuine_sensitivity],
@@ -10894,6 +10918,7 @@ def _self_test():
             race_paths=[genuine_race],
             battery_manifest=committed_binding(
                 genuine_matrix_paths, genuine_crash_reports, genuine_fifo,
+                genuine_create_mode,
                 genuine_throughput, [genuine_parity], [genuine_coverage],
                 list(genuine_negative), [genuine_windows], [genuine_guard],
                 [genuine_resource], [genuine_golden], [genuine_sensitivity],

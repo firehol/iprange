@@ -88,14 +88,15 @@ func TestRecoveryFollowsSourceEndToEnd(t *testing.T) {
 		}
 	}
 
-	// The unprotected exact-default arm (parity round 7): spec 15.6
-	// says an unprotected artifact keeps the umask default, and every
-	// earlier pin was a != 0600 negation — a hard-coded 0644 passed the
-	// whole suite while the true default under umask 027 is 0640. This
-	// arm pins the exact mode; the owner-bit floor keeps 0640 (owner
-	// bits present) at 0640.
+	// The unprotected exact-default arm (parity round 7, corrected round
+	// 9): spec 15.6 says an unprotected artifact keeps the umask default.
+	// The window must DISTINGUISH a create-mode hard-code from the
+	// process default: under umask 027 a 0644 hard-code and the 0666
+	// default both land at 0640, so the earlier arm caught only the
+	// chmod shape. Under umask 0 the default is exactly 0666 and a
+	// hard-coded 0644 (create or chmod) is visible.
 	if runtime.GOOS != "windows" {
-		setUmask(0o027)
+		setUmask(0)
 		exact := filepath.Join(dir, "exact-out.v4")
 		result, failure = RecoverLive(plain, candidates.Candidate(0), exact, budget, nil, nil)
 		if failure != nil {
@@ -108,8 +109,8 @@ func TestRecoveryFollowsSourceEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if mode := info.Mode().Perm(); mode != 0o640 {
-			t.Fatalf("unprotected recovery mode = %#o, want the exact umask default 0640 (a hard-coded 0644 would fail this arm)", mode)
+		if mode := info.Mode().Perm(); mode != 0o666 {
+			t.Fatalf("unprotected recovery mode = %#o, want the exact umask default 0666 (a hard-coded 0644 at create or chmod would fail this arm)", mode)
 		}
 	}
 }

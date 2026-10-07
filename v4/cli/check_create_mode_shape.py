@@ -55,6 +55,7 @@ skips is a gate that does not exist.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -238,6 +239,18 @@ def verifier(creates, engine, findings, patterns=TEMP_PATTERNS,
     return record
 
 
+def sha256_file(path):
+    """The staged binary's digest, so the kind gate can bind the report
+    to the exact binaries that produced it (the fifo-surface binding
+    shape: a shape-correct report from other binaries is fabrication).
+    """
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def run_engine(binary, engine, work, switched=False):
     """Drive one create+export under strace; return the evidence record."""
     suffix = "-switched" if switched else ""
@@ -404,6 +417,10 @@ def main():
 
     args.rust = os.path.abspath(args.rust)
     args.go = os.path.abspath(args.go)
+    binaries = {
+        "rust": {"implementation": "rust", "sha256": sha256_file(args.rust)},
+        "go": {"implementation": "go", "sha256": sha256_file(args.go)},
+    }
     records = []
     findings = []
     for engine, binary in (("rust", args.rust), ("go", args.go)):
@@ -415,6 +432,7 @@ def main():
 
     report = {"schema": REPORT_SCHEMA,
               "provenance": report_provenance(),
+              "binaries": binaries,
               "engines": records,
               "verdict": "pass" if not findings else "fail"}
     write_committed_report(args.json_report, report,

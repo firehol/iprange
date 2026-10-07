@@ -88,6 +88,10 @@ fn source_policy_follows_the_sidecar_record() {
         let mode = fs::metadata(&unprotected).unwrap().permissions().mode() & 0o777;
         assert_ne!(mode, 0o600, "unprotected create forced mode 0600");
     }
+    // Restore the umask before the switch assertions below: an
+    // assertion failure here must not leak the umask-0 window either.
+    #[cfg(unix)]
+    unsafe { source_policy_umask(mask) };
 
     // No sidecar (every immutable source): the process switch decides.
     let absent = directory.join("absent.iprdb");
@@ -95,8 +99,10 @@ fn source_policy_follows_the_sidecar_record() {
     assert!(source_creator_only(&absent));
     std::env::set_var("IPRANGE_CREATOR_ONLY", "0");
     assert!(!source_creator_only(&absent));
-    #[cfg(unix)]
-    unsafe { source_policy_umask(mask) };
+    // Restore the umask and the environment BEFORE any later assertion
+    // can panic, so a failure cannot leak the window into whichever test
+    // runs next (every sibling site restores first; the round-8 claim
+    // that this had landed was false).
     match previous {
         Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
         None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),

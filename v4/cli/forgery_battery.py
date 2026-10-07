@@ -126,6 +126,7 @@ GOLDEN_FILE = os.path.join(EVIDENCE, "golden.json")
 SENSITIVITY_FILE = os.path.join(EVIDENCE, "sensitivity.json")
 GUARD_POSIX_FILE = os.path.join(EVIDENCE, "guard-posix.json")
 RACE_FILE = os.path.join(EVIDENCE, "race-battery.json")
+CREATE_MODE_FILE = os.path.join(EVIDENCE, "create-mode.json")
 MANIFEST_FILE = os.path.join(EVIDENCE, "battery-manifest.json")
 # A negative control is one report per faked role, so the battery carries
 # every crash-negative* file the evidence directory holds.
@@ -138,7 +139,8 @@ CRASH_NEGATIVE_FILES = sorted(
 # left to the gate's own discovery would be read from the committed directory
 # instead of from this run's sandbox, and a mutated copy would then be judged
 # against the untouched original.
-BATTERY_FLAGS = (("parity", "--refusal-class-parity"),
+BATTERY_FLAGS = (("create_mode", "--create-mode"),
+                 ("parity", "--refusal-class-parity"),
                  ("coverage", "--coverage-go"),
                  ("windows", "--windows-housekeeping"),
                  ("guard", "--windows-guard"),
@@ -164,7 +166,8 @@ class Bundle:
 
     __slots__ = ("matrices", "crash", "fifo", "throughput", "parity",
                  "coverage", "negatives", "windows", "guard", "resource",
-                 "golden", "sensitivity", "posix_guard", "race", "manifest")
+                 "golden", "sensitivity", "posix_guard", "race",
+                 "create_mode", "manifest")
 
     def __init__(self, **fields):
         for name in self.__slots__:
@@ -175,7 +178,8 @@ class Bundle:
         return (self.matrices, self.crash, self.fifo, self.throughput,
                 self.parity, self.coverage, self.negatives, self.windows,
                 self.guard, self.resource, self.golden, self.sensitivity,
-                self.posix_guard, self.race, self.manifest)
+                self.posix_guard, self.race, self.create_mode,
+                self.manifest)
 
 
 def _read(path):
@@ -198,7 +202,8 @@ def _load_bundle():
         golden=_read(GOLDEN_FILE),
         sensitivity=_read(SENSITIVITY_FILE),
         posix_guard=_read(GUARD_POSIX_FILE),
-        race=_read(RACE_FILE))
+        race=_read(RACE_FILE),
+        create_mode=_read(CREATE_MODE_FILE))
 
 # What the gate prints when it actually evaluated a report set.  Their
 # presence is what separates a gate verdict from an argparse error or an
@@ -237,8 +242,11 @@ FORGERIES = []
 # binds the report set to a revision.  Three further classes attack the two
 # parity holes the external review closed: a verdict whose third (pressure)
 # axis was deleted, a pressure rollup that disagrees with its own executed
-# cells, and a cell whose recorded request frame is another method's.
-EXPECTED_CLASSES = 21
+# cells, and a cell whose recorded request frame is another method's.  One
+# class guards the create-mode axis's pass-set enforcement: a report whose
+# switched pass is deleted reverts the round-8 identity layer while every
+# standing suite stays green, so the forgery class is the standing net.
+EXPECTED_CLASSES = 22
 
 
 def _forgery(label, whole_bundle=False):
@@ -490,6 +498,18 @@ def w7(bundle):
     bundle.manifest = MANIFEST_FILE
 
 
+@_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
+def c1(bundle):
+    # The round-8 identity layer enforces the exact (engine, pass) set;
+    # a report whose switched entries are deleted reverts it exactly the
+    # way the pre-fix defect looked, and every standing suite stayed
+    # green on that revert.  This class is the standing net: the gate
+    # must reject the shape at every rotation.
+    bundle.create_mode["engines"] = [
+        entry for entry in bundle.create_mode.get("engines", [])
+        if not str(entry.get("pass", "")).startswith("switched")]
+
+
 def _parse_args(argv):
     parser = argparse.ArgumentParser(
         description="Negative-control battery for the kind-coverage gate.")
@@ -656,7 +676,8 @@ def _run_gate(work_dir, bundle, tag, ledger):
              "golden": paths["golden"],
              "sensitivity": paths["sensitivity"],
              "guard-posix": paths["posix_guard"],
-             "race-battery": paths["race"]},
+             "race-battery": paths["race"],
+             "create-mode": paths["create_mode"]},
             ledger_path=ledger)
         manifest_path = os.path.join(work_dir, f"{tag}-manifest.json")
         with open(manifest_path, "w", encoding="utf-8") as stream:
@@ -855,6 +876,7 @@ def _self_test():
          "sensitivity": [SENSITIVITY_FILE],
          "posix_guard": [GUARD_POSIX_FILE],
          "race": [RACE_FILE],
+         "create_mode": [CREATE_MODE_FILE],
          "crash-negative": list(CRASH_NEGATIVE_FILES),
          "battery-manifest": [MANIFEST_FILE]}, None)
     for flag in ("--fifo-surface", "--throughput"):
