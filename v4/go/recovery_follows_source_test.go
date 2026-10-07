@@ -80,6 +80,48 @@ func TestRecoveryFollowsSourceEndToEnd(t *testing.T) {
 	}
 }
 
+// The switch-ON arm of recovery-follows-source: an unprotected source
+// recovered with the process switch on must still bind the recorded
+// choice (unprotected) — the facts the attempt records win over the
+// worker's process switch. Under umask 0 a switch-following worker
+// would create 0600 where the recorded facts keep the 0666 default.
+// Rust twin: recovery_follows_source.rs
+// recovery_follows_the_source_with_the_switch_on.
+func TestRecoveryFollowsSourceWithSwitchOn(t *testing.T) {
+	installWorkerForTest(t)
+	requireLiveCreation(t)
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
+	dir := t.TempDir()
+	previous := unix.Umask(0)
+	defer unix.Umask(previous)
+	budget := RecoveryHeapOnly(16<<20, 100_000, 4)
+
+	plain := filepath.Join(dir, "plain.v4")
+	createRecoverySource(t, plain, false)
+	candidates, err := InspectRecoveryCandidates(plain, RecoveryInspectionLive, HeapOnly(1<<20, 8), nil)
+	if err != nil {
+		t.Fatalf("inspect plain: %v", err)
+	}
+	if candidates.CandidateCount() == 0 {
+		t.Fatal("no plain candidates")
+	}
+	plainOut := filepath.Join(dir, "plain-out.v4")
+	result, failure := RecoverLive(plain, candidates.Candidate(0), plainOut, budget, nil, nil)
+	if failure != nil {
+		t.Fatalf("recover plain: %v", failure.Cause)
+	}
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("plain publication = %v", result.Publication.Publication)
+	}
+	info, err := os.Stat(plainOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode == 0o600 {
+		t.Fatal("switch-on worker forced 0600 on an unprotected source: the recorded facts must win over the process switch")
+	}
+}
+
 func createRecoverySource(t *testing.T, main string, creatorOnly bool) {
 	t.Helper()
 	tag, err := NewValueTag([]byte("asn"))

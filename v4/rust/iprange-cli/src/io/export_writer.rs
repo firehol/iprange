@@ -43,21 +43,27 @@ pub(crate) fn source_is_creator_only(source: &Path) -> bool {
 }
 
 /// Create one private CLI output at its temporary path under the
-/// source's creator-only choice. POSIX creates with the process default
-/// and then sets exactly 0600 when the source is creator-only; Windows
-/// cannot apply the protection after the fact, so a creator-only output
-/// is created through the engine's protected single-user DACL path
-/// instead of a plain descriptor.
+/// source's creator-only choice. POSIX creates a creator-only output
+/// with exactly 0600 at creation (no 0666 window precedes the chmod,
+/// and no umask can widen it: 0600 sets no group or other bits) and
+/// then re-asserts 0600 so a hostile umask stripping owner bits cannot
+/// leave the output unwritable; an unprotected output keeps the
+/// process default. Windows cannot apply the protection after the
+/// fact, so a creator-only output is created through the engine's
+/// protected single-user DACL path instead of a plain descriptor.
 pub(crate) fn create_output_file(
     temporary: &Path,
     creator_only: bool,
 ) -> std::io::Result<File> {
     #[cfg(unix)]
     {
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(temporary)?;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        if creator_only {
+            options.mode(0o600);
+        }
+        let file = options.open(temporary)?;
         if creator_only {
             use std::os::unix::fs::PermissionsExt as _;
             file.set_permissions(fs::Permissions::from_mode(0o600))?;
@@ -774,6 +780,61 @@ mod tests {
             assert_eq!(locked_mode, 0o600, "protected source did not keep mode 0600");
         }
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    // The hostile-umask contract (Go twin: export_follows_database_test.go
+    // under umask 0200) runs in a child process: umask is process-global,
+    // and narrowing it inside this binary would strip owner-write from
+    // directories other parallel tests create mid-suite -- the exact
+    // unserialized-global hazard class this crate documents. The child
+    // runs exactly the inner test, single-threaded, and its own umask
+    // narrows nobody else's creates. A create-only fix (0600 & ~0200 ==
+    // 0400) fails the inner assertion; only the umask-independent
+    // re-assert after create restores the owner bits.
+    #[cfg(unix)]
+    #[test]
+    fn protected_output_is_exact_0600_under_a_hostile_umask() {
+        let inner = "io::export_writer::tests::protected_output_hostile_umask_inner";
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", inner, "--test-threads=1", "--quiet"])
+            .env("IPRANGE_PROTECTED_HOSTILE_INNER", "1")
+            .status()
+            .expect("spawn the hostile-umask child");
+        assert!(
+            status.success(),
+            "the hostile-umask child failed: {status} (a create-only 0600 fix loses owner bits under umask 0200)"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn protected_output_hostile_umask_inner() {
+        if std::env::var_os("IPRANGE_PROTECTED_HOSTILE_INNER").is_none() {
+            return; // driven by protected_output_is_exact_0600_under_a_hostile_umask
+        }
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "iprange-export-hostile-{unique}-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let hostile = unsafe { unix_test_mode::libc_umask(0o200) };
+        let file = create_output_file(&directory.join("stripped.out"), true).unwrap();
+        unsafe { unix_test_mode::libc_umask(hostile) };
+        let mode = fs::metadata(directory.join("stripped.out"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        drop(file);
+        let _ = fs::remove_dir_all(&directory);
+        assert_eq!(
+            mode, 0o600,
+            "protected output under umask 0200 is {mode:o}, want exactly 0600"
+        );
     }
 
     fn lines(from: u128, to: u128, filter: &PrefixFilter) -> (Vec<String>, Vec<Cardinality129>) {

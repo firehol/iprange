@@ -267,14 +267,20 @@ def exact_id_response(responses, request_id):
 def check_cancelled_answer(response, proof):
     """The cancellation answer of one cancelled active request.
 
-    Shared by proofs a and d: an active request cancelled at
-    shutdown answers -32010 and must carry the cancellation domain
-    facts -- ``data.code == "cancelled"`` and the factual outcome
-    of a cancellation before any durable attempt, ``outcome ==
-    "not_started"`` (spec ``iprange-jsonrpc-v1.md`` Error envelope) --
-    not merely the outer JSON-RPC error number.  A response that
-    answers -32010 with an unrelated domain code (``io``) or a
-    different factual outcome is a different failure dressed up as a
+    Shared by proofs a and d: an active request that answers after
+    being cancelled answers -32010 and must carry the cancellation
+    domain facts -- ``data.code == "cancelled"`` and a taxonomy-legal
+    factual outcome (spec ``iprange-jsonrpc-v1.md`` Error envelope): a
+    cancellation that landed before any durable SDK attempt answers
+    ``outcome == "not_started"``, while one that landed mid-read of a
+    read-only operation answers the factual ``read_only_failure`` --
+    "a read-only operation maps to ``read_only_failure``; a failure
+    before any durable SDK attempt maps to ``not_started``".  Both are
+    the truth about when the cancellation landed; demanding only
+    ``not_started`` would relabel a mid-read cancellation as never
+    started.  A response that answers -32010 with an unrelated domain
+    code (``io``), a write-side terminal (``committed``), or a
+    different error number is a different failure dressed up as a
     cancellation and fails the proof.  Returns the error data.
     """
 
@@ -285,10 +291,11 @@ def check_cancelled_answer(response, proof):
             f"code {error.get('code')}, expected -32010 cancelled")
     data = error.get("data") or {}
     if data.get("code") != "cancelled" or \
-            data.get("outcome") != "not_started":
+            data.get("outcome") not in ("not_started", "read_only_failure"):
         raise ResourceFailure(
             f"proof {proof}: the -32010 answer must carry the "
-            f"cancelled/not_started domain facts, got {data!r}")
+            f"cancelled domain code and a taxonomy-legal outcome "
+            f"(not_started or read_only_failure), got {data!r}")
     return data
 
 
@@ -514,9 +521,11 @@ def proof_a(binary, label, work_dir, outcome):
       coverage, never an exact id set);
     - the other 16 describes answer with results;
     - the in-flight export answers -32010 ``cancelled`` with the
-      domain facts ``data.code == "cancelled"`` and ``outcome ==
-      "not_started"`` (EOF cancels the active unit before any
-      durable attempt); exit code 0.
+      domain facts ``data.code == "cancelled"`` and a taxonomy-legal
+      factual outcome (EOF cancels the active unit: a cancellation
+      observed before any durable attempt answers ``not_started``,
+      one landing mid-read answers the read-only operation's factual
+      ``read_only_failure``); exit code 0.
     """
 
     work = os.path.join(work_dir, f"a-{label}")
@@ -967,22 +976,24 @@ def proof_d(binary, label, work_dir, outcome):
     after the cancellation), and the process exits 0 after EOF
     shutdown.  When the session does deliver the cancelled answer,
     it must carry the cancellation domain facts (``data.code``
-    ``"cancelled"``, ``outcome`` ``"not_started"``), not merely the
-    outer -32010 number.  Both product binaries.
+    ``"cancelled"`` and a taxonomy-legal factual outcome:
+    ``not_started`` when the cancellation landed before any durable
+    SDK attempt, ``read_only_failure`` when it landed mid-read),
+    not merely the outer -32010 number.  Both product binaries.
 
-    The session contract for an explicit cancellation (spec
-    ``iprange-jsonrpc-v1.md`` "Shutdown"; Rust
-    ``iprange-cli/src/rpc/session.rs`` ``entry_response``) is that the
-    cancelled unit's response is suppressed: an id cancelled by the
-    ``iprange.v1.cancel`` notification -- queued or active -- is
-    omitted, while the EOF-cancelled active unit answers -32010
-    ``cancelled`` with the domain facts at shutdown (proof a).  The
-    harness therefore pins
-    the invariant both paths share -- the cancelled export is never a
-    result -- and records the exact export terminal: ``export_code``
-    is -32010 when the session delivers the cancelled answer, and
-    ``export_answered`` is False when the session suppresses it (the
-    current wire behavior for both products).
+    The wire behavior for an explicit cancellation is timing-dependent
+    by design (Rust ``iprange-cli/src/rpc/session.rs``
+    ``entry_response`` suppresses an id cancelled before it executes;
+    a cancellation landing mid-read races the handler's factual error
+    response, which then escapes with the read-only operation's
+    factual terminal): an id cancelled before execution is omitted,
+    while the EOF-cancelled active unit answers -32010 ``cancelled``
+    with the domain facts at shutdown (proof a).  The harness
+    therefore pins the invariant both paths share -- the cancelled
+    export is never a result -- and records the exact export
+    terminal: ``export_code`` is -32010 when the session delivers the
+    cancelled answer, and ``export_answered`` is False when the
+    session suppresses it.
     """
 
     work = os.path.join(work_dir, f"d-{label}")
@@ -1119,7 +1130,7 @@ RESOURCE_SELF_TEST_CONTROLS = {
     "crlf": 1,
     "id-type": 1,
     "proof-b": 4,
-    "cancelled-answer": 4,
+    "cancelled-answer": 5,
     "cancel-proof-a": 3,
     "cancel-proof-d": 3,
     "shared-read": 1,
@@ -1532,16 +1543,21 @@ def self_test():
 
     # Cancellation-domain controls (kind-gate finding 8): a cancelled
     # active request that answers -32010 must carry the cancellation
-    # domain facts (data.code "cancelled" and outcome "not_started"),
-    # not merely the outer JSON-RPC error number.  Four controls pin
-    # the shared check, and both proofs that share it (a and d) are
-    # driven end-to-end with stub children: a valid cancellation
-    # answer passes, while a wrong-domain answer (data.code "io") and
-    # a wrong-outcome answer (outcome "read_only_failure") fail each
-    # proof.
+    # domain facts (data.code "cancelled" and a taxonomy-legal factual
+    # outcome), not merely the outer JSON-RPC error number.  Five
+    # controls pin the shared check, and both proofs that share it (a
+    # and d) are driven end-to-end with stub children: a cancellation
+    # answered before any durable attempt (not_started) and one
+    # answered mid-read (read_only_failure) both pass, while a
+    # wrong-domain answer (data.code "io"), a write-side terminal
+    # (outcome "committed"), and a wrong error number fail each proof.
     cancel_valid = {"jsonrpc": "2.0", "id": "1", "error": {
         "code": -32010, "message": "export was cancelled",
         "data": {"code": "cancelled", "outcome": "not_started",
+                 "details": {}}}}
+    cancel_valid_midread = {"jsonrpc": "2.0", "id": "1", "error": {
+        "code": -32010, "message": "export was cancelled",
+        "data": {"code": "cancelled", "outcome": "read_only_failure",
                  "details": {}}}}
     cancel_wrong_domain = {"jsonrpc": "2.0", "id": "1", "error": {
         "code": -32010, "message": "unrelated disk failure",
@@ -1549,7 +1565,7 @@ def self_test():
                  "details": {}}}}
     cancel_wrong_outcome = {"jsonrpc": "2.0", "id": "1", "error": {
         "code": -32010, "message": "export was cancelled",
-        "data": {"code": "cancelled", "outcome": "read_only_failure",
+        "data": {"code": "cancelled", "outcome": "committed",
                  "details": {}}}}
     cancel_wrong_number = {"jsonrpc": "2.0", "id": "1", "error": {
         "code": -32002, "message": "server_busy",
@@ -1557,6 +1573,7 @@ def self_test():
                  "details": {}}}}
     for label, response, should_pass in (
             ("valid", cancel_valid, True),
+            ("valid-midread", cancel_valid_midread, True),
             ("wrong-domain", cancel_wrong_domain, False),
             ("wrong-outcome", cancel_wrong_outcome, False),
             ("wrong-number", cancel_wrong_number, False)):
@@ -1674,7 +1691,8 @@ def self_test():
         print(f"self-test proof-{proof} {label}: "
               f"{failed_now or 'accepted'} in {elapsed:.2f} s")
         if failed_now is not None:
-            if "domain facts" not in failed_now and \
+            if "domain code" not in failed_now and \
+                    "taxonomy-legal outcome" not in failed_now and \
                     "expected -32010" not in failed_now:
                 failures.append(
                     f"proof-{proof} {label}: rejected for an unrelated "

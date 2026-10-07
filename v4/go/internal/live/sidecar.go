@@ -91,8 +91,8 @@ func reserveAt(path string, databaseID, sidecarID [16]byte, capacity uint32, cre
 		return nil, failure
 	}
 	return &Sidecar{
-		file:     created.file,
-		path:     path,
+		file: created.file,
+		path: path,
 		header: header{
 			capacity: capacity, databaseID: databaseID, sidecarID: sidecarID,
 			policy: creatorPolicy(creatorOnly),

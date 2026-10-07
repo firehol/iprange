@@ -297,7 +297,19 @@ if [ "${IPRANGE_BATTERY_LAUNCHED:-}" = 1 ]; then
   # its one owner and [0h] proves the header is still there.
   :
 else
-  exec > >(tee "$LOGF") 2>&1
+  # A direct run writes the same identity header itself (evidence-log
+  # convention): the retained console names the script bytes that ran
+  # and the invocation that started it, so a log never begins with a
+  # body line of unknown provenance.  [0h] verifies this header exactly
+  # like the launcher's.  The digest line carries no workstation path
+  # and argv entries are spelled as invoked.
+  {
+    echo "### [battery] direct-run identity at start"
+    sha256sum "${BASH_SOURCE[0]}" \
+      | awk '{print $1"  battery.sh (script identity at run start)"}'
+    { printf 'argv:'; printf ' %q' "$0" "$@"; printf '\n'; }
+  } > "$LOGF"
+  exec > >(tee -a "$LOGF") 2>&1
 fi
 
 STEPFAIL=0
@@ -608,34 +620,33 @@ prov_array() {
   fi
 }
 
-# [0h] pins the retained console log to the launcher's identity header.  The
-# header is the only thing that says which bytes this log came from, and it is
-# written by run_battery_w1926.sh before the battery starts, so it is destroyed
-# by the oldest mistake in this file: a step that re-opens the log without
-# append mode.  That mistake is silent -- every step still reports OK and the
-# log simply begins with a body line -- so the run fails here instead.
-echo "### [0h] launcher log header retained"
-if [ "${IPRANGE_BATTERY_LAUNCHED:-}" = 1 ]; then
-  EXPECTED_HDR=$(sha256sum "${BASH_SOURCE[0]}" | awk '{print $1}')
-  FIRST_LINE=$(head -1 "$LOGF" 2>/dev/null)
-  HDR_DIGEST=$(head -10 "$LOGF" 2>/dev/null \
-    | awk '$1 ~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/ && length($1)==64 {print $1; exit}')
-  if [ "$FIRST_LINE" = "### [launcher] battery script identity at run start" ] \
-     && [ -n "$HDR_DIGEST" ] && [ "$HDR_DIGEST" = "$EXPECTED_HDR" ]; then
-    echo "  log $LOGF begins with the launcher identity header; battery sha256 $EXPECTED_HDR"
-    record "[0h] launcher log header retained" 0 zero
-  else
-    echo "  EXPECTED first line '### [launcher] battery script identity at run start'"
-    echo "  EXPECTED battery sha256 in the header: $EXPECTED_HDR"
-    echo "  ACTUAL first line of $LOGF: ${FIRST_LINE:0:80}"
-    echo "  ACTUAL digest in its first 10 lines: ${HDR_DIGEST:-none}"
-    echo "  the launcher header was truncated or rewritten: the retained console"
-    echo "  no longer identifies the script bytes that ran"
-    record "[0h] launcher log header retained" 1 zero
-  fi
+# [0h] pins the retained console log to its identity header.  The header
+# is the only thing that says which bytes this log came from: the
+# launcher writes it before the battery starts (launched runs), and the
+# direct-run branch above writes the same digest plus the invocation
+# argv (direct runs).  Either way it is destroyed by the oldest mistake
+# in this file: a step that re-opens the log without append mode.  That
+# mistake is silent -- every step still reports OK and the log simply
+# begins with a body line -- so the run fails here instead.
+echo "### [0h] run identity header retained"
+EXPECTED_HDR=$(sha256sum "${BASH_SOURCE[0]}" | awk '{print $1}')
+FIRST_LINE=$(head -1 "$LOGF" 2>/dev/null)
+HDR_DIGEST=$(head -10 "$LOGF" 2>/dev/null \
+  | awk '$1 ~ /^[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/ && length($1)==64 {print $1; exit}')
+if { [ "$FIRST_LINE" = "### [launcher] battery script identity at run start" ] \
+     || [ "$FIRST_LINE" = "### [battery] direct-run identity at start" ]; } \
+   && [ -n "$HDR_DIGEST" ] && [ "$HDR_DIGEST" = "$EXPECTED_HDR" ]; then
+  echo "  log $LOGF begins with an identity header ($FIRST_LINE); battery sha256 $EXPECTED_HDR"
+  record "[0h] run identity header retained" 0 zero
 else
-  record_deferred "[0h] launcher log header retained" \
-    "not started by run_battery_w1926.sh: no launcher identity header was written to pin" 0
+  echo "  EXPECTED first line '### [launcher] battery script identity at run start'"
+  echo "           or      '### [battery] direct-run identity at start'"
+  echo "  EXPECTED battery sha256 in the header: $EXPECTED_HDR"
+  echo "  ACTUAL first line of $LOGF: ${FIRST_LINE:0:80}"
+  echo "  ACTUAL digest in its first 10 lines: ${HDR_DIGEST:-none}"
+  echo "  the identity header was truncated or rewritten: the retained console"
+  echo "  no longer identifies the script bytes that ran"
+  record "[0h] run identity header retained" 1 zero
 fi
 
 # ---------------------------------------------------------------------

@@ -26,7 +26,6 @@ pub(crate) static CREATOR_ONLY_ENV_LOCK: std::sync::Mutex<()> =
 #[cfg(all(test, unix))]
 pub(crate) struct CreatorOnlyGuard {
     previous: Option<std::ffi::OsString>,
-    #[allow(dead_code)]
     lock: Option<std::sync::MutexGuard<'static, ()>>,
 }
 
@@ -47,10 +46,14 @@ impl CreatorOnlyGuard {
 #[cfg(all(test, unix))]
 impl Drop for CreatorOnlyGuard {
     fn drop(&mut self) {
+        // Release the serialization lock only after the switch is
+        // restored, so the next guard observes the restored value.
+        let lock = self.lock.take();
         match self.previous.take() {
             Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
             None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),
         }
+        drop(lock);
     }
 }
 

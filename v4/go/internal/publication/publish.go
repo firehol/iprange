@@ -18,9 +18,9 @@ import (
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
 // PublishAttempt is one created and secured private output awaiting

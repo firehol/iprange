@@ -37,9 +37,9 @@ func TestExportWriterFollowsSourceDatabase(t *testing.T) {
 		t.Fatalf("state = %v", created.State)
 	}
 	// A umask that would strip the owner-write bit distinguishes an
-	// exact-0600 set from a plain 0600 create (0600 & ~0200 == 0400):
-	// the protected output must stay exactly 0600 (Rust twin sets the
-	// mode explicitly after create).
+	// exact-0600 set from a create already at 0600 plus the explicit
+	// re-assert (0600 & ~0200 == 0400 without it): the protected output
+	// must stay exactly 0600 (Rust twin creates at 0600 and re-asserts).
 	setUmask(0o200)
 	defer setUmask(old)
 	budget := ExportBudget{MaxRows: 4, MaxOutputBytes: 1024, MaxOpenFiles: 1}

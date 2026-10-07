@@ -20,9 +20,9 @@ use iprange_livedb::{
     create_live, AddressFamily, CancellationToken, StructureKind, ValueKind, ValueTag,
 };
 
-fn directory() -> PathBuf {
+fn directory(label: &str) -> PathBuf {
     let directory = std::env::temp_dir().join(format!(
-        "iprange-v4-recovery-follows-{}",
+        "iprange-v4-recovery-follows-{label}-{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&directory);
@@ -72,10 +72,19 @@ fn recover(directory: &PathBuf, source: &PathBuf, label: &str) -> PathBuf {
     destination
 }
 
+/// Serializes this binary's tests around the process switch: both
+/// tests mutate or assert IPRANGE_CREATOR_ONLY, and the binary runs
+/// its tests on parallel threads.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn recovery_follows_the_source_sidecar_end_to_end() {
-    let directory = directory();
+    let _lock = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
     std::env::remove_var("IPRANGE_CREATOR_ONLY");
+    let directory = directory("switch-off");
 
     let protected = directory.join("protected.v4");
     create_source(&protected, true);
@@ -94,4 +103,49 @@ fn recovery_follows_the_source_sidecar_end_to_end() {
     assert_ne!(mode, 0o600, "unprotected source forced mode 0600");
 
     let _ = fs::remove_dir_all(&directory);
+    match previous {
+        Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
+        None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),
+    }
+}
+
+// The switch-ON arm: an unprotected source recovered with the process
+// switch on must still bind the recorded choice (unprotected) — the
+// facts the attempt records win over the worker's process switch.
+// Under umask 0 a switch-following worker would create 0600 where the
+// recorded facts keep the 0666 default. Go twin:
+// TestRecoveryFollowsSourceWithSwitchOn.
+#[test]
+fn recovery_follows_the_source_with_the_switch_on() {
+    let _lock = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
+    std::env::set_var("IPRANGE_CREATOR_ONLY", "1");
+    let mask = unsafe { test_umask(0) };
+    let directory = directory("switch-on");
+
+    let plain = directory.join("plain.v4");
+    create_source(&plain, false);
+    let destination = recover(&directory, &plain, "plain-out");
+    let mode = fs::metadata(&destination).unwrap().permissions().mode() & 0o777;
+    assert_ne!(
+        mode,
+        0o600,
+        "switch-on worker forced 0600 on an unprotected source: the recorded facts must win"
+    );
+
+    unsafe { test_umask(mask) };
+    let _ = fs::remove_dir_all(&directory);
+    match previous {
+        Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
+        None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),
+    }
+}
+
+unsafe fn test_umask(mask: u32) -> u32 {
+    extern "C" {
+        fn umask(mask: u32) -> u32;
+    }
+    unsafe { umask(mask) }
 }

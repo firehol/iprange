@@ -288,3 +288,106 @@ impl RangeSource<AddressRange<Ipv4Key>> for CountingSource {
         Ok(None)
     }
 }
+
+/// Serializes this binary's tests around the process switch: an
+/// unserialized flip could race another test's create through a
+/// product path (the crate's own switch tests use the same rule).
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(unix)]
+unsafe fn feed_test_umask(mask: u32) -> u32 {
+    extern "C" {
+        fn umask(mask: u32) -> u32;
+    }
+    unsafe { umask(mask) }
+}
+
+// The feed publish has no source database, so the process switch is
+// its only input (spec 15.6): with the switch on and umask 0 the
+// published output is exactly 0600, and with the switch off it keeps
+// the process default. Go twin: TestImmutableFeedPublishFollowsTheProcessSwitch.
+// The mode assertions are POSIX-only; on Windows the publish still runs
+// and must publish, with protection carried by the DACL path.
+#[test]
+fn feed_publish_follows_the_process_switch() {
+    let _lock = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut files = Files::new();
+    let on_path = files.path("switched-on.v4");
+    let off_path = files.path("switched-off.v4");
+    let ranges = [AddressRange {
+        from: Ipv4Key(1),
+        to: Ipv4Key(3),
+    }];
+    let tag = ValueTag::new(b"feeds").unwrap();
+    let name = FeedName::new("switch").unwrap();
+    let cancellation = CancellationToken::new();
+
+    let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
+    std::env::set_var("IPRANGE_CREATOR_ONLY", "1");
+    #[cfg(unix)]
+    let mask = unsafe { feed_test_umask(0) };
+    let result = create_immutable_feed_v4(
+        &on_path,
+        tag,
+        name,
+        None,
+        PublicationPolicy::FailIfExists,
+        &mut SliceSource::new(&ranges),
+        &budget(),
+        &cancellation,
+    )
+    .unwrap();
+    assert_eq!(
+        result.publication.publication,
+        PublicationStatus::Published
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = fs::metadata(&on_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "switch-on feed mode {mode:o}, want 0600 under umask 0"
+        );
+    }
+
+    std::env::set_var("IPRANGE_CREATOR_ONLY", "0");
+    let result = create_immutable_feed_v4(
+        &off_path,
+        tag,
+        name,
+        None,
+        PublicationPolicy::FailIfExists,
+        &mut SliceSource::new(&ranges),
+        &budget(),
+        &cancellation,
+    )
+    .unwrap();
+    assert_eq!(
+        result.publication.publication,
+        PublicationStatus::Published
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = fs::metadata(&off_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_ne!(mode, 0o600, "switch-off feed forced mode 0600");
+    }
+
+    #[cfg(unix)]
+    unsafe { feed_test_umask(mask) };
+    match previous {
+        Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
+        None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),
+    }
+}

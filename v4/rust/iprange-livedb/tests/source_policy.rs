@@ -67,3 +67,43 @@ fn source_policy_follows_the_sidecar_record() {
 
     let _ = fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn classifier_refuses_a_fifo_at_the_sidecar_name() {
+    use std::os::unix::fs::FileTypeExt;
+
+    // A FIFO planted at the sidecar name must refuse (follow the
+    // switch) instead of wedging the calling thread on a blocking
+    // open.
+    let directory = std::env::temp_dir().join(format!(
+        "iprange-v4-fifo-sidecar-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&directory);
+    fs::create_dir_all(&directory).unwrap();
+    let main = directory.join("fifo.iprdb");
+    create(&main, true);
+    let sidecar = iprange_livedb::sidecar_path(&main).unwrap();
+    fs::remove_file(&sidecar).unwrap();
+    let name = std::ffi::CString::new(sidecar.as_os_str().as_encoded_bytes().to_vec()).unwrap();
+    let made = unsafe { libc_mkfifo(name.as_ptr(), 0o600) };
+    assert_eq!(made, 0, "mkfifo at the sidecar path failed");
+    let file_type = fs::metadata(&sidecar).unwrap().file_type();
+    assert!(file_type.is_fifo(), "sidecar name is not a FIFO");
+
+    std::env::set_var("IPRANGE_CREATOR_ONLY", "0");
+    let answered = iprange_livedb::source_creator_only(&main);
+    assert!(
+        !answered,
+        "FIFO sidecar answered protected instead of following the switch"
+    );
+    std::env::remove_var("IPRANGE_CREATOR_ONLY");
+    let _ = fs::remove_dir_all(&directory);
+}
+
+unsafe fn libc_mkfifo(path: *const std::os::raw::c_char, mode: u32) -> i32 {
+    extern "C" {
+        fn mkfifo(path: *const std::os::raw::c_char, mode: u32) -> i32;
+    }
+    unsafe { mkfifo(path, mode) }
+}

@@ -23,8 +23,8 @@ import (
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
-	"github.com/firehol/iprange/v4/go/internal/security"
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
 // ValidateDatabaseCreateParams enforces the strict database.create
@@ -304,10 +304,9 @@ func DatabaseCreate(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Han
 	// the validator (matching the Rust twin and the boolean-only
 	// oracle) so the refusal carries the invalid-params transport code.
 	creatorOnly := security.CreatorOnlyRequested()
-	if value, present := object["creator_only"]; present {
+	if _, present := object["creator_only"]; present {
 		creatorOnly, err = asBool(object, "creator_only")
 		if err != nil {
-			_ = value
 			return nil, rpc.InvalidParamsError("creator_only must be a boolean")
 		}
 	}

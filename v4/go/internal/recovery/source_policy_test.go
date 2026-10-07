@@ -82,4 +82,3 @@ func TestSourcePolicyFollowsTheSidecarRecord(t *testing.T) {
 		t.Fatal("absent source with switch off answered protected")
 	}
 }
-

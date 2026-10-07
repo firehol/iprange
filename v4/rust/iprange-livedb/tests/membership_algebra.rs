@@ -437,3 +437,125 @@ fn assert_names(reader: &ImmutableReader, address: u32, expected: &[&str]) {
         expected
     );
 }
+
+/// Serializes this binary's tests around the process switch: an
+/// unserialized flip could race another test's publish through a
+/// product path (the crate's own switch tests use the same rule).
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(unix)]
+unsafe fn algebra_test_umask(mask: u32) -> u32 {
+    extern "C" {
+        fn umask(mask: u32) -> u32;
+    }
+    unsafe { umask(mask) }
+}
+
+// The algebra publish output has no source database of its own, so it
+// follows the process switch like every other no-source artifact
+// (spec 15.6): with the switch on and umask 0 the published output is
+// exactly 0600, and with the switch off it keeps the process default.
+// Go twin: TestAlgebraPublishFollowsTheProcessSwitch. The mode
+// assertions are POSIX-only; on Windows the publish still runs and
+// must publish, with protection carried by the DACL path.
+#[test]
+fn algebra_publish_follows_the_process_switch() {
+    let _lock = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut files = Files::new();
+    let source = files.path("source");
+    let on_path = files.path("switched-on");
+    let off_path = files.path("switched-off");
+    let cancellation = CancellationToken::new();
+
+    create_membership(&source);
+    let mut writer = LiveWriter::open(&source, transaction_budget(), &cancellation).unwrap();
+    add_feed(&mut writer, "x", &[(0, 9)]);
+    writer.close().unwrap();
+    let reader = LiveReader::open(&source, &cancellation).unwrap();
+    let scope = reader
+        .membership_query()
+        .unwrap()
+        .all_feeds(query_budget(), &cancellation)
+        .unwrap();
+    let scopes = [&scope];
+    let algebra = MembershipAlgebra::new(
+        &scopes,
+        MembershipAlgebraBudget {
+            max_heap_bytes: 8 * 1024 * 1024,
+            max_sources: 2,
+        },
+        &cancellation,
+    )
+    .unwrap();
+
+    let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
+    std::env::set_var("IPRANGE_CREATOR_ONLY", "1");
+    #[cfg(unix)]
+    let mask = unsafe { algebra_test_umask(0) };
+    let on = algebra
+        .publish_set(
+            &on_path,
+            ValueTag::new(b"union").unwrap(),
+            AlgebraSetOperation::Union(FeedSelection::All),
+            AlgebraOutputMode::PreserveFeeds,
+            None,
+            PublicationPolicy::FailIfExists,
+            output_budget(),
+            &cancellation,
+        )
+        .unwrap();
+    assert_eq!(
+        on.publication.publication,
+        iprange_livedb::PublicationStatus::Published
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = fs::metadata(&on_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "switch-on algebra output mode {mode:o}, want 0600 under umask 0"
+        );
+    }
+
+    std::env::set_var("IPRANGE_CREATOR_ONLY", "0");
+    let off = algebra
+        .publish_set(
+            &off_path,
+            ValueTag::new(b"union").unwrap(),
+            AlgebraSetOperation::Union(FeedSelection::All),
+            AlgebraOutputMode::PreserveFeeds,
+            None,
+            PublicationPolicy::FailIfExists,
+            output_budget(),
+            &cancellation,
+        )
+        .unwrap();
+    assert_eq!(
+        off.publication.publication,
+        iprange_livedb::PublicationStatus::Published
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = fs::metadata(&off_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_ne!(mode, 0o600, "switch-off algebra output forced mode 0600");
+    }
+
+    #[cfg(unix)]
+    unsafe { algebra_test_umask(mask) };
+    match previous {
+        Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
+        None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),
+    }
+}

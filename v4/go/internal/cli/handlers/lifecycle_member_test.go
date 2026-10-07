@@ -13,11 +13,11 @@ import (
 // frozen oracle types boolean-only — are invalid-params refusals.
 func TestDatabaseCreateCreatorOnlyMemberPinsTheWireShape(t *testing.T) {
 	base := map[string]any{
-		"path":           "/tmp/iprange-v4-member.v4",
-		"family":         "ipv4",
-		"value_kind":     "direct",
-		"structure_kind": "none",
-		"value_tag":      map[string]any{"text": "asn"},
+		"path":            "/tmp/iprange-v4-member.v4",
+		"family":          "ipv4",
+		"value_kind":      "direct",
+		"structure_kind":  "none",
+		"value_tag":       map[string]any{"text": "asn"},
 		"reader_capacity": float64(2),
 	}
 	marshal := func(extra map[string]any) json.RawMessage {

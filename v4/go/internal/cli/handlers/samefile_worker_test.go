@@ -31,7 +31,7 @@ import (
 var (
 	exportWorkerOnce sync.Once
 	exportWorkerPath string
-	exportWorkerErr     error
+	exportWorkerErr  error
 )
 
 func buildExportWorker() string {

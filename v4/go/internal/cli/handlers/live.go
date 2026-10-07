@@ -35,7 +35,6 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/pathname"
-
 )
 
 // RegisterLive installs the live lifecycle, resolution, direct

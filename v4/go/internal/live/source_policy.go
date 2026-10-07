@@ -7,6 +7,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/security"
 )
+
 // SourceCreatorOnly reports the creator-only choice a live database's
 // sidecar records, read from the sidecar header alone: one mapped page,
 // no database open, no locks, no reader registration (Rust

@@ -10,13 +10,12 @@ package iprangedb
 import (
 	"encoding/binary"
 	"errors"
-	"runtime"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
-
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -653,12 +652,12 @@ func TestMergeErrorsKeepsPrimaryCause(t *testing.T) {
 // TestPublishSetFollowsTheProcessSwitch pins the algebra publish's
 // no-source switch rule (spec 15.6): the publish output has no source
 // database of its own, so with the switch on and umask 0 it is exactly
-// 0600 and with the switch off it keeps the process default.
+// 0600 and with the switch off it keeps the process default. The
+// publish itself must succeed on every platform the publication
+// security gate allows; only the mode assertions are POSIX (Windows
+// protection is the DACL).
 func TestPublishSetFollowsTheProcessSwitch(t *testing.T) {
 	requirePublicationSecurity(t)
-	if runtime.GOOS == "windows" {
-		t.Skip("mode assertions are POSIX-only; Windows protection is the DACL")
-	}
 	previous := setUmask(0)
 	defer setUmask(previous)
 	helpers := publishAlgebraV4(t, 1)
@@ -673,12 +672,14 @@ func TestPublishSetFollowsTheProcessSwitch(t *testing.T) {
 	if result.Publication.Publication != PublicationPublished {
 		t.Fatalf("publication status %v", result.Publication.Publication)
 	}
-	info, err := os.Stat(switchedOn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Fatalf("switch-on publish mode = %#o, want 0600 (a switch-ignoring publish stays 0666 under umask 0)", mode)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(switchedOn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Fatalf("switch-on publish mode = %#o, want 0600 (a switch-ignoring publish stays 0666 under umask 0)", mode)
+		}
 	}
 
 	t.Setenv("IPRANGE_CREATOR_ONLY", "")
@@ -686,11 +687,13 @@ func TestPublishSetFollowsTheProcessSwitch(t *testing.T) {
 	if _, err := publishV4(t, helpers, switchedOff, AlgebraSetUnion(AlgebraFeedSelectionAll()), AlgebraOutputModePreserveFeeds(), nil, PolicyFailIfExists, outputBudget()); err != nil {
 		t.Fatal("publish:", err)
 	}
-	info, err = os.Stat(switchedOff)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode := info.Mode().Perm(); mode == 0o600 {
-		t.Fatal("switch-off publish forced mode 0600")
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(switchedOff)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode == 0o600 {
+			t.Fatal("switch-off publish forced mode 0600")
+		}
 	}
 }

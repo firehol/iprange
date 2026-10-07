@@ -3,11 +3,10 @@ package iprangedb
 import (
 	"errors"
 	"os"
-	"runtime"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
-
 )
 
 // sliceSource4 is one finite caller-owned IPv4 batch source over a
@@ -410,12 +409,11 @@ func feedFailureCode(t *testing.T, err error) ErrorCode {
 // publish's no-source switch rule (spec 15.6): with the switch on and
 // umask 0 the published output is exactly 0600, and with the switch off
 // it keeps the process default. The feed publish has no source
-// database, so the switch is its only input.
+// database, so the switch is its only input. The publish itself must
+// succeed on every platform the publication security gate allows; only
+// the mode assertions are POSIX (Windows protection is the DACL).
 func TestImmutableFeedPublishFollowsTheProcessSwitch(t *testing.T) {
 	requireLiveCreation(t)
-	if runtime.GOOS == "windows" {
-		t.Skip("mode assertions are POSIX-only; Windows protection is the DACL")
-	}
 	previous := setUmask(0)
 	defer setUmask(previous)
 
@@ -438,12 +436,14 @@ func TestImmutableFeedPublishFollowsTheProcessSwitch(t *testing.T) {
 	if result.Publication.Publication != PublicationPublished {
 		t.Fatalf("publication = %v", result.Publication.Publication)
 	}
-	info, err := os.Stat(destination)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Fatalf("switch-on feed mode = %#o, want 0600 (a switch-ignoring publish stays 0666 under umask 0)", mode)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(destination)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Fatalf("switch-on feed mode = %#o, want 0600 (a switch-ignoring publish stays 0666 under umask 0)", mode)
+		}
 	}
 
 	t.Setenv("IPRANGE_CREATOR_ONLY", "")
@@ -457,11 +457,13 @@ func TestImmutableFeedPublishFollowsTheProcessSwitch(t *testing.T) {
 	if result.Publication.Publication != PublicationPublished {
 		t.Fatalf("publication = %v", result.Publication.Publication)
 	}
-	info, err = os.Stat(plain)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode := info.Mode().Perm(); mode == 0o600 {
-		t.Fatal("switch-off feed forced mode 0600")
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(plain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode == 0o600 {
+			t.Fatal("switch-off feed forced mode 0600")
+		}
 	}
 }

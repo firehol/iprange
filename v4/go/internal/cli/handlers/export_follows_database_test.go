@@ -73,4 +73,3 @@ func TestMetadataFollowsUnprotectedDatabase(t *testing.T) {
 		t.Fatal("metadata from an unprotected database was forced to mode 0600")
 	}
 }
-
