@@ -489,18 +489,29 @@ def attributable(text):
 
 complaints = 0
 local = []
+pending_traceback = False
 for line in open(log_path, encoding="utf-8", errors="replace"):
     stripped = line.strip()
-    if stripped.startswith("Traceback (most recent call last)") \
-            or stripped.startswith("KeyError:") \
-            or stripped.startswith("NameError:") \
-            or stripped.startswith("AttributeError:"):
+    if stripped.startswith("Traceback (most recent call last)"):
+        pending_traceback = True
+        continue
+    if pending_traceback:
         # A crash of the harness itself is a defect of THIS run: the
         # deferral exists to hold Windows-leg artifacts, never to
         # shelter a traceback (round 10: a KeyError shipped as the
-        # designed DEFERRED).
-        complaints += 1
-        local.append(stripped)
+        # designed DEFERRED). An AssertionError still carries its
+        # problem list and is judged by the GATE_ASSERTION path below;
+        # every other exception type escaping through a traceback is a
+        # crash this run owns.
+        if stripped.startswith("AssertionError"):
+            pending_traceback = False
+        elif stripped.startswith(("KeyError:", "NameError:",
+                                  "AttributeError:", "TypeError:",
+                                  "IndexError:", "RuntimeError:")):
+            complaints += 1
+            local.append(stripped)
+            pending_traceback = False
+        continue
     match = GATE_ASSERTION.search(stripped)
     if match:
         # The gate's own --self-test reports the blocking problems as a Python
