@@ -1,5 +1,3 @@
-//go:build !windows
-
 package live
 
 import (
@@ -8,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"golang.org/x/sys/unix"
 )
 
 // createPolicySource creates one live database recording creator_only.
@@ -25,7 +22,10 @@ func createPolicySource(t *testing.T, main string, creatorOnly bool) {
 // A valid-CRC header whose identities are zero is corrupt under the
 // full read_header rule: the classifier must follow the process
 // switch, never the policy byte such a header carries. Mutation probe:
-// removing headerIdentitiesValid flips the answer to protected.
+// removing headerIdentitiesValid flips the answer to protected. The
+// test has no unix constructs: SourceCreatorOnly and the sidecar read
+// ship on Windows, so it runs everywhere (Rust twin:
+// live_sidecar.rs classifier_rejects_a_zero_identity_header).
 func TestSourceCreatorOnlyRejectsZeroIdentityHeader(t *testing.T) {
 	t.Setenv("IPRANGE_CREATOR_ONLY", "0")
 	dir := t.TempDir()
@@ -75,26 +75,4 @@ func writeSidecarPage(sidecar string, page []byte) error {
 		return err
 	}
 	return handle.Close()
-}
-
-// A FIFO planted at the sidecar name must refuse (follow the switch)
-// instead of blocking the caller on a plain open.
-func TestSourceCreatorOnlyRefusesAFifoSidecar(t *testing.T) {
-	t.Setenv("IPRANGE_CREATOR_ONLY", "0")
-	dir := t.TempDir()
-	main := filepath.Join(dir, "fifo.iprdb")
-	createPolicySource(t, main, true)
-	sidecar, err := CanonicalSidecarPath(main)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(sidecar); err != nil {
-		t.Fatal(err)
-	}
-	if err := unix.Mkfifo(sidecar, 0o600); err != nil {
-		t.Fatalf("mkfifo: %v", err)
-	}
-	if SourceCreatorOnly(main) {
-		t.Fatal("FIFO sidecar answered protected instead of following the switch")
-	}
 }

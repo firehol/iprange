@@ -999,7 +999,7 @@ fi
 # unprivileged runs keep the file empty.
 (cd "$REPO" && export CARGO_TARGET_DIR="$R_RUSTFRESH" CARGO_HOME="$REPO/.local/int-prep/cargo-home" IPRANGE_V4_WIN_PIN_TALLY="$R/reports/linux-pin-tally.txt" && \
   nice cargo build --manifest-path v4/rust/Cargo.toml -p iprange-livedb --bins >> "$R/reports/rust-test.log" 2>&1 && \
-  nice cargo test --manifest-path v4/rust/Cargo.toml >> "$R/reports/rust-test.log" 2>&1)
+  nice timeout 1500 cargo test --manifest-path v4/rust/Cargo.toml >> "$R/reports/rust-test.log" 2>&1)
 record "[3] cargo test" $? zero
 tail -3 "$R/reports/rust-test.log"
 # The tally is judged, not just collected: every UNSCORED line names a

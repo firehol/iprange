@@ -805,7 +805,12 @@ fn create_file(nonce: [u8; 16]) -> Result<(PathBuf, File)> {
 
     let path = control_path(nonce);
     // The control file has no source database, so it follows the process
-    // switch like every other no-source artifact (spec 15.6).
+    // switch like every other no-source artifact (spec 15.6). The worker
+    // re-opens this file O_RDWR, so the owner read/write bits must
+    // survive ANY umask: a umask stripping owner bits at create would
+    // make the worker's re-open fail EACCES and surface as a misleading
+    // protocol Conflict (parity round 5). Group and other bits keep the
+    // process default the umask left.
     let creator_only = crate::publication::security::creator_only_requested();
     let mode = if creator_only { 0o600 } else { 0o666 };
     let file = OpenOptions::new()
@@ -814,6 +819,16 @@ fn create_file(nonce: [u8; 16]) -> Result<(PathBuf, File)> {
         .create_new(true)
         .mode(mode)
         .open(&path)?;
+    if !creator_only {
+        use std::os::unix::fs::PermissionsExt as _;
+        let current = file.metadata()?.permissions();
+        let floored = current.mode() | 0o600;
+        file.set_permissions(std::fs::Permissions::from_mode(floored))
+            .map_err(|error| {
+                let _ = std::fs::remove_file(&path);
+                error
+            })?;
+    }
     if creator_only {
         let profile = Profile::capture().map_err(|error| {
             let _ = std::fs::remove_file(&path);

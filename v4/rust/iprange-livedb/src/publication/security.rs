@@ -12,9 +12,10 @@ pub fn creator_only_requested() -> bool {
 /// Serializes every test that mutates or asserts the process switch.
 /// Rust test binaries run their tests on parallel threads, so an
 /// unserialized `set_var` could flip the switch under a concurrent test
-/// that reads it through a product path. Unix-gated like the tests it
-/// serves.
-#[cfg(all(test, unix))]
+/// that reads it through a product path. Available on every test
+/// platform: the switch-asserting tests include portable ones (the
+/// crafted-header classifier test), not only the unix mode tests.
+#[cfg(test)]
 pub(crate) static CREATOR_ONLY_ENV_LOCK: std::sync::Mutex<()> =
     std::sync::Mutex::new(());
 

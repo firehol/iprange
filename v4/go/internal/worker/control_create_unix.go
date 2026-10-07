@@ -35,6 +35,23 @@ func createControlFile(path string, profile security.Profile) (*os.File, error) 
 			f.Close()
 			return nil, workerSecurityFailure(err)
 		}
+	} else {
+		// The worker re-opens the control file O_RDWR, so the owner
+		// read/write bits must survive ANY umask (Rust twin floors
+		// the unprotected create the same way): a umask stripping
+		// owner bits at create would fail the worker's re-open with
+		// EACCES and surface as a misleading protocol Conflict.
+		// Group and other bits keep the process default the umask
+		// left.
+		info, statErr := f.Stat()
+		if statErr != nil {
+			f.Close()
+			return nil, workerSecurityFailure(statErr)
+		}
+		if err := f.Chmod(info.Mode().Perm() | 0o600); err != nil {
+			f.Close()
+			return nil, workerSecurityFailure(err)
+		}
 	}
 	return f, nil
 }

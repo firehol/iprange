@@ -147,7 +147,10 @@ impl Directory {
                     | libc::O_CLOEXEC
                     | libc::O_NOFOLLOW
                     | libc::O_NONBLOCK,
-                mode as libc::mode_t,
+                // openat is variadic: the mode must promote to c_int on
+                // every unix target (FreeBSD mode_t is u16, smaller
+                // than the variadic argument floor).
+                mode as libc::c_uint,
             )
         };
         if fd < 0 {
@@ -160,7 +163,28 @@ impl Directory {
                 source,
             });
         }
-        Ok(unsafe { File::from_raw_fd(fd) })
+        let file = unsafe { File::from_raw_fd(fd) };
+        // Floor the owner read/write bits (Go twin Directory.CreateMode):
+        // the worker re-opens a parent-created attempt (recovery resume)
+        // O_RDWR, and a umask stripping owner bits at create would turn
+        // that re-open into EACCES (parity round 5). Group and other
+        // bits keep what the umask left; under a sane umask the floor
+        // changes nothing.
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let floored = file
+                .metadata()
+                .and_then(|metadata| {
+                    let mode = metadata.permissions().mode() | 0o600;
+                    file.set_permissions(std::fs::Permissions::from_mode(mode))
+                })
+                .map_err(|source| NamespaceError::IoAt {
+                    operation: "floor created file owner bits",
+                    source,
+                })?;
+            let _ = floored;
+        }
+        Ok(file)
     }
 
     pub(crate) fn open_regular(

@@ -149,3 +149,62 @@ unsafe fn test_umask(mask: u32) -> u32 {
     }
     unsafe { umask(mask) }
 }
+
+// The worker path survives a hostile umask (parity round 5): the
+// control file is re-opened O_RDWR by the worker, so a umask stripping
+// owner bits at create used to fail the re-open EACCES and surface as
+// a misleading "SDK worker version or protocol does not match"
+// Conflict. The unprotected create floors the owner read/write bits
+// after create; recovery under umask 0200 must therefore publish.
+// Inspection runs under the normal umask (its validation scratch is
+// the separately dispositioned residue class); the hostile window
+// wraps only the worker-coordinated recover. Go twin:
+// TestRecoverySurvivesAHostileUmask.
+#[test]
+fn recovery_survives_a_hostile_umask() {
+    let _lock = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
+    std::env::remove_var("IPRANGE_CREATOR_ONLY");
+    let directory = directory("hostile-umask");
+
+    let plain = directory.join("plain.v4");
+    create_source(&plain, false);
+    // Inspection runs under the normal umask (its validation scratch is
+    // the separately dispositioned residue class); the hostile window
+    // wraps only the worker-coordinated recover_live.
+    let inspection = inspect_recovery_candidates(
+        &plain,
+        RecoveryInspectionMode::Live,
+        &ValidationBudget::heap_only(1 << 20, 8),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let candidate = inspection.candidate(0).unwrap().clone();
+    let destination = directory.join("plain-out.v4");
+    let mask = unsafe { test_umask(0o200) };
+    let result = recover_live(
+        &plain,
+        candidate,
+        &destination,
+        &RecoveryBudget::heap_only(16 << 20, 100_000, 4),
+        &mut |_envelope: &iprange_livedb::recovery::RecoveryUnknownEnvelope| {
+            Ok(RecoverySinkControl::Continue)
+        },
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    unsafe { test_umask(mask) };
+    assert_eq!(
+        result.publication.publication,
+        iprange_livedb::publication::PublicationStatus::Published,
+        "worker-coordinated recovery under umask 0200 must publish (the pre-fix shape failed the worker handshake with a misleading Conflict)"
+    );
+
+    let _ = fs::remove_dir_all(&directory);
+    match previous {
+        Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
+        None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),
+    }
+}

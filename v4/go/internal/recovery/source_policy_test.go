@@ -20,8 +20,6 @@ import (
 // default of a protected source would produce a 0666 artifact.
 func TestSourcePolicyFollowsTheSidecarRecord(t *testing.T) {
 	t.Setenv("IPRANGE_CREATOR_ONLY", "")
-	var previous uint32 = 0
-	_ = previous
 	dir := t.TempDir()
 	tag := [16]byte{}
 	copy(tag[:], []byte("asn"))

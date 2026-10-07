@@ -135,7 +135,23 @@ func (d *Directory) CreateMode(name string, mode uint32) (*os.File, error) {
 	// calleropen.Blocking clears O_NONBLOCK before the wrap: os.NewFile
 	// on a non-blocking descriptor attaches it to the runtime netpoller,
 	// whose initialization aborts the process under a low RLIMIT_NOFILE.
-	return calleropen.Blocking(fd, name)
+	f, err := calleropen.Blocking(fd, name)
+	if err != nil {
+		return nil, nsIoError("create private file", err)
+	}
+	// Floor the owner read/write bits (Rust twin create_with_mode): the
+	// worker re-opens a parent-created attempt (recovery resume) O_RDWR,
+	// and a umask stripping owner bits at create would turn that re-open
+	// into EACCES (parity round 5). Group and other bits keep what the
+	// umask left; under a sane umask the floor changes nothing.
+	if info, statErr := f.Stat(); statErr != nil {
+		f.Close()
+		return nil, nsIoError("floor created file owner bits", statErr)
+	} else if err := f.Chmod(info.Mode().Perm() | 0o600); err != nil {
+		f.Close()
+		return nil, nsIoError("floor created file owner bits", err)
+	}
+	return f, nil
 }
 
 // OpenRegular opens one name without following symlinks and proves the

@@ -16,6 +16,11 @@ use iprange_livedb::{
     ValueTag,
 };
 
+/// Serializes this binary's tests around the process switch: both tests
+/// mutate or assert IPRANGE_CREATOR_ONLY, and the binary runs its tests
+/// on parallel threads (the crate's documented serialization rule).
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn create(main: &Path, creator_only: bool) {
     let result = create_live(
         main,
@@ -33,6 +38,10 @@ fn create(main: &Path, creator_only: bool) {
 
 #[test]
 fn source_policy_follows_the_sidecar_record() {
+    let _lock = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
     let directory = std::env::temp_dir().join(format!(
         "iprange-v4-source-policy-{}",
         std::process::id()
@@ -63,7 +72,10 @@ fn source_policy_follows_the_sidecar_record() {
     assert!(source_creator_only(&absent));
     std::env::set_var("IPRANGE_CREATOR_ONLY", "0");
     assert!(!source_creator_only(&absent));
-    std::env::remove_var("IPRANGE_CREATOR_ONLY");
+    match previous {
+        Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
+        None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),
+    }
 
     let _ = fs::remove_dir_all(&directory);
 }
@@ -72,9 +84,16 @@ fn source_policy_follows_the_sidecar_record() {
 fn classifier_refuses_a_fifo_at_the_sidecar_name() {
     use std::os::unix::fs::FileTypeExt;
 
+    let _lock = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
+
     // A FIFO planted at the sidecar name must refuse (follow the
     // switch) instead of wedging the calling thread on a blocking
-    // open.
+    // open. The call runs under a bounded watchdog so a prompt-open
+    // regression fails this test in seconds instead of hanging the
+    // binary (libtest has no per-test timeout).
     let directory = std::env::temp_dir().join(format!(
         "iprange-v4-fifo-sidecar-{}",
         std::process::id()
@@ -92,12 +111,30 @@ fn classifier_refuses_a_fifo_at_the_sidecar_name() {
     assert!(file_type.is_fifo(), "sidecar name is not a FIFO");
 
     std::env::set_var("IPRANGE_CREATOR_ONLY", "0");
-    let answered = iprange_livedb::source_creator_only(&main);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let classifier_main = main.clone();
+    let worker = std::thread::spawn(move || {
+        let answered = iprange_livedb::source_creator_only(&classifier_main);
+        let _ = tx.send(answered);
+    });
+    let answered = match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        Ok(answered) => answered,
+        Err(_) => {
+            panic!(
+                "source_creator_only wedged on the FIFO sidecar: the \
+                 prompt-open regression this detector pins"
+            );
+        }
+    };
     assert!(
         !answered,
         "FIFO sidecar answered protected instead of following the switch"
     );
-    std::env::remove_var("IPRANGE_CREATOR_ONLY");
+    let _ = worker.join();
+    match previous {
+        Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
+        None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),
+    }
     let _ = fs::remove_dir_all(&directory);
 }
 

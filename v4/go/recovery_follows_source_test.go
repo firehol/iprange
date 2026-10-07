@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"golang.org/x/sys/unix"
 )
 
 // Recovery follows the source sidecar's recorded choice end to end: a
@@ -22,11 +20,13 @@ func TestRecoveryFollowsSourceEndToEnd(t *testing.T) {
 	t.Setenv("IPRANGE_CREATOR_ONLY", "")
 	dir := t.TempDir()
 	// umask 0 distinguishes source-following from switch-following
-	// (0600 vs 0666) while leaving the worker's own control-file create
-	// writable; the umask-independence of the exact-0600 set is pinned
-	// separately by the CLI export detector under umask 0200.
-	previous := unix.Umask(0)
-	defer unix.Umask(previous)
+	// (0600 vs 0666) while the control file's owner bits are floored
+	// after create so the worker's O_RDWR re-open survives any umask;
+	// the umask-independence of the exact-0600 set is pinned separately
+	// by the CLI export detector under umask 0200 and by
+	// TestRecoverySurvivesAHostileUmask for the worker path.
+	previous := setUmask(0)
+	defer setUmask(previous)
 	budget := RecoveryHeapOnly(16<<20, 100_000, 4)
 
 	protected := filepath.Join(dir, "protected.v4")
@@ -92,8 +92,8 @@ func TestRecoveryFollowsSourceWithSwitchOn(t *testing.T) {
 	requireLiveCreation(t)
 	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	dir := t.TempDir()
-	previous := unix.Umask(0)
-	defer unix.Umask(previous)
+	previous := setUmask(0)
+	defer setUmask(previous)
 	budget := RecoveryHeapOnly(16<<20, 100_000, 4)
 
 	plain := filepath.Join(dir, "plain.v4")
@@ -119,6 +119,44 @@ func TestRecoveryFollowsSourceWithSwitchOn(t *testing.T) {
 	}
 	if mode := info.Mode().Perm(); mode == 0o600 {
 		t.Fatal("switch-on worker forced 0600 on an unprotected source: the recorded facts must win over the process switch")
+	}
+}
+
+// The worker path survives a hostile umask (parity round 5): the
+// control file is re-opened O_RDWR by the worker, so a umask stripping
+// owner bits at create used to fail the re-open EACCES and surface as a
+// misleading "SDK worker version or protocol does not match" Conflict.
+// The unprotected create floors the owner read/write bits after create;
+// recovery under umask 0200 must therefore publish. Inspection runs
+// under the normal umask (its validation scratch is the separately
+// dispositioned residue class); the hostile window wraps only the
+// worker-coordinated recover. Rust twin: recovery_follows_source.rs
+// recovery_survives_a_hostile_umask.
+func TestRecoverySurvivesAHostileUmask(t *testing.T) {
+	installWorkerForTest(t)
+	requireLiveCreation(t)
+	t.Setenv("IPRANGE_CREATOR_ONLY", "")
+	dir := t.TempDir()
+	budget := RecoveryHeapOnly(16<<20, 100_000, 4)
+
+	plain := filepath.Join(dir, "plain.v4")
+	createRecoverySource(t, plain, false)
+	candidates, err := InspectRecoveryCandidates(plain, RecoveryInspectionLive, HeapOnly(1<<20, 8), nil)
+	if err != nil {
+		t.Fatalf("inspect plain: %v", err)
+	}
+	if candidates.CandidateCount() == 0 {
+		t.Fatal("no plain candidates")
+	}
+	previous := setUmask(0o200)
+	plainOut := filepath.Join(dir, "plain-out.v4")
+	result, failure := RecoverLive(plain, candidates.Candidate(0), plainOut, budget, nil, nil)
+	setUmask(previous)
+	if failure != nil {
+		t.Fatalf("recover under umask 0200: %v (the worker control file lost its owner-write bits)", failure.Cause)
+	}
+	if result.Publication.Publication != PublicationPublished {
+		t.Fatalf("publication = %v, want published under umask 0200", result.Publication.Publication)
 	}
 }
 

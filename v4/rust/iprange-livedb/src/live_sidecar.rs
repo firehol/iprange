@@ -573,9 +573,22 @@ fn slot_offset_checked(slot: u32, capacity: u32) -> Result<u64> {
 #[path = "live_sidecar_tests.rs"]
 mod tests;
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod source_policy_tests {
     use super::*;
+
+    /// Serializes this test against every other switch-asserting test in
+    /// the lib binary through the crate's own lock: an unserialized flip
+    /// could race a CreatorOnlyGuard holder's create (the 54a3761a
+    /// class). The crafted-header test itself has no unix constructs, so
+    /// the module is portable; the FIFO twin lives in the integration
+    /// binary where its own ENV_LOCK serializes it.
+    fn with_env_lock(body: impl FnOnce()) {
+        let _lock = crate::publication::security::CREATOR_ONLY_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        body();
+    }
 
     fn unique_path(label: &str) -> std::path::PathBuf {
         let unique = std::time::SystemTime::now()
@@ -594,6 +607,7 @@ mod source_policy_tests {
     // probe: removing the identity check flips the answer to protected.
     #[test]
     fn classifier_rejects_a_zero_identity_header() {
+        with_env_lock(|| {
         let directory = unique_path("zero-identity");
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
@@ -621,6 +635,7 @@ mod source_policy_tests {
         page[64..68].copy_from_slice(&checksum.to_le_bytes());
         std::fs::write(&sidecar, &page).unwrap();
 
+        let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
         std::env::set_var("IPRANGE_CREATOR_ONLY", "0");
         assert!(
             !crate::source_creator_only(&main),
@@ -631,7 +646,11 @@ mod source_policy_tests {
             crate::source_creator_only(&main),
             "zero-identity header with the switch on must follow the switch"
         );
-        std::env::remove_var("IPRANGE_CREATOR_ONLY");
+        match previous {
+            Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
+            None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),
+        }
         let _ = std::fs::remove_dir_all(&directory);
+        })
     }
 }
