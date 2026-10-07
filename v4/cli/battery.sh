@@ -801,6 +801,17 @@ replay() {
       # rather than letting an empty outcome file read as a clean pass.
       echo "STEPRESULT [task $t] rc=$(cat "$dir/rc" 2>/dev/null || echo NA) expect=zero MISMATCH"
       STEPS=$((STEPS+1)); STEPFAIL=$((STEPFAIL+1)); bad=$((bad+1))
+    else
+      # A task that recorded outcomes and THEN wedged is killed by the
+      # per-task bound with rc=124 (or 137): folding only the outcome
+      # lines would let the most realistic wedge class end green. The
+      # nonzero rc becomes a synthetic mismatch of its own, so the
+      # bounded red the bound promises is the red the battery reports.
+      local trc; trc=$(cat "$dir/rc" 2>/dev/null || echo NA)
+      if [ "$trc" != 0 ] && [ "$trc" != NA ]; then
+        echo "STEPRESULT [task $t wedge] rc=$trc expect=zero MISMATCH (task recorded outcomes, then hit the per-task bound)"
+        STEPS=$((STEPS+1)); STEPFAIL=$((STEPFAIL+1)); bad=$((bad+1))
+      fi
     fi
     tail -n "${TASK_LOG_TAIL:-6}" "$dir/log" 2>/dev/null | sed 's/^/    /'
   done
@@ -2187,6 +2198,7 @@ COMMITTED_CONSUMED=(\
   --crash-negative "$CLI/evidence/crash-negative-producer-false.json"\
   --crash-negative "$CLI/evidence/crash-negative.json"\
   --fifo-surface "$CLI/evidence/fifo-surface.json" --throughput "$CLI/evidence/throughput.json"\
+  --create-mode "$CLI/evidence/create-mode.json" \
   --refusal-class-parity "$CLI/evidence/refusal-class-parity.json"\
   --coverage-go "$CLI/evidence/coverage-go.json"\
   --windows-housekeeping "$CLI/evidence/windows-housekeeping.json"\
@@ -2332,6 +2344,7 @@ ROTATE_FAIL=0
 for pair in resource.json:resource.json \
             throughput.json:throughput.json \
             fifo-surface.json:fifo-surface.json \
+            create-mode.json:create-mode.json \
             refusal-class-parity.json:refusal-class-parity.json \
             guard-posix.json:guard-posix.json \
             golden.json:golden.json \

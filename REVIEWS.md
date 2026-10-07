@@ -137,7 +137,13 @@ its source; they are mandatory:
   materialized mutations — is **withdrawn**: the sow0035 rounds proved
   member symlinks are a write-leak surface; three separate sandbox
   leaks mutated or deleted tracked files mid-round, contaminating
-  concurrent reviews.) Probes that
+  concurrent reviews.) A farm must contain **no `.git` entry at all**:
+  `git archive` emits none, and a `.git` symlink into the live gitdir
+  (found in 14 farms during the round-7 audit) turns any mutating git
+  command run from the farm into a write against the real index and
+  refs. Git questions about the real repository are asked with
+  `git -C <repo> log/show/diff` (read-only), never from inside a farm.
+  Probes that
   need compiled code use the staged binaries in `.local/shared/binaries/` —
   not a private build.
 - If a role genuinely must build, it sets `CARGO_TARGET_DIR`/`GOCACHE` to

@@ -29,6 +29,23 @@ Usage
 
     nice python3 v4/cli/check_create_mode_shape.py --self-test
 
+The gate runs two traced passes per engine.  The default pass asserts
+the export temp (the only artifact an end-state test can never see).
+The switched pass (``IPRANGE_CREATOR_ONLY=1``, the create member
+absent so the switch drives it) asserts every creator-only create in
+the flow — the main file, the readers table, the worker control file,
+and the export temp — because the SecureCreatorOnly re-assert masks
+end-state tests for all of them (operations/security round 7).
+
+Scope: this gate is POSIX/Linux-only by subject (openat modes do not
+exist on Windows, whose protection is applied as a DACL at CreateFile
+and is pinned by the per-assertion mode tests' Windows twins); the
+Windows leg runs its own step list and does not run this gate.  The
+unprotected exact-default contract (spec 15.6 "keeps the umask
+default") is pinned by exact-mode assertions in the recovery/export
+test twins, not here: this gate's default pass does not control the
+service's umask.
+
 ``--self-test`` is offline: it fabricates traces from a frozen table
 and proves the verifier rejects a 0666 create, a missing create, and a
 trace whose export never ran.  The live run requires
@@ -67,6 +84,14 @@ STRACE = "/usr/bin/strace"
 # must be created 0600.
 TEMP_PATTERNS = (re.compile(r"\.export\.tmp$"),
                  re.compile(r"\.iprange-publish-[0-9a-f]+\.tmp$"))
+# The switched pass also pins the flow's creator-only main file, its
+# readers table, and the worker control file: SecureCreatorOnly's
+# fchmod re-assert masks an openat-mode regression there for every
+# end-state test.
+SWITCHED_PATTERNS = TEMP_PATTERNS + (
+    re.compile(r"\.readers$"),
+    re.compile(r"\.iprange-v4-worker-[0-9a-f]+\.ctl$"),
+)
 
 # openat(AT_FDCWD, "path", FLAGS, 0MODE) = fd     (mode only with O_CREAT)
 OPENAT_CREATE = re.compile(
@@ -94,13 +119,14 @@ class TracedProduct:
     deadline.  Only the spawn is different (the strace prefix).
     """
 
-    def __init__(self, binary, work, trace_log):
+    def __init__(self, binary, work, trace_log, env=None):
         command = [STRACE, "-f", "-qq", "-e", "trace=openat",
                    "-o", trace_log, binary, "--jsonrpc"]
+        child_env = env if env is not None else {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
         self.proc = subprocess.Popen(
             command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, cwd=work,
-            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")})
+            stderr=subprocess.DEVNULL, cwd=work, env=child_env)
 
     def call(self, ident, method, params, timeout=30.0):
         request = {"jsonrpc": "2.0", "id": ident, "method": method,
@@ -148,43 +174,54 @@ def parse_create_modes(trace_path):
     return creates
 
 
-def verifier(creates, engine, findings):
+def verifier(creates, engine, findings, patterns=TEMP_PATTERNS,
+             subject="default pass", extra_names=()):
     """Assert the create-mode contract over one engine's parsed creates.
 
-    Returns the evidence record (also appends human-readable findings).
+    ``extra_names`` names creates whose openat is dirfd-relative (the
+    main file's create carries no distinguishing suffix), so the runner
+    passes the exact basename it asked for.
     """
+    names = set(extra_names)
     temps = {path: modes for path, modes in creates.items()
-             if any(pattern.search(path) for pattern in TEMP_PATTERNS)}
-    record = {"engine": engine,
+             if path in names
+             or any(pattern.search(path) for pattern in patterns)}
+    record = {"pass": subject, "engine": engine,
               "temp_creates": {path: [oct(m) for m in modes]
                                for path, modes in sorted(temps.items())}}
     if not temps:
         findings.append(
-            f"{engine}: no export-temp create appears in the trace — the "
-            "export never reached its private create, so the gate cannot "
-            "attest the mode")
+            f"{engine} ({subject}): no watched create appears in the "
+            "trace — the flow never reached its private create, so the "
+            "gate cannot attest the mode")
         record["verdict"] = "fail"
         return record
     bad = {path: [oct(m) for m in modes if m != 0o600]
            for path, modes in temps.items() if any(m != 0o600 for m in modes)}
     if bad:
         findings.append(
-            f"{engine}: creator-only export temp created with a mode other "
-            f"than 0600 (the pre-create window class): {bad}")
+            f"{engine} ({subject}): a creator-only create carried a mode "
+            f"other than 0600 (the pre-create window class): {bad}")
         record["verdict"] = "fail"
     else:
         record["verdict"] = "pass"
     return record
 
 
-def run_engine(binary, engine, work):
+def run_engine(binary, engine, work, switched=False):
     """Drive one create+export under strace; return the evidence record."""
-    trace_log = os.path.join(work, f"trace-{engine}.log")
-    main = os.path.join(work, f"source-{engine}.v4")
-    destination = os.path.join(work, f"out-{engine}.ranges")
-    service = TracedProduct(binary, work, trace_log)
+    suffix = "-switched" if switched else ""
+    trace_log = os.path.join(work, f"trace-{engine}{suffix}.log")
+    main = os.path.join(work, f"source-{engine}{suffix}.v4")
+    destination = os.path.join(work, f"out-{engine}{suffix}.ranges")
+    env = dict(os.environ, IPRANGE_CREATOR_ONLY="1") if switched else os.environ
+    service = TracedProduct(binary, work, trace_log, env=env)
     try:
         create_params = dict(CREATE_PARAMS, path=main)
+        if switched:
+            # The member is absent so the process switch drives the
+            # create (spec: a missing member follows IPRANGE_CREATOR_ONLY).
+            del create_params["creator_only"]
         created = service.call(1, "iprange.v1.database.create", create_params)
         if "error" in created:
             raise SystemExit(f"{engine}: create failed: {created['error']}")
@@ -197,7 +234,12 @@ def run_engine(binary, engine, work):
         service.close()
     creates = parse_create_modes(trace_log)
     findings = []
-    record = verifier(creates, engine, findings)
+    subject = ("switched pass (creator-only main/readers/control/temp)"
+               if switched else "default pass (creator-only export temp)")
+    record = verifier(creates, engine, findings,
+                      patterns=SWITCHED_PATTERNS if switched else TEMP_PATTERNS,
+                      subject=subject,
+                      extra_names=(os.path.basename(main),) if switched else ())
     record["trace"] = trace_log
     for line in findings:
         print(f"PROBLEM {line}")
@@ -279,18 +321,25 @@ def main():
     args.work = os.path.abspath(args.work)
     os.makedirs(args.work, exist_ok=True)
 
+    args.rust = os.path.abspath(args.rust)
+    args.go = os.path.abspath(args.go)
     records = []
     findings = []
     for engine, binary in (("rust", args.rust), ("go", args.go)):
-        record, engine_findings = run_engine(binary, engine, args.work)
-        records.append(record)
-        findings.extend(engine_findings)
+        for switched in (False, True):
+            record, engine_findings = run_engine(binary, engine, args.work,
+                                                 switched=switched)
+            records.append(record)
+            findings.extend(engine_findings)
 
     report = {"schema": REPORT_SCHEMA,
               "provenance": report_provenance(),
               "engines": records,
               "verdict": "pass" if not findings else "fail"}
-    write_committed_report(args.json_report, report)
+    write_committed_report(args.json_report, report,
+                           caller_paths=(("--go", args.go),
+                                         ("--rust", args.rust),
+                                         ("--work", args.work)))
     print(f"CREATE-MODE verdict={report['verdict']} "
           f"report={os.path.relpath(args.json_report)}")
     return 0 if not findings else 1

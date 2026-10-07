@@ -219,6 +219,18 @@ Open decisions:
   - (ffp P3) §15.6 now states the owner-bit floor (artifacts the process tree re-opens for writing keep owner r/w under any umask; group/other keep the process default). (ffp P3) REVIEWS.md's symlink-farm rule is withdrawn and replaced by the real-copy farm (`git archive`) — the sow0035 mid-round leaks (a tracked-file deletion, symlink write-leaks, a probe line) are cited as the reason. (ffp P3) The battery-summary disclosure (deferred Windows-held kind gates) is stated in the Battery paragraph of each round's kit status, not only under dispositions. (Multiple roles) The kit `head` now names the reviewed HEAD after the rotation commit.
   - Observed pre-existing defect candidate (recorded for role adjudication, outside creator-only scope): `iprange.v1.database.create` with a RELATIVE `path` fails both engines and both profiles with the misleading `unresolvable: creation never proved its parent directory identity` (absolute paths succeed; every committed harness uses absolute paths, which is why no gate saw it; reproduction matrix in the round-7 kit). Likely the create-resolution identity proof cannot bind a relative parent; a clean refusal (`invalid_path`) or documented support is the fix shape.
 - Round 6 fix batch (this commit): the create-mode gate, the pool bounds, the four-file split, failure-path hygiene, the spec and REVIEWS.md updates, the regenerated transcripts, and these records.
+- Round 7 (all seven roles at `8f47d339`): performance, fit-for-purpose, and portability PASS; tester, security, operations, and parity FAIL. Findings and resolutions:
+  - (tester P2 + operations P2, both proven by simulation) The pool bound's "bounded red" was a bounded GREEN for the most realistic wedge class: a task that records outcomes then wedges left rc=124 in TASKWALL only — `replay()` folded outcomes, not rc. Fixed: a nonzero task rc with non-empty outcomes emits a synthetic `[task ... wedge] MISMATCH` (simulated green-outcome-then-124 now reddens). The orphaned-grandchild possibility (timeout kills the task, not its descendants) remains disclosed residue.
+  - (security P2 + operations P2, mutation-proven both) The create-mode gate's coverage claim was overstated: it pinned only the export-temp spelling, while a live-namespace create-mode regression (main/readers) is silent to every end-state test (SecureCreatorOnly's fchmod re-asserts) and to the gate's default pass. Fixed: a second traced pass under `IPRANGE_CREATOR_ONLY=1` (create member absent — the switch drives it) asserts the main file (by exact basename — its openat is dirfd-relative), the readers table, the worker control file, and the export temp, per engine. Mutation-proven on a release build: a live-namespace `0600→0666` regression fails the switched pass with per-artifact attribution (main+readers 0o666 observed, ctl+temp clean); the wrong-site mutation (the `create()` wrapper the flow never reaches) correctly passes, which is how the flow's real path was confirmed. status.md's "the class" wording corrected to name what is pinned; the residual uncovered sites (gc envelope, scratch — not driven by create+export) stay covered by their end-state detectors and review.
+  - (parity P1, mutation-proven both engines) The unprotected exact-default contract (spec 15.6, this SOW's own sentence) had no exact pin: every committed assertion was a `!= 0600` negation, and a hard-coded 0644 passed both full suites while the true default under umask 027 is 0640. Fixed: exact-mode arms in both recovery end-to-end twins (umask 027 → exactly 0640, publication still asserted).
+  - (parity P2 + operations P2, records) The transcripts under-attested Go (a `-run` pattern that cannot match the hostile-umask test under a header claiming it did; the source-policy test absent) and one recorded command was unquoted (verbatim rc=127). Fixed: the generator (`v4/cli/gen_detector_transcripts.sh`, committed so the discipline is tooling) quotes via `printf %q`, carries dedicated entries for the previously-unattested Go detectors, and refuses to stage any entry whose rc is nonzero or whose output names no tests — 13 verified entries.
+  - (tester P3) The source-policy twins' "detected under umask 0" comments described an ambient the tests never set (false-red under umask 0077). Fixed: umask 0 set explicitly under the lock (with a `setUmask` no-op twin pair for the Go internal package).
+  - (portability P3) The un-gated files ran on FreeBSD where live coordination is unsupported (fail, not skip). Fixed: the Rust files gate to the live-supported platform set (linux/darwin/windows, the `creator_only_flag.rs` convention); the Go internal test calls the in-package `liveGate`.
+  - (parity P3) The control-file create error arms were asymmetric both ways. Fixed: Go's SecureCreatorOnly failure removes the file; Rust's floor metadata/set_permissions failure removes it.
+  - (five roles, P3 convergence) `create-mode.json` now rotates into committed evidence like every other axis (battery rotation pair + kind-coverage `--create-mode` consumption with identity checks: schema, verdict, both engines, both passes, non-empty watched creates). The checker registers its caller paths with the committed-report writer and absolutizes `--go/--rust`. A failed-gate report from the mutation run is staged in the round-8 kit evidence.
+  - (performance P2, kit hygiene) The round-7 audit found 14 farms containing a `.git` symlink into the live gitdir (roles adding git access to `git archive` farms). All removed (verified: zero remain; index clean); REVIEWS.md now prohibits any `.git` entry in farms and prescribes read-only `git -C` for repository questions.
+  - (ffp R7-F3, followup mapping) SOW-0036 (pending) records the relative-path finding with the corrected framing the reviews established: spec §Paths:189 permits relative inputs, three inconsistent failure shapes exist across create/export, `outcome_unknown` violates the proof-d taxonomy, the defect is platform-neutral and pre-existing (4966eafd), and the fix is a design decision (support per spec vs amend-and-refuse) that belongs to the user.
+- Round 7 fix batch (this commit): the wedge fold, the switched create-mode pass, the exact-default arms, the umask-0 and platform-gate fixes, the symmetric error arms, the create-mode evidence rotation with kind-gate consumption, the committed generator, the farm audit, and these records.
 
 ## Validation
 
@@ -244,7 +256,17 @@ Pending.
 
 ## Followup
 
-None yet.
+- SOW-0036 (pending): relative-path JSON-RPC inputs handled per spec —
+  the round-7 relative-path finding, mapped per the followup discipline
+  (fit-for-purpose R7-F3). Queued behind SOW-0030 per the user's
+  sequencing decision (2026-10-07).
+- Performance carried P3-1 (per-test timing attestation) and P3-2 (two
+  legacy tests.d cases over the 15 s policy): tracked for the legacy
+  test-suite owner, outside this SOW's scope (disclosed each round).
+- SOW-0017 (authenticated public snapshots, Phase 2): referenced by the
+  design spec as pending; the file does not exist in pending/ — to be
+  created when Phase 2 is scheduled (spec reference to be corrected at
+  that time or the SOW created then).
 
 ## Regression Log
 

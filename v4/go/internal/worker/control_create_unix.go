@@ -33,6 +33,10 @@ func createControlFile(path string, profile security.Profile) (*os.File, error) 
 	if creatorOnly {
 		if err := security.SecureCreatorOnly(f, profile); err != nil {
 			f.Close()
+			// Remove the failed control file exactly like the Rust
+			// twin's error paths: a leftover control path is residue
+			// the next create (O_EXCL) would trip over.
+			os.Remove(path)
 			return nil, workerSecurityFailure(err)
 		}
 	} else {

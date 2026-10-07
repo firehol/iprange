@@ -38,12 +38,25 @@ fn create(main: &Path, creator_only: bool) {
     assert_eq!(result.state, iprange_livedb::CreationState::Created);
 }
 
+#[cfg(unix)]
+unsafe fn source_policy_umask(mask: u32) -> u32 {
+    extern "C" {
+        fn umask(mask: u32) -> u32;
+    }
+    unsafe { umask(mask) }
+}
+
 #[test]
 fn source_policy_follows_the_sidecar_record() {
     let _lock = ENV_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
+    // umask 0 explicitly (unix): the mode assertions below assume it,
+    // and an ambient umask like 0077 would strip group/other bits from
+    // the unprotected create and false-red the != 0600 assertion.
+    #[cfg(unix)]
+    let mask = unsafe { source_policy_umask(0) };
     let directory = std::env::temp_dir().join(format!(
         "iprange-v4-source-policy-{}",
         std::process::id()
@@ -80,6 +93,8 @@ fn source_policy_follows_the_sidecar_record() {
     assert!(source_creator_only(&absent));
     std::env::set_var("IPRANGE_CREATOR_ONLY", "0");
     assert!(!source_creator_only(&absent));
+    #[cfg(unix)]
+    unsafe { source_policy_umask(mask) };
     match previous {
         Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
         None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),

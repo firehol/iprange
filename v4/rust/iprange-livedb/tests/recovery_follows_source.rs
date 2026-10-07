@@ -5,7 +5,7 @@
 //! arm the round-1 fix restored), and an unprotected source does not
 //! force 0600.
 
-#![cfg(any(unix, windows))]
+#![cfg(any(target_os = "linux", target_vendor = "apple", target_os = "windows"))]
 
 use std::fs;
 #[cfg(unix)]
@@ -111,6 +111,48 @@ fn recovery_follows_the_source_sidecar_end_to_end() {
     {
         let mode = fs::metadata(&destination).unwrap().permissions().mode() & 0o777;
         assert_ne!(mode, 0o600, "unprotected source forced mode 0600");
+    }
+
+    // The unprotected exact-default arm (parity round 7): spec 15.6
+    // says an unprotected artifact keeps the umask default, and every
+    // earlier pin was a != 0600 negation — a hard-coded 0644 passed the
+    // whole suite while the true default under umask 027 is 0640. This
+    // arm pins the exact mode; the owner-bit floor keeps 0640 (owner
+    // bits present) at 0640.
+    #[cfg(unix)]
+    {
+        let plain = directory.join("plain.v4");
+        let inspection = inspect_recovery_candidates(
+            &plain,
+            RecoveryInspectionMode::Live,
+            &ValidationBudget::heap_only(1 << 20, 8),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let candidate = inspection.candidate(0).unwrap().clone();
+        let exact_mask = unsafe { test_umask(0o027) };
+        let exact = directory.join("exact-out.v4");
+        let result = recover_live(
+            &plain,
+            candidate,
+            &exact,
+            &RecoveryBudget::heap_only(16 << 20, 100_000, 4),
+            &mut |_envelope: &iprange_livedb::recovery::RecoveryUnknownEnvelope| {
+                Ok(RecoverySinkControl::Continue)
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        unsafe { test_umask(exact_mask) };
+        let mode = fs::metadata(&exact).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o640,
+            "unprotected recovery mode is {mode:o}, want the exact umask default 0640 (a hard-coded 0644 would fail this arm)"
+        );
+        assert_eq!(
+            result.publication.publication,
+            iprange_livedb::publication::PublicationStatus::Published
+        );
     }
     #[cfg(unix)]
     unsafe { test_umask(mask) };

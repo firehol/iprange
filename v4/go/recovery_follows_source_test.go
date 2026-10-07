@@ -87,6 +87,31 @@ func TestRecoveryFollowsSourceEndToEnd(t *testing.T) {
 			t.Fatal("unprotected recovery forced mode 0600")
 		}
 	}
+
+	// The unprotected exact-default arm (parity round 7): spec 15.6
+	// says an unprotected artifact keeps the umask default, and every
+	// earlier pin was a != 0600 negation — a hard-coded 0644 passed the
+	// whole suite while the true default under umask 027 is 0640. This
+	// arm pins the exact mode; the owner-bit floor keeps 0640 (owner
+	// bits present) at 0640.
+	if runtime.GOOS != "windows" {
+		setUmask(0o027)
+		exact := filepath.Join(dir, "exact-out.v4")
+		result, failure = RecoverLive(plain, candidates.Candidate(0), exact, budget, nil, nil)
+		if failure != nil {
+			t.Fatalf("recover exact-default: %v", failure.Cause)
+		}
+		if result.Publication.Publication != PublicationPublished {
+			t.Fatalf("exact-default publication = %v", result.Publication.Publication)
+		}
+		info, err := os.Stat(exact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode != 0o640 {
+			t.Fatalf("unprotected recovery mode = %#o, want the exact umask default 0640 (a hard-coded 0644 would fail this arm)", mode)
+		}
+	}
 }
 
 // The switch-ON arm of recovery-follows-source: an unprotected source

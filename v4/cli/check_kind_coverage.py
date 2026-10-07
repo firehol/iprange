@@ -2612,6 +2612,37 @@ def _surface_binary_identity(path, label, engine, record, implementation_of,
             return
 
 
+def create_mode_evidence(path, report, problems):
+    """Re-validate the committed create-mode report inside the kind gate.
+
+    The shape gate owns the openat-mode observation; the kind gate owns
+    the identity invariants: one schema, a pass verdict, both engines
+    with both passes (default and switched), and every per-pass verdict
+    pass. A purchased verdict fails here.
+    """
+    if report.get("schema") != "iprange-cli-create-mode-report-v1":
+        problems.append(f"create-mode {path}: unexpected schema "
+                        f"{report.get('schema')!r}")
+        return
+    if report.get("verdict") != "pass":
+        problems.append(f"create-mode {path}: verdict "
+                        f"{report.get('verdict')!r}; a creator-only create "
+                        "below 0600 is a product defect")
+        return
+    engines = {entry.get("engine") for entry in report.get("engines", [])
+               if isinstance(entry, dict)}
+    if engines != {"rust", "go"}:
+        problems.append(f"create-mode {path}: engines {sorted(engines)}; "
+                        "both engines must be attested")
+        return
+    for entry in report.get("engines", []):
+        if entry.get("verdict") != "pass" or not entry.get("temp_creates"):
+            problems.append(
+                f"create-mode {path}: {entry.get('engine')} pass "
+                f"{entry.get('pass')!r} verdict {entry.get('verdict')!r} "
+                "with no watched creates")
+
+
 def fifo_surface_evidence(path, report, implementation_of, ledger, problems,
                           verify_binaries=False, fixture_shas=None):
     """Re-validate the committed FIFO-surface report inside the kind gate.
@@ -5185,6 +5216,7 @@ def _thread_census_problems(where, method, small, large, problems):
 
 def assess(matrix_paths, crash_paths, verify_binaries=False,
             verify_cases=False, fifo_paths=(), throughput_paths=(),
+            create_mode_paths=(),
             sha256_ledger=None, parity_paths=None, coverage_paths=None,
             crash_negative_paths=None, windows_paths=None,
             guard_paths=None, resource_paths=None, golden_paths=None,
@@ -5250,8 +5282,9 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
     sensitivity_paths = list(sensitivity_paths or [])
     posix_guard_paths = list(posix_guard_paths or [])
     race_paths = list(race_paths or [])
+    create_mode_paths = list(create_mode_paths or [])
     anchors = list(matrix_paths) + list(crash_paths) + list(fifo_paths) \
-        + list(throughput_paths)
+        + list(throughput_paths) + list(create_mode_paths)
     if require_consumed:
         parity_paths = _resolve_consumed(parity_paths, "refusal-class-parity",
                                          anchors, problems)
@@ -5626,6 +5659,10 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
         if isinstance(report, dict):
             throughput_evidence(path, report, implementation_of, ledger,
                                 problems, verify_binaries=verify_binaries)
+    for path in create_mode_paths:
+        report = _load_report(path, problems)
+        if isinstance(report, dict):
+            create_mode_evidence(path, report, problems)
 
     # --- the wave's newest artifacts, consumed.
     attested_digests = set()
@@ -5865,6 +5902,11 @@ def main():
                         metavar="PATH",
                         help="the throughput attestation of the same revision "
                              "(required: its census is consumed evidence)")
+    parser.add_argument("--create-mode", action="append", default=[],
+                        metavar="PATH",
+                        help="the create-mode shape report of the same "
+                             "revision (required when supplied by the "
+                             "battery: its verdict is consumed evidence)")
     parser.add_argument("--sha256-ledger", default=None, metavar="PATH",
                         help="a sha256sum-format ledger of the staged "
                              "binaries; when supplied, every surface-report "
@@ -5960,6 +6002,7 @@ def main():
         args.matrix, args.crash, verify_binaries=True,
         verify_cases=True, fifo_paths=args.fifo_surface,
         throughput_paths=args.throughput,
+        create_mode_paths=args.create_mode,
         sha256_ledger=args.sha256_ledger,
         parity_paths=args.refusal_class_parity,
         coverage_paths=args.coverage_go,

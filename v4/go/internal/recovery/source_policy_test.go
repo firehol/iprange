@@ -21,7 +21,13 @@ import (
 // switch-following default of a protected source would produce a 0666
 // artifact.
 func TestSourcePolicyFollowsTheSidecarRecord(t *testing.T) {
+	liveGate(t)
 	t.Setenv("IPRANGE_CREATOR_ONLY", "")
+	// umask 0 explicitly: the mode discrimination below assumes it, and
+	// an ambient umask like 0077 would strip group/other bits from the
+	// unprotected create and false-red the != 0600 assertion.
+	previous := setUmask(0)
+	defer setUmask(previous)
 	dir := t.TempDir()
 	tag := [16]byte{}
 	copy(tag[:], []byte("asn"))
