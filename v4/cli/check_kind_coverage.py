@@ -5337,6 +5337,7 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
         "matrix": list(matrix_paths), "crash": list(crash_paths),
         "crash-negative": crash_negative_paths,
         "fifo-surface": list(fifo_paths),
+        "create-mode": list(create_mode_paths),
         "throughput": list(throughput_paths),
         "refusal-class-parity": parity_paths,
         "coverage-go": coverage_paths,
@@ -6089,7 +6090,8 @@ def consumed_report_set(args):
             ("golden", args.golden),
             ("sensitivity", args.sensitivity),
             ("guard-posix", args.guard_posix),
-            ("race-battery", args.race_battery)):
+            ("race-battery", args.race_battery),
+            ("create-mode", args.create_mode)):
         resolution[role] = _resolve_consumed(list(flag_value), role, anchors,
                                             problems)
     return resolution, problems
@@ -6326,6 +6328,31 @@ def _self_test():
                 "leftover_processes": leftover or [],
                 "failed": failed}
 
+
+    def create_mode_report_fixture():
+        """A create-mode shape report with both engines and both passes.
+
+        The observation itself is owned by check_create_mode_shape.py;
+        the kind gate consumes this report for the (engine, pass) set,
+        the switched pass's four watched classes, and the verdict.
+        """
+        entries = []
+        for engine in ("go", "rust"):
+            for subject in ("default pass (creator-only export temp)",
+                            "switched pass (creator-only "
+                            "main/readers/control/temp)"):
+                watched = ({"control": 1, "main": 1, "readers": 1, "temp": 1}
+                           if subject.startswith("switched")
+                           else {"temp": 1})
+                entries.append({
+                    "engine": engine, "pass": subject, "verdict": "pass",
+                    "temp_creates": {f"watched-{engine}-{len(entries)}":
+                                     ["0o600"]},
+                    "watched": watched,
+                })
+        return {"schema": "iprange-cli-create-mode-report-v1",
+                "git_head": revision,
+                "verdict": "pass", "engines": entries}
 
     def fifo_surface_report():
         """A FIFO-surface report whose refusals match the committed table.
@@ -7238,6 +7265,7 @@ def _self_test():
         if name.startswith("crash-") and not name.startswith("crash-negative")
         and name.endswith(".json"))
     genuine_fifo = [os.path.join(evidence_dir, "fifo-surface.json")]
+    genuine_create_mode = [os.path.join(evidence_dir, "create-mode.json")]
     genuine_throughput = [os.path.join(evidence_dir, "throughput.json")]
     genuine_parity = os.path.join(evidence_dir, "refusal-class-parity.json")
     genuine_coverage = os.path.join(evidence_dir, "coverage-go.json")
@@ -7284,6 +7312,7 @@ def _self_test():
         battery_sensitivity = [os.path.join(work, "sensitivity.json")]
         battery_guard_posix = [os.path.join(work, "guard-posix.json")]
         battery_race = [os.path.join(work, "race-battery.json")]
+        battery_create_mode = [os.path.join(work, "create-mode.json")]
         assign(battery_fifo[0], fifo_surface_report())
         assign(battery_throughput[0], throughput_report())
         assign(battery_parity[0], parity_report())
@@ -7296,10 +7325,12 @@ def _self_test():
         assign(battery_sensitivity[0], sensitivity_report())
         assign(battery_guard_posix[0], posix_guard_report())
         assign(battery_race[0], race_battery_report())
+        assign(battery_create_mode[0], create_mode_report_fixture())
 
         manifest_serial = [0]
 
-        def manifest_over(matrices, crashes, fifo, throughput, parity,
+        def manifest_over(matrices, crashes, fifo, create_mode,
+                          throughput, parity,
                           coverage, negative, windows, ledger=None,
                           guard=None, resource=None, golden=None,
                           sensitivity=None, posix_guard=None, race=None):
@@ -7319,14 +7350,15 @@ def _self_test():
                                    parity, coverage, negative, windows,
                                    guard=guard, resource=resource,
                                    golden=golden, sensitivity=sensitivity,
-                                   posix_guard=posix_guard, race=race),
+                                   posix_guard=posix_guard, race=race,
+                                   create_mode=create_mode),
                 ledger_path=ledger)
             return path
 
         def consumed_set(matrices, crashes, fifo, throughput, parity,
                          coverage, negative, windows, guard=None,
                          resource=None, golden=None, sensitivity=None,
-                         posix_guard=None, race=None):
+                         posix_guard=None, race=None, create_mode=None):
             """The role map of one battery, as the manifest records it."""
 
             return {"matrix": list(matrices), "crash": list(crashes),
@@ -7346,7 +7378,9 @@ def _self_test():
                     "guard-posix": list(posix_guard if posix_guard is not None
                                         else battery_guard_posix),
                     "race-battery": list(race if race is not None
-                                         else battery_race)}
+                                         else battery_race),
+                    "create-mode": list(create_mode if create_mode is not None
+                                        else battery_create_mode)}
         battery_manifest_path = os.path.join(work, "battery-manifest.json")
         write_battery_manifest(
             battery_manifest_path,
@@ -7422,6 +7456,7 @@ def _self_test():
                 break
             if head == committed_revision:
                 kwargs.setdefault("fifo_paths", genuine_fifo)
+                kwargs.setdefault("create_mode_paths", genuine_create_mode)
                 kwargs.setdefault("throughput_paths", genuine_throughput)
                 kwargs.setdefault("parity_paths", genuine_conforming_parity)
                 kwargs.setdefault("coverage_paths", [genuine_coverage])
@@ -7436,6 +7471,8 @@ def _self_test():
                 kwargs.setdefault("race_paths", [genuine_race])
             else:
                 kwargs.setdefault("fifo_paths", battery_fifo)
+                kwargs.setdefault("create_mode_paths",
+                                  battery_create_mode)
                 kwargs.setdefault("throughput_paths", battery_throughput)
                 kwargs.setdefault("parity_paths", battery_parity)
                 kwargs.setdefault("coverage_paths", battery_coverage)
@@ -7454,6 +7491,7 @@ def _self_test():
                 # the binding name a manifest explicitly.
                 kwargs["battery_manifest"] = manifest_over(
                     matrix_paths, crash_paths, kwargs["fifo_paths"],
+                    kwargs.get("create_mode_paths", []),
                     kwargs["throughput_paths"], kwargs["parity_paths"],
                     kwargs["coverage_paths"], kwargs["crash_negative_paths"],
                     kwargs["windows_paths"],
@@ -8222,6 +8260,7 @@ def _self_test():
 
         problems, _c, _s = outer_assess(
             genuine_matrix_paths, genuine_crash_reports, fifo_paths=genuine_fifo,
+            create_mode_paths=genuine_create_mode,
             throughput_paths=genuine_throughput,
             parity_paths=[genuine_parity],
             coverage_paths=[genuine_coverage],
@@ -8298,8 +8337,11 @@ def _self_test():
             sensitivity_reports = []
             posix_guard_reports = []
             race_reports = []
+            create_mode_reports = []
             for name, bucket, paths in (
                     ("fifo", fifo_reports, genuine_fifo),
+                    ("create-mode", create_mode_reports,
+                     genuine_create_mode),
                     ("throughput", throughput_reports, genuine_throughput),
                     ("parity", parity_reports, genuine_conforming_parity),
                     ("coverage", coverage_reports, [genuine_coverage]),
@@ -8326,7 +8368,8 @@ def _self_test():
                       "golden": golden_reports,
                       "sensitivity": sensitivity_reports,
                       "guard-posix": posix_guard_reports,
-                      "race-battery": race_reports}
+                      "race-battery": race_reports,
+                      "create-mode": create_mode_reports}
             if mutator_kind in chosen:
                 mutator(chosen[mutator_kind])
             else:
@@ -8346,6 +8389,15 @@ def _self_test():
                     work, f"genuine-{label}-fifo-{index}.json")
                 assign(path, report)
                 fifo_paths.append(path)
+            create_mode_paths = assess_kwargs.pop("create_mode_paths",
+                                                  None) or []
+            if not create_mode_paths:
+                for index, report in enumerate(create_mode_reports):
+                    path = os.path.join(
+                        work, f"genuine-{label}-cmode-{index}.json")
+                    assign(path, report)
+                    create_mode_paths.append(path)
+            assess_kwargs.setdefault("create_mode_paths", create_mode_paths)
             throughput_paths = []
             for index, report in enumerate(throughput_reports):
                 path = os.path.join(
@@ -8400,7 +8452,8 @@ def _self_test():
                 bound = ledger if manifest_ledger is _INHERIT \
                     else manifest_ledger
                 assess_kwargs["battery_manifest"] = manifest_over(
-                    paths, [crash_mutated], fifo_paths, throughput_paths,
+                    paths, [crash_mutated], fifo_paths,
+                    create_mode_paths, throughput_paths,
                     parity_paths, coverage_paths, negative_paths,
                     windows_paths, ledger=bound, guard=guard_paths,
                     resource=resource_paths, golden=golden_paths,
@@ -8414,6 +8467,8 @@ def _self_test():
                 pass
             problems, _c, _s = outer_assess(
                 paths, [crash_mutated], fifo_paths=fifo_paths,
+                create_mode_paths=assess_kwargs.pop(
+                    "create_mode_paths", create_mode_paths),
                 throughput_paths=throughput_paths,
                 parity_paths=parity_paths, coverage_paths=coverage_paths,
                 crash_negative_paths=negative_paths,
@@ -9596,13 +9651,15 @@ def _self_test():
             assign(race_paths[0], extra.get("race_report")
                    or _json.load(open(genuine_race, encoding="utf-8")))
             manifest = extra.get("battery_manifest") or manifest_over(
-                paths, [crash_path_local], fifo_paths, throughput_paths,
+                paths, [crash_path_local], fifo_paths,
+                create_mode_paths, throughput_paths,
                 parity_paths, coverage_paths, negative_paths, windows_paths,
                 ledger=ledger, guard=guard_paths, resource=resource_paths,
                 golden=golden_paths, sensitivity=sensitivity_paths,
                 posix_guard=posix_guard_paths, race=race_paths)
             problems, _c, _s = outer_assess(
                 paths, [crash_path_local], fifo_paths=fifo_paths,
+            create_mode_paths=genuine_create_mode,
                 throughput_paths=throughput_paths,
                 parity_paths=parity_paths, coverage_paths=coverage_paths,
                 crash_negative_paths=negative_paths,
@@ -9795,7 +9852,9 @@ def _self_test():
                 }}
             problems, _c, _s = outer_assess(
                 genuine_matrix_paths, genuine_crash_reports,
-                fifo_paths=genuine_fifo, throughput_paths=genuine_throughput)
+                fifo_paths=genuine_fifo,
+                create_mode_paths=genuine_create_mode,
+                throughput_paths=genuine_throughput)
             # Match the entry the control itself injected, by case name and
             # by the verdict word, so this cannot be satisfied by the
             # unrelated "undeclared or stale failed case(s)" counter that the
@@ -10552,6 +10611,8 @@ def _self_test():
                 _json.dump(document, stream, sort_keys=True, indent=1)
             problems, _c, _s = outer_assess(
                 paths, [crash_path_local], fifo_paths=extras["fifo"],
+                create_mode_paths=extras.get("create_mode",
+                                             genuine_create_mode),
                 throughput_paths=extras["throughput"],
                 parity_paths=extras["parity"],
                 coverage_paths=extras["coverage"],
@@ -10792,6 +10853,7 @@ def _self_test():
         # its reports is part of what being genuine means here.
         problems, _c, _s = outer_assess(
             genuine_matrix_paths, genuine_crash_reports, fifo_paths=genuine_fifo,
+            create_mode_paths=genuine_create_mode,
             throughput_paths=genuine_throughput,
             parity_paths=[genuine_parity],
             coverage_paths=[genuine_coverage],
@@ -10819,6 +10881,7 @@ def _self_test():
         problems, _c, _s = outer_assess(
             genuine_matrix_paths, genuine_crash_reports, verify_binaries=True,
             verify_cases=True, fifo_paths=genuine_fifo,
+            create_mode_paths=genuine_create_mode,
             throughput_paths=genuine_throughput,
             parity_paths=[genuine_parity],
             coverage_paths=[genuine_coverage],
