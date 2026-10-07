@@ -69,6 +69,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from command_sanitize import (  # noqa: E402
+    require_paths_outside_profile,
     report_provenance,
     run_shared_self_test,
     write_committed_report,
@@ -387,6 +388,13 @@ def main():
         print(f"FAIL: {STRACE} is required (this gate observes openat "
               "modes; a silent skip would make it nonexistent)")
         return 1
+    # The input-side privacy net (the shared tier's standing shape): a
+    # personal path can only reach the report through a caller-supplied
+    # option, so refuse it before any arm executes.
+    require_paths_outside_profile((("--go", args.go),
+                                   ("--rust", args.rust),
+                                   ("--work", args.work),
+                                   ("--json-report", args.json_report)))
     # Absolute work dir: the create resolution's parent-directory identity
     # proof is driven with absolute paths everywhere else, and a relative
     # --work would trip the relative-path create limitation instead of this
