@@ -172,8 +172,7 @@ impl Directory {
         // changes nothing.
         {
             use std::os::unix::fs::PermissionsExt as _;
-            let floored = file
-                .metadata()
+            file.metadata()
                 .and_then(|metadata| {
                     let mode = metadata.permissions().mode() | 0o600;
                     file.set_permissions(std::fs::Permissions::from_mode(mode))
@@ -182,7 +181,6 @@ impl Directory {
                     operation: "floor created file owner bits",
                     source,
                 })?;
-            let _ = floored;
         }
         Ok(file)
     }

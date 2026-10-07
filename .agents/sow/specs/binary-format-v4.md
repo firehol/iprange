@@ -2361,8 +2361,13 @@ clears its stale bytes.
 A live database created with the creator-only flag uses creator-only
 access. POSIX mode is exactly `0600`, independent of umask; Windows uses
 a protected descriptor for the effective user. A live database created
-without the flag uses the process umask and the directory default.
-Every other product file follows that same choice. A publication
+without the flag uses the process umask and the directory default, and
+every artifact the process tree itself re-opens for writing (the worker
+control file, a worker-resumed publication attempt, a creator-only
+export) has its owner read/write bits floored after creation: group and
+other keep the umask default, and a umask that strips owner bits cannot
+break the process's own re-open. Every other product file follows that
+same choice. A publication
 reservation, snapshot private file, recovery scratch file, worker
 control file, and garbage-collection envelope are creator-only only when
 the source database is, or when the process switch

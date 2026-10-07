@@ -130,11 +130,14 @@ each kept a full copy of the repo tree *with its cargo/go/C build target*
 its source; they are mandatory:
 
 - Roles must **never copy a buildable repo tree into the sandbox**. Probes
-  that need source mutations use a **symlink farm**: symlink every file of
-  the tree into the sandbox and materialize only the mutated file(s).
-  Materializing means **replacing the link itself** — `cp --remove-destination
-  <src> <link>` or `ln -sf` — never writing *through* it: `cp`, `open('w')`
-  and editors follow symlinks and will mutate the real tree. Probes that
+  that need source mutations use a **real-copy farm**:
+  `git archive HEAD | tar -x -C <sandbox>` and edit/mutate the copy —
+  the sandbox shares nothing with the tracked tree, so no probe can
+  write through to it. (The pre-2026-10 shape — a symlink farm with
+  materialized mutations — is **withdrawn**: the sow0035 rounds proved
+  member symlinks are a write-leak surface; three separate sandbox
+  leaks mutated or deleted tracked files mid-round, contaminating
+  concurrent reviews.) Probes that
   need compiled code use the staged binaries in `.local/shared/binaries/` —
   not a private build.
 - If a role genuinely must build, it sets `CARGO_TARGET_DIR`/`GOCACHE` to
@@ -342,8 +345,8 @@ Binding details recorded from user decisions 2026-09-16:
 - Sandbox: `.local/<role>/` only, plus read access to `.local/shared/` and
   the repo. Small probes there must be under `nice` with explicit timeouts;
   no heavy batteries, no `pkill`/`killall`; kill only own children (track
-  PIDs). No whole-tree copies with build targets — use a symlink farm plus
-  the materialized mutated file(s), and shared binaries
+  PIDs). No whole-tree copies with build targets — use a real-copy farm
+  from `git archive` plus the mutated file(s), and shared binaries
   (see § Kit hygiene); the sandbox must be ≤ 1 GB when your round ends.
 - **Deliberation budget (binding):** roles have no ambient clock or turn
   counter, so the dispatch brief must carry the protocol and the role must

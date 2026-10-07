@@ -1,13 +1,15 @@
 //! The recovery destination's source-policy read follows the sidecar
 //! record (spec 15.6): a sidecar that records protected answers
 //! protected, one that records unprotected answers unprotected, and a
-//! path with no sidecar follows the process switch. Detected under
-//! umask 0, where a switch-following default for a protected source
-//! would produce a 0666 artifact.
-
-#![cfg(unix)]
+//! path with no sidecar follows the process switch. The classifier
+//! assertions run on every platform (Windows protection is the DACL,
+//! not mode bits); the mode discrimination is POSIX-only, detected
+//! under umask 0 where a switch-following default for a protected
+//! source would produce a 0666 artifact, and the FIFO twin is a unix
+//! concept outright.
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
@@ -54,8 +56,11 @@ fn source_policy_follows_the_sidecar_record() {
         source_creator_only(&protected),
         "protected source answered unprotected"
     );
-    let mode = fs::metadata(&protected).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "protected create did not keep mode 0600");
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(&protected).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "protected create did not keep mode 0600");
+    }
 
     let unprotected = directory.join("plain.iprdb");
     create(&unprotected, false);
@@ -63,8 +68,11 @@ fn source_policy_follows_the_sidecar_record() {
         !source_creator_only(&unprotected),
         "unprotected source answered protected"
     );
-    let mode = fs::metadata(&unprotected).unwrap().permissions().mode() & 0o777;
-    assert_ne!(mode, 0o600, "unprotected create forced mode 0600");
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(&unprotected).unwrap().permissions().mode() & 0o777;
+        assert_ne!(mode, 0o600, "unprotected create forced mode 0600");
+    }
 
     // No sidecar (every immutable source): the process switch decides.
     let absent = directory.join("absent.iprdb");
@@ -80,6 +88,7 @@ fn source_policy_follows_the_sidecar_record() {
     let _ = fs::remove_dir_all(&directory);
 }
 
+#[cfg(unix)]
 #[test]
 fn classifier_refuses_a_fifo_at_the_sidecar_name() {
     use std::os::unix::fs::FileTypeExt;
@@ -138,6 +147,7 @@ fn classifier_refuses_a_fifo_at_the_sidecar_name() {
     let _ = fs::remove_dir_all(&directory);
 }
 
+#[cfg(unix)]
 unsafe fn libc_mkfifo(path: *const std::os::raw::c_char, mode: u32) -> i32 {
     extern "C" {
         fn mkfifo(path: *const std::os::raw::c_char, mode: u32) -> i32;

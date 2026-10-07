@@ -1,10 +1,9 @@
-//go:build !windows
-
 package iprangedb
 
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -12,8 +11,14 @@ import (
 // protected source recovers to a 0600 output through the worker (the
 // parent creates the attempt under the source policy, and the worker
 // resumes it under the policy the attempt facts record), and an
-// unprotected source does not force 0600. Detected under umask 0200,
-// which distinguishes an exact-0600 set from a plain 0600 create.
+// unprotected source does not force 0600. The publication assertions
+// run on every platform the live-creation gate allows (the worker
+// harness cross-builds for windows too); only the mode assertions are
+// POSIX, because Windows protection is the DACL, not mode bits.
+// Detected under umask 0, which distinguishes a switch-following
+// default (0666) from the source-following 0600; the exact-0600 set's
+// umask independence and the worker path's hostile-umask survival are
+// pinned separately.
 func TestRecoveryFollowsSourceEndToEnd(t *testing.T) {
 	installWorkerForTest(t)
 	requireLiveCreation(t)
@@ -46,12 +51,14 @@ func TestRecoveryFollowsSourceEndToEnd(t *testing.T) {
 	if result.Publication.Publication != PublicationPublished {
 		t.Fatalf("protected publication = %v", result.Publication.Publication)
 	}
-	info, err := os.Stat(protectedOut)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Fatalf("protected recovery mode = %#o, want 0600 end to end (a switch-following default would stay 0666 under umask 0)", mode)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(protectedOut)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Fatalf("protected recovery mode = %#o, want 0600 end to end (a switch-following default would stay 0666 under umask 0)", mode)
+		}
 	}
 
 	plain := filepath.Join(dir, "plain.v4")
@@ -71,12 +78,14 @@ func TestRecoveryFollowsSourceEndToEnd(t *testing.T) {
 	if result.Publication.Publication != PublicationPublished {
 		t.Fatalf("plain publication = %v", result.Publication.Publication)
 	}
-	info, err = os.Stat(plainOut)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode := info.Mode().Perm(); mode == 0o600 {
-		t.Fatal("unprotected recovery forced mode 0600")
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(plainOut)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode == 0o600 {
+			t.Fatal("unprotected recovery forced mode 0600")
+		}
 	}
 }
 
@@ -113,12 +122,14 @@ func TestRecoveryFollowsSourceWithSwitchOn(t *testing.T) {
 	if result.Publication.Publication != PublicationPublished {
 		t.Fatalf("plain publication = %v", result.Publication.Publication)
 	}
-	info, err := os.Stat(plainOut)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode := info.Mode().Perm(); mode == 0o600 {
-		t.Fatal("switch-on worker forced 0600 on an unprotected source: the recorded facts must win over the process switch")
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(plainOut)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode == 0o600 {
+			t.Fatal("switch-on worker forced 0600 on an unprotected source: the recorded facts must win over the process switch")
+		}
 	}
 }
 

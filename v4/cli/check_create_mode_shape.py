@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""Committed create-mode shape gate: a creator-only export's private
+temp is created with exactly mode 0600 at ``openat`` — never 0666 with
+a later chmod.
+
+Why this gate exists
+--------------------
+The mode of a file AFTER creation is pinned by ordinary end-state
+tests, but the create-mode argument itself is transient: a regression
+from ``openat(..., 0600)`` to ``openat(..., 0666)`` followed by the
+same chmod leaves every end-state assertion green while reopening the
+world-readable window between create and chmod (the review-round 2/4/5
+recurrence on this exact line).  The only faithful detector is the
+``openat`` mode argument itself, observed through ``strace`` on the
+staged product binaries.
+
+Authority and expectations
+--------------------------
+Both engines must create a creator-only export temp with mode 0600 at
+creation.  An engine that creates it 0666 first fails this gate even
+if the final mode is 0600.  Unprotected creates are out of scope here:
+their contract is the process default plus the owner-bit floor, and
+the floor's post-create re-assert is visible to ordinary tests.
+
+Usage
+-----
+    nice python3 v4/cli/check_create_mode_shape.py --go BIN --rust BIN \\
+        --work EMPTY_DIR [--json-report FILE]
+
+    nice python3 v4/cli/check_create_mode_shape.py --self-test
+
+``--self-test`` is offline: it fabricates traces from a frozen table
+and proves the verifier rejects a 0666 create, a missing create, and a
+trace whose export never ran.  The live run requires
+``/usr/bin/strace`` (the throughput harness's convention); a host
+without it fails rather than skipping, because a gate that silently
+skips is a gate that does not exist.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+sys.dont_write_bytecode = True
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from command_sanitize import (  # noqa: E402
+    report_provenance,
+    run_shared_self_test,
+    write_committed_report,
+)
+
+REPORT_SCHEMA = "iprange-cli-create-mode-report-v1"
+DEFAULT_REPORT = os.path.join(_HERE, "evidence", "create-mode.json")
+STRACE = "/usr/bin/strace"
+
+# The export temp's private name (CLI scenario-E shape) and the
+# publication namespace's attempt name; a creator-only export's temp is
+# one of these two spellings depending on the writing path, and both
+# must be created 0600.
+TEMP_PATTERNS = (re.compile(r"\.export\.tmp$"),
+                 re.compile(r"\.iprange-publish-[0-9a-f]+\.tmp$"))
+
+# openat(AT_FDCWD, "path", FLAGS, 0MODE) = fd     (mode only with O_CREAT)
+OPENAT_CREATE = re.compile(
+    r"openat\([^,]+, \"([^\"]+)\", [^)]*O_CREAT[^)]*, 0([0-7]{3,4})\)")
+
+CREATE_PARAMS = {"path": None, "family": "ipv4", "value_kind": "membership",
+                 "structure_kind": "none",
+                 "value_tag": {"text": "cmode"}, "reader_capacity": 8,
+                 "creator_only": True}
+EXPORT_PARAMS_SKELETON = {
+    "source": {"path": None, "mode": "live"},
+    "view": {"kind": "selection", "selection": {"mode": "all"}},
+    "format": "ranges", "destination": None,
+    "publication_policy": "fail_if_exists",
+    "result_budget": {"max_rows": "1000000", "max_output_bytes": "104857600",
+                      "max_open_files": 8},
+}
+
+
+class TracedProduct:
+    """One ``--jsonrpc`` child under ``strace -f -e trace=openat``.
+
+    The service-driving shape is the committed FIFO-surface gate's
+    ``Product``: newline-delimited frames, one selector read with a
+    deadline.  Only the spawn is different (the strace prefix).
+    """
+
+    def __init__(self, binary, work, trace_log):
+        command = [STRACE, "-f", "-qq", "-e", "trace=openat",
+                   "-o", trace_log, binary, "--jsonrpc"]
+        self.proc = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, cwd=work,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")})
+
+    def call(self, ident, method, params, timeout=30.0):
+        request = {"jsonrpc": "2.0", "id": ident, "method": method,
+                   "params": params}
+        self.proc.stdin.write(
+            (json.dumps(request, separators=(",", ":")) + "\n").encode())
+        self.proc.stdin.flush()
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise SystemExit(f"{method} timed out after {timeout}s")
+            line = self.proc.stdout.readline()
+            if not line:
+                raise SystemExit(f"{method}: service closed stdout")
+            response = json.loads(line)
+            if response.get("id") == ident:
+                return response
+            # Notifications and unrelated ids are not expected on this
+            # quiet service; anything else is a protocol defect.
+            raise SystemExit(f"{method}: unexpected frame {response!r}")
+
+    def close(self):
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait()
+
+
+def parse_create_modes(trace_path):
+    """Return {path: [mode, ...]} for every O_CREAT openat in the trace."""
+    creates = {}
+    with open(trace_path, "r", errors="replace") as stream:
+        for line in stream:
+            match = OPENAT_CREATE.search(line)
+            if not match:
+                continue
+            path, mode = match.group(1), int(match.group(2), 8)
+            creates.setdefault(path, []).append(mode)
+    return creates
+
+
+def verifier(creates, engine, findings):
+    """Assert the create-mode contract over one engine's parsed creates.
+
+    Returns the evidence record (also appends human-readable findings).
+    """
+    temps = {path: modes for path, modes in creates.items()
+             if any(pattern.search(path) for pattern in TEMP_PATTERNS)}
+    record = {"engine": engine,
+              "temp_creates": {path: [oct(m) for m in modes]
+                               for path, modes in sorted(temps.items())}}
+    if not temps:
+        findings.append(
+            f"{engine}: no export-temp create appears in the trace — the "
+            "export never reached its private create, so the gate cannot "
+            "attest the mode")
+        record["verdict"] = "fail"
+        return record
+    bad = {path: [oct(m) for m in modes if m != 0o600]
+           for path, modes in temps.items() if any(m != 0o600 for m in modes)}
+    if bad:
+        findings.append(
+            f"{engine}: creator-only export temp created with a mode other "
+            f"than 0600 (the pre-create window class): {bad}")
+        record["verdict"] = "fail"
+    else:
+        record["verdict"] = "pass"
+    return record
+
+
+def run_engine(binary, engine, work):
+    """Drive one create+export under strace; return the evidence record."""
+    trace_log = os.path.join(work, f"trace-{engine}.log")
+    main = os.path.join(work, f"source-{engine}.v4")
+    destination = os.path.join(work, f"out-{engine}.ranges")
+    service = TracedProduct(binary, work, trace_log)
+    try:
+        create_params = dict(CREATE_PARAMS, path=main)
+        created = service.call(1, "iprange.v1.database.create", create_params)
+        if "error" in created:
+            raise SystemExit(f"{engine}: create failed: {created['error']}")
+        export_params = dict(EXPORT_PARAMS_SKELETON, source={
+            "path": main, "mode": "live"}, destination=destination)
+        exported = service.call(2, "iprange.v1.export", export_params)
+        if "error" in exported:
+            raise SystemExit(f"{engine}: export failed: {exported['error']}")
+    finally:
+        service.close()
+    creates = parse_create_modes(trace_log)
+    findings = []
+    record = verifier(creates, engine, findings)
+    record["trace"] = trace_log
+    for line in findings:
+        print(f"PROBLEM {line}")
+    return record, findings
+
+
+SELF_TEST_TRACES = {
+    "pass": {
+        "work/source-rust.v4": [0o600],
+        "work/.1.export.tmp": [0o600],
+        "work/out-rust.ranges": [0o600],
+    },
+    "window": {
+        "work/source-rust.v4": [0o600],
+        "work/.1.export.tmp": [0o666],
+    },
+    "no-export": {
+        "work/source-rust.v4": [0o600],
+    },
+    "unrelated-only": {
+        "work/unrelated.tmp": [0o666],
+    },
+}
+SELF_TEST_EXPECT = {"pass": "pass", "window": "fail", "no-export": "fail",
+                    "unrelated-only": "fail"}
+
+
+def self_test():
+    """Offline: the verifier's table, doctored one mutation at a time."""
+    failures = []
+    for label, creates in SELF_TEST_TRACES.items():
+        findings = []
+        record = verifier(creates, "self-test", findings)
+        want = SELF_TEST_EXPECT[label]
+        if record["verdict"] != want:
+            failures.append(f"self-test {label}: verdict "
+                            f"{record['verdict']}, want {want}")
+        print(f"self-test {label}: {record['verdict']}")
+    return failures
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--go", help="Go CLI binary")
+    parser.add_argument("--rust", help="Rust CLI binary")
+    parser.add_argument("--work", help="empty working directory")
+    parser.add_argument("--json-report", default=DEFAULT_REPORT)
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args()
+
+    if args.self_test:
+        failures = self_test()
+        executed = run_shared_self_test("check_create_mode_shape")
+        if executed is not None and not isinstance(executed, int):
+            failures.append("shared self-test returned an unexpected shape")
+        if failures:
+            for line in failures:
+                print(f"FAIL self-test: {line}")
+            return 1
+        print("PASS self-test: create-mode verifier controls")
+        return 0
+
+    missing = [name for name, value in (("--go", args.go),
+                                        ("--rust", args.rust),
+                                        ("--work", args.work))
+               if not value]
+    if missing:
+        parser.error(f"missing arguments: {', '.join(missing)}")
+    if not os.path.exists(STRACE):
+        print(f"FAIL: {STRACE} is required (this gate observes openat "
+              "modes; a silent skip would make it nonexistent)")
+        return 1
+    # Absolute work dir: the create resolution's parent-directory identity
+    # proof is driven with absolute paths everywhere else, and a relative
+    # --work would trip the relative-path create limitation instead of this
+    # gate's subject.
+    args.work = os.path.abspath(args.work)
+    os.makedirs(args.work, exist_ok=True)
+
+    records = []
+    findings = []
+    for engine, binary in (("rust", args.rust), ("go", args.go)):
+        record, engine_findings = run_engine(binary, engine, args.work)
+        records.append(record)
+        findings.extend(engine_findings)
+
+    report = {"schema": REPORT_SCHEMA,
+              "provenance": report_provenance(),
+              "engines": records,
+              "verdict": "pass" if not findings else "fail"}
+    write_committed_report(args.json_report, report)
+    print(f"CREATE-MODE verdict={report['verdict']} "
+          f"report={os.path.relpath(args.json_report)}")
+    return 0 if not findings else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

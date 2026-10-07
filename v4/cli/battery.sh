@@ -755,8 +755,14 @@ pool_drain() {
   local fail=0
   # xargs -P is the one queue: nothing else admits a standard task, so
   # POOL_JOBS is the suite-wide cap rather than one cap per track.
+  # Every pooled unit runs under a per-task outer timeout: the wedge
+  # class (a detector hanging instead of reddening) must end as a
+  # bounded red (rc=124 through the existing rc machinery), never as a
+  # battery that never reaches ALLDONE. The bound is far above the
+  # slowest legitimate unit measured to date (~119 s) and below the
+  # suite's own budget.
   nice xargs -P "$POOL_JOBS" -I '{}' -a "$list" \
-    bash -c 'd="'"$TASKS"'/$1"; s=$(date +%s.%N); nice bash "$d/task.sh" > "$d/log" 2>&1; rc=$?; e=$(date +%s.%N); echo "$rc" > "$d/rc"; echo "$s" > "$d/t0"; echo "$e" > "$d/t1"; awk -v s="$s" -v e="$e" "BEGIN{printf \"%.2f\", e-s}" > "$d/wall"' _ {} || fail=$?
+    bash -c 'd="'"$TASKS"'/$1"; s=$(date +%s.%N); nice timeout --kill-after=30 600 bash "$d/task.sh" > "$d/log" 2>&1; rc=$?; e=$(date +%s.%N); echo "$rc" > "$d/rc"; echo "$s" > "$d/t0"; echo "$e" > "$d/t1"; awk -v s="$s" -v e="$e" "BEGIN{printf \"%.2f\", e-s}" > "$d/wall"' _ {} || fail=$?
   [ "$fail" -eq 0 ] || echo "POOL: xargs reported a task failure (rc=$fail)"
 }
 
@@ -998,8 +1004,8 @@ fi
 # lands its reasons in a checked artifact instead of a silent pass;
 # unprivileged runs keep the file empty.
 (cd "$REPO" && export CARGO_TARGET_DIR="$R_RUSTFRESH" CARGO_HOME="$REPO/.local/int-prep/cargo-home" IPRANGE_V4_WIN_PIN_TALLY="$R/reports/linux-pin-tally.txt" && \
-  nice cargo build --manifest-path v4/rust/Cargo.toml -p iprange-livedb --bins >> "$R/reports/rust-test.log" 2>&1 && \
-  nice timeout 1500 cargo test --manifest-path v4/rust/Cargo.toml >> "$R/reports/rust-test.log" 2>&1)
+  nice timeout --kill-after=30 1500 cargo build --manifest-path v4/rust/Cargo.toml -p iprange-livedb --bins >> "$R/reports/rust-test.log" 2>&1 && \
+  nice timeout --kill-after=30 1500 cargo test --manifest-path v4/rust/Cargo.toml >> "$R/reports/rust-test.log" 2>&1)
 record "[3] cargo test" $? zero
 tail -3 "$R/reports/rust-test.log"
 # The tally is judged, not just collected: every UNSCORED line names a
@@ -1677,6 +1683,18 @@ record "[12] fifo gate" $? zero
 tail -3 "$R/reports/log-fifo-gate.txt"
 }
 
+track_create_mode() {
+echo "### [12c] committed create-mode shape gate + self-test"
+nice python3 "$CLI/check_create_mode_shape.py" --self-test > "$R/reports/log-cmode-selftest.txt" 2>&1
+record "[12c] create-mode self-test" $? zero
+tail -2 "$R/reports/log-cmode-selftest.txt"
+clean "$R/W-cmode"
+nice python3 "$CLI/check_create_mode_shape.py" --go "$GOB" --rust "$RUB" --work "$R/W-cmode" \
+   --json-report "$R/reports/create-mode.json" > "$R/reports/log-cmode-gate.txt" 2>&1
+record "[12c] create-mode gate" $? zero
+tail -3 "$R/reports/log-cmode-gate.txt"
+}
+
 
 
 track_race() {
@@ -2218,6 +2236,7 @@ autosubmit crash-neg-consumer    track_crash_neg_consumer
 autosubmit goos-gate             track_goos
 autosubmit guard                 track_guard
 autosubmit fifo                  track_fifo
+autosubmit create-mode            track_create_mode
 autosubmit throughput-self-test  track_throughput_selftest
 autosubmit crash-self-test       track_crash_selftest
 autosubmit golden                track_golden

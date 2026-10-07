@@ -1,10 +1,9 @@
-//go:build !windows
-
 package recovery
 
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -16,8 +15,11 @@ import (
 // the recovery destination uses (Rust live_sidecar::source_creator_only):
 // a sidecar that records protected answers true, one that records
 // unprotected answers false, and a path with no sidecar follows the
-// process switch. Detected under umask 0, where a switch-following
-// default of a protected source would produce a 0666 artifact.
+// process switch. The classifier and attempt-creation assertions run on
+// every platform (Windows protection is the DACL, not mode bits); the
+// mode discrimination is POSIX-only and detected under umask 0, where a
+// switch-following default of a protected source would produce a 0666
+// artifact.
 func TestSourcePolicyFollowsTheSidecarRecord(t *testing.T) {
 	t.Setenv("IPRANGE_CREATOR_ONLY", "")
 	dir := t.TempDir()
@@ -38,14 +40,16 @@ func TestSourcePolicyFollowsTheSidecarRecord(t *testing.T) {
 	if failure != nil {
 		t.Fatalf("protected attempt: %v", failure)
 	}
-	info, err := os.Stat(filepath.Join(dir, string(attempt.Facts().Basename)))
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(dir, string(attempt.Facts().Basename)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Fatalf("protected recovery output mode = %#o, want 0600", mode)
+		}
+	}
 	attempt.Discard()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Fatalf("protected recovery output mode = %#o, want 0600", mode)
-	}
 
 	unprotected := filepath.Join(dir, "plain.iprdb")
 	if _, err := live.CreateLive(unprotected, format.AddressFamilyIPv4, format.ValueKindDirect,
@@ -61,14 +65,16 @@ func TestSourcePolicyFollowsTheSidecarRecord(t *testing.T) {
 	if failure != nil {
 		t.Fatalf("unprotected attempt: %v", failure)
 	}
-	info, err = os.Stat(filepath.Join(dir, string(attempt.Facts().Basename)))
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(dir, string(attempt.Facts().Basename)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode == 0o600 {
+			t.Fatal("unprotected recovery output forced mode 0600")
+		}
+	}
 	attempt.Discard()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode := info.Mode().Perm(); mode == 0o600 {
-		t.Fatal("unprotected recovery output forced mode 0600")
-	}
 
 	// No sidecar (every immutable source): the process switch decides.
 	t.Setenv("IPRANGE_CREATOR_ONLY", "1")

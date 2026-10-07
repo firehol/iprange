@@ -5,9 +5,10 @@
 //! arm the round-1 fix restored), and an unprotected source does not
 //! force 0600.
 
-#![cfg(unix)]
+#![cfg(any(unix, windows))]
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
@@ -84,23 +85,35 @@ fn recovery_follows_the_source_sidecar_end_to_end() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
     std::env::remove_var("IPRANGE_CREATOR_ONLY");
+    #[cfg(unix)]
+    let mask = unsafe { test_umask(0) };
     let directory = directory("switch-off");
 
     let protected = directory.join("protected.v4");
     create_source(&protected, true);
     let destination = recover(&directory, &protected, "protected-out");
-    let mode = fs::metadata(&destination).unwrap().permissions().mode() & 0o777;
-    assert_eq!(
-        mode,
-        0o600,
-        "protected source recovered to mode {mode:o}, want 0600 end to end"
-    );
+    let _ = &destination;
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(&destination).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode,
+            0o600,
+            "protected source recovered to mode {mode:o}, want 0600 end to end"
+        );
+    }
 
     let plain = directory.join("plain.v4");
     create_source(&plain, false);
     let destination = recover(&directory, &plain, "plain-out");
-    let mode = fs::metadata(&destination).unwrap().permissions().mode() & 0o777;
-    assert_ne!(mode, 0o600, "unprotected source forced mode 0600");
+    let _ = &destination;
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(&destination).unwrap().permissions().mode() & 0o777;
+        assert_ne!(mode, 0o600, "unprotected source forced mode 0600");
+    }
+    #[cfg(unix)]
+    unsafe { test_umask(mask) };
 
     let _ = fs::remove_dir_all(&directory);
     match previous {
@@ -122,19 +135,26 @@ fn recovery_follows_the_source_with_the_switch_on() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let previous = std::env::var_os("IPRANGE_CREATOR_ONLY");
     std::env::set_var("IPRANGE_CREATOR_ONLY", "1");
+    #[cfg(unix)]
     let mask = unsafe { test_umask(0) };
     let directory = directory("switch-on");
 
     let plain = directory.join("plain.v4");
     create_source(&plain, false);
     let destination = recover(&directory, &plain, "plain-out");
-    let mode = fs::metadata(&destination).unwrap().permissions().mode() & 0o777;
-    assert_ne!(
-        mode,
-        0o600,
-        "switch-on worker forced 0600 on an unprotected source: the recorded facts must win"
-    );
+    let _ = &destination;
+    // recover() asserted Published; the mode discrimination is POSIX.
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(&destination).unwrap().permissions().mode() & 0o777;
+        assert_ne!(
+            mode,
+            0o600,
+            "switch-on worker forced 0600 on an unprotected source: the recorded facts must win"
+        );
+    }
 
+    #[cfg(unix)]
     unsafe { test_umask(mask) };
     let _ = fs::remove_dir_all(&directory);
     match previous {
@@ -143,6 +163,7 @@ fn recovery_follows_the_source_with_the_switch_on() {
     }
 }
 
+#[cfg(unix)]
 unsafe fn test_umask(mask: u32) -> u32 {
     extern "C" {
         fn umask(mask: u32) -> u32;
@@ -183,8 +204,9 @@ fn recovery_survives_a_hostile_umask() {
     .unwrap();
     let candidate = inspection.candidate(0).unwrap().clone();
     let destination = directory.join("plain-out.v4");
+    #[cfg(unix)]
     let mask = unsafe { test_umask(0o200) };
-    let result = recover_live(
+    let recovered = recover_live(
         &plain,
         candidate,
         &destination,
@@ -193,18 +215,21 @@ fn recovery_survives_a_hostile_umask() {
             Ok(RecoverySinkControl::Continue)
         },
         &CancellationToken::new(),
-    )
-    .unwrap();
-    unsafe { test_umask(mask) };
-    assert_eq!(
-        result.publication.publication,
-        iprange_livedb::publication::PublicationStatus::Published,
-        "worker-coordinated recovery under umask 0200 must publish (the pre-fix shape failed the worker handshake with a misleading Conflict)"
     );
-
+    // Restore the umask and the environment BEFORE any assertion can
+    // panic, so a failure cannot leak the hostile window into whichever
+    // test runs next (the Go twin restores first for the same reason).
+    #[cfg(unix)]
+    unsafe { test_umask(mask) };
     let _ = fs::remove_dir_all(&directory);
     match previous {
         Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
         None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),
     }
+    let result = recovered.unwrap();
+    assert_eq!(
+        result.publication.publication,
+        iprange_livedb::publication::PublicationStatus::Published,
+        "worker-coordinated recovery under a hostile umask must publish (the pre-fix shape failed the worker handshake with a misleading Conflict)"
+    );
 }
