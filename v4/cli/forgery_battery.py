@@ -488,7 +488,8 @@ def w7(bundle):
     for report in list(bundle.matrices) + [
         bundle.crash, bundle.fifo, bundle.throughput, bundle.parity,
         bundle.coverage, bundle.windows, bundle.guard, bundle.resource,
-        bundle.golden, bundle.sensitivity, bundle.posix_guard, bundle.race]:
+        bundle.golden, bundle.sensitivity, bundle.posix_guard, bundle.race,
+        bundle.create_mode]:
         report["git_head"] = forged
     for report in bundle.negatives:
         report["git_head"] = forged
@@ -641,6 +642,7 @@ def _run_gate(work_dir, bundle, tag, ledger):
     paths["crash"] = [_write(work_dir, tag, "crash", bundle.crash)]
     tokens.append((paths["crash"][0], "crash#0"))
     for name, document in (("fifo", bundle.fifo),
+                           ("create_mode", bundle.create_mode),
                            ("throughput", bundle.throughput),
                            ("parity", bundle.parity),
                            ("coverage", bundle.coverage),
