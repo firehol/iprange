@@ -306,7 +306,7 @@ func gcCreate(directory *Directory, authority *gcAuthority, envelopeName, inertN
 	}
 	var file *os.File
 	if unprotected {
-		file, err = directory.CreateMode(envelopeName, 0o666)
+		file, err = directory.CreateUnprotected(envelopeName)
 	} else {
 		file, err = directory.CreateSecured(envelopeName, profile)
 	}

@@ -112,6 +112,29 @@ func TestRecoveryFollowsSourceEndToEnd(t *testing.T) {
 		if mode := info.Mode().Perm(); mode != 0o666 {
 			t.Fatalf("unprotected recovery mode = %#o, want the exact umask default 0666 (a hard-coded 0644 at create or chmod would fail this arm)", mode)
 		}
+
+		// The widening window (parity round 10): umask 0 catches
+		// hard-codes but is blind to the owner-floor WIDENING
+		// (| 0o600 -> | 0o666 makes everything 0666 under umask 0).
+		// Under umask 027 the default is exactly 0640 and a widened
+		// floor produces 0666 — the windows trade detection classes,
+		// so both run.
+		setUmask(0o027)
+		widened := filepath.Join(dir, "widened-out.v4")
+		result, failure = RecoverLive(plain, candidates.Candidate(0), widened, budget, nil, nil)
+		if failure != nil {
+			t.Fatalf("recover widening-window: %v", failure.Cause)
+		}
+		if result.Publication.Publication != PublicationPublished {
+			t.Fatalf("widening-window publication = %v", result.Publication.Publication)
+		}
+		info, err = os.Stat(widened)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode != 0o640 {
+			t.Fatalf("unprotected recovery mode under umask 027 = %#o, want the exact default 0640 (a widened owner floor would produce 0666 and fail this arm)", mode)
+		}
 	}
 }
 

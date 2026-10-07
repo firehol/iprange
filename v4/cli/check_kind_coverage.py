@@ -2612,14 +2612,18 @@ def _surface_binary_identity(path, label, engine, record, implementation_of,
             return
 
 
-def create_mode_evidence(path, report, problems):
+def create_mode_evidence(path, report, problems, implementation_of=None,
+                         ledger=None, on_disk=False):
     """Re-validate the committed create-mode report inside the kind gate.
 
     The shape gate owns the openat-mode observation; the kind gate owns
     the identity invariants: one schema, a pass verdict, both engines
-    with both passes (default and switched), and every per-pass verdict
-    pass; a report whose verdict was purchased by editing fields fails
-    here.
+    with both passes (default and switched), every per-pass verdict
+    pass, and a binaries table whose labels and digests bind to the
+    measured identities (the fifo-surface binding: a shape-correct
+    report from other binaries is fabrication, and a verdict purchased
+    by editing fields fails here because the recorded modes must
+    themselves be 0600 for a pass).
     """
     if report.get("schema") != "iprange-cli-create-mode-report-v1":
         problems.append(f"create-mode {path}: unexpected schema "
@@ -2638,10 +2642,14 @@ def create_mode_evidence(path, report, problems):
     for engine, record in sorted(binaries.items()):
         if not isinstance(record, dict) \
                 or not isinstance(record.get("sha256"), str) \
-                or len(record["sha256"]) != 64:
+                or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"]):
             problems.append(f"create-mode {path}: binaries[{engine}] has "
                             "no 64-hex sha256; a shape-correct report "
                             "from other binaries is fabrication")
+            continue
+        _surface_binary_identity(
+            path, "create-mode", engine, record, implementation_of,
+            ledger, problems, on_disk, require_provenance=False)
     engines = {entry.get("engine") for entry in report.get("engines", [])
                if isinstance(entry, dict)}
     if engines != {"rust", "go"}:
@@ -2675,6 +2683,19 @@ def create_mode_evidence(path, report, problems):
                 f"create-mode {path}: {entry.get('engine')} pass "
                 f"{entry.get('pass')!r} verdict {entry.get('verdict')!r} "
                 "with no watched creates")
+            continue
+        bad_modes = sorted(
+            f"{name}:{modes}"
+            for name, modes in (entry.get("temp_creates") or {}).items()
+            if not isinstance(modes, list)
+            or any(mode != "0o600" for mode in modes
+                   if isinstance(mode, str)))
+        if bad_modes:
+            problems.append(
+                f"create-mode {path}: {entry.get('engine')} pass "
+                f"{entry.get('pass')!r} claims pass while recording "
+                f"non-0600 creates {bad_modes}; a purchased verdict "
+                "fails here")
         watched = entry.get("watched") or {}
         if "switched" in str(entry.get("pass")) and sorted(watched) != [
                 "control", "main", "readers", "temp"]:
@@ -5707,7 +5728,9 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
     for path in create_mode_paths:
         report = _load_report(path, problems)
         if isinstance(report, dict):
-            create_mode_evidence(path, report, problems)
+            create_mode_evidence(path, report, problems,
+                                 implementation_of=implementation_of,
+                                 ledger=ledger, on_disk=verify_binaries)
 
     # --- the wave's newest artifacts, consumed.
     attested_digests = set()
@@ -9573,6 +9596,8 @@ def _self_test():
 
             extras = {
                 "fifo": staged("fifo", genuine_fifo),
+                "create_mode": staged("create_mode",
+                                      genuine_create_mode),
                 "throughput": staged("throughput", genuine_throughput),
                 "parity": staged("parity", genuine_conforming_parity),
                 "coverage": staged("coverage", [genuine_coverage]),
@@ -9673,9 +9698,17 @@ def _self_test():
                                           f"w24-{label}-race-battery.json")]
             assign(race_paths[0], extra.get("race_report")
                    or _json.load(open(genuine_race, encoding="utf-8")))
+            create_mode_local_paths = [
+                extra.get("create_mode")
+                or os.path.join(work,
+                                f"w24-{label}-create-mode.json")]
+            assign(create_mode_local_paths[0],
+                   extra.get("create_mode_report")
+                   or _json.load(open(genuine_create_mode[0],
+                                      encoding="utf-8")))
             manifest = extra.get("battery_manifest") or manifest_over(
                 paths, [crash_path_local], fifo_paths,
-                create_mode_paths, throughput_paths,
+                create_mode_local_paths, throughput_paths,
                 parity_paths, coverage_paths, negative_paths, windows_paths,
                 ledger=ledger, guard=guard_paths, resource=resource_paths,
                 golden=golden_paths, sensitivity=sensitivity_paths,
@@ -10421,6 +10454,7 @@ def _self_test():
                  "crash-negative": negatives if negatives is not None
                  else (list(genuine_negative) if with_negative else []),
                  "fifo-surface": list(genuine_fifo),
+                 "create-mode": list(genuine_create_mode),
                  "throughput": list(genuine_throughput),
                  "refusal-class-parity": list(genuine_conforming_parity),
                  "coverage-go": [genuine_coverage],
@@ -10614,6 +10648,8 @@ def _self_test():
             paths, crash_path_local, extras = stage_genuine_battery(label)
             document = build_battery_manifest(
                 consumed_set(paths, [crash_path_local], extras["fifo"],
+                             extras.get("create_mode",
+                                        list(genuine_create_mode)),
                              extras["throughput"], extras["parity"],
                              extras["coverage"], extras["negative"],
                              extras["windows"], guard=extras["guard"],

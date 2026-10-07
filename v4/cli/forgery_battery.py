@@ -791,21 +791,17 @@ def _run_battery(ledger):
           + ("" if not duplicated else
              f"; {len(duplicated)} reason set(s) shared by more than one "
              "class"))
+    # The preview derives from BATTERY_FLAGS so it can never drift from
+    # the real invocation again (round 10: a hand-maintained copy missed
+    # create_mode and every full run crashed after the classes ran).
     preview = _gate_command(
-        {"matrix": ["<matrix x4>"], "crash": ["<crash.json>"],
-         "fifo": ["<fifo-surface.json>"],
-         "throughput": ["<throughput.json>"],
-         "parity": ["<refusal-class-parity.json>"],
-         "coverage": ["<coverage-go.json>"],
-         "windows": ["<windows-housekeeping.json>"],
-         "guard": ["<windows-guard.json>"],
-         "resource": ["<resource.json>"],
-         "golden": ["<golden.json>"],
-         "sensitivity": ["<sensitivity.json>"],
-         "posix_guard": ["<guard-posix.json>"],
-         "race": ["<race-battery.json>"],
-         "crash-negative": ["<crash-negative.json>"],
-         "battery-manifest": ["<battery-manifest.json>"]}, ledger)
+        dict({"matrix": ["<matrix x4>"], "crash": ["<crash.json>"],
+              "fifo": ["<fifo-surface.json>"],
+              "throughput": ["<throughput.json>"],
+              "crash-negative": ["<crash-negative.json>"],
+              "battery-manifest": ["<battery-manifest.json>"]},
+             **{name: [f"<{flag[2:]}.json>"] for name, flag
+                in BATTERY_FLAGS}), ledger)
     print("  gate invocation: python3 " + " ".join(preview))
     print("  positive control: "
           + ("accepted (rc=0)" if control_accepted else

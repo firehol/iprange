@@ -17,5 +17,5 @@ func scratchCreateFile(directory *live.Directory, name string, _ security.Profil
 	if creatorOnly {
 		return directory.Create(name)
 	}
-	return directory.CreateMode(name, 0o666)
+	return directory.CreateUnprotected(name)
 }

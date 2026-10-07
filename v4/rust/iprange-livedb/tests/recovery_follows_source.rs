@@ -141,15 +141,46 @@ fn recovery_follows_the_source_sidecar_end_to_end() {
                 Ok(RecoverySinkControl::Continue)
             },
             &CancellationToken::new(),
-        )
-        .unwrap();
+        );
         let mode = fs::metadata(&exact).unwrap().permissions().mode() & 0o777;
+        let result = result.unwrap();
         assert_eq!(
             mode, 0o666,
             "unprotected recovery mode is {mode:o}, want the exact umask default 0666 (a hard-coded 0644 at create or chmod would fail this arm)"
         );
         assert_eq!(
             result.publication.publication,
+            iprange_livedb::publication::PublicationStatus::Published
+        );
+
+        // The widening window (parity round 10): umask 0 catches
+        // hard-codes but is blind to the owner-floor WIDENING. Under
+        // umask 027 the default is exactly 0640 and a widened floor
+        // produces 0666. Restore BEFORE asserting so a failure cannot
+        // leak the window (portability round 10).
+        let candidate2 = inspection.candidate(0).unwrap().clone();
+        let widened = directory.join("widened-out.v4");
+        let widening_mask = unsafe { test_umask(0o027) };
+        let widened_result = recover_live(
+            &plain,
+            candidate2,
+            &widened,
+            &RecoveryBudget::heap_only(16 << 20, 100_000, 4),
+            &mut |_envelope: &iprange_livedb::recovery::RecoveryUnknownEnvelope| {
+                Ok(RecoverySinkControl::Continue)
+            },
+            &CancellationToken::new(),
+        );
+        unsafe { test_umask(widening_mask) };
+        let widened_result = widened_result.unwrap();
+        let widened_mode =
+            fs::metadata(&widened).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            widened_mode, 0o640,
+            "unprotected recovery mode under umask 027 is {widened_mode:o}, want the exact default 0640 (a widened owner floor would produce 0666 and fail this arm)"
+        );
+        assert_eq!(
+            widened_result.publication.publication,
             iprange_livedb::publication::PublicationStatus::Published
         );
     }

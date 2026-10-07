@@ -72,6 +72,12 @@ entry "Go export follows-source twin (umask 0200 hostile arm)" \
 entry "Go control-file mode twin" \
   "$REPO/v4/go" env GOFLAGS=-buildvcs=false go test -count=1 -v -run TestCreateParentModeIndependentOfUmask ./internal/worker/
 
+entry "Go creator-only flag twins (main+readers exact 0666; switch default)" \
+  "$REPO/v4/go" env GOFLAGS=-buildvcs=false go test -count=1 -v -run "TestCreatorOnly" .
+
+entry "Rust creator-only flag twins (main+readers exact 0666; switch default)" \
+  "$REPO" nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-livedb --offline --test creator_only_flag -v
+
 entry "create-mode shape gate self-test (verifier controls incl. switched presence)" \
   "$REPO" nice python3 v4/cli/check_create_mode_shape.py --self-test
 } > "$OUT"

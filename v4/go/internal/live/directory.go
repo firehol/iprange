@@ -116,9 +116,19 @@ func (d *Directory) Create(name string) (*os.File, error) {
 	return d.CreateMode(name, security.CreatorMode)
 }
 
+// CreateUnprotected creates one name exclusively with the process
+// default (0666 so the umask applies). Every unprotected artifact in
+// the Go tree routes through this one method — the round-7/9/10
+// exact-default pins kept missing sites with their own 0o666 literals,
+// and one shared site makes the one shared pin cover everything.
+func (d *Directory) CreateUnprotected(name string) (*os.File, error) {
+	return d.CreateMode(name, 0o666)
+}
+
 // CreateMode is Create with an explicit permission. Creator-only callers
 // pass 0600 and then prove it. An unprotected live create passes 0666 so
-// the process umask applies. Close-on-exec stays either way.
+// the process umask applies (through CreateUnprotected). Close-on-exec
+// stays either way.
 func (d *Directory) CreateMode(name string, mode uint32) (*os.File, error) {
 	if err := d.RequireNameLengths(name); err != nil {
 		return nil, err

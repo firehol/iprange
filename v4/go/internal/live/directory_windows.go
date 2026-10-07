@@ -171,6 +171,12 @@ func (d *Directory) Create(name string) (*os.File, error) {
 	return d.CreateMode(name, 0o666)
 }
 
+// CreateUnprotected mirrors the unix twin: every unprotected artifact
+// routes through one site per platform.
+func (d *Directory) CreateUnprotected(name string) (*os.File, error) {
+	return d.CreateMode(name, 0o666)
+}
+
 // CreateMode is Create with an explicit permission. Windows has no Unix
 // mode bits; 0600 selects the protected descriptor and any other mode
 // selects the process default. The mode is not stored.

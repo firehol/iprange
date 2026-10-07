@@ -491,6 +491,16 @@ complaints = 0
 local = []
 for line in open(log_path, encoding="utf-8", errors="replace"):
     stripped = line.strip()
+    if stripped.startswith("Traceback (most recent call last)") \
+            or stripped.startswith("KeyError:") \
+            or stripped.startswith("NameError:") \
+            or stripped.startswith("AttributeError:"):
+        # A crash of the harness itself is a defect of THIS run: the
+        # deferral exists to hold Windows-leg artifacts, never to
+        # shelter a traceback (round 10: a KeyError shipped as the
+        # designed DEFERRED).
+        complaints += 1
+        local.append(stripped)
     match = GATE_ASSERTION.search(stripped)
     if match:
         # The gate's own --self-test reports the blocking problems as a Python
@@ -2582,7 +2592,7 @@ echo "### [16r] forgery battery over the rotated evidence (one pass, first failu
 # step pointed at log-forgery.txt.  A negative control that has to be retried
 # to pass is a negative control whose failure mode nobody has read: the first
 # failure is now the verdict, and its log is the one the step names.
-nice python3 "$CLI/forgery_battery.py" --sha256-ledger "$SHASUMS" > "$R/reports/log-forgery.txt" 2>&1
+nice timeout --kill-after=30 900 python3 "$CLI/forgery_battery.py" --sha256-ledger "$SHASUMS" > "$R/reports/log-forgery.txt" 2>&1
 record_gate "[16r] forgery battery" "$?" "$R/reports/log-forgery.txt" "${COMMITTED_CONSUMED_PATHS[@]}"
 tail -2 "$R/reports/log-forgery.txt" 2>/dev/null
 if [ "${PIPESTATUS[*]:-}" != "" ] && [ ! -s "$R/reports/log-forgery.txt" ]; then
