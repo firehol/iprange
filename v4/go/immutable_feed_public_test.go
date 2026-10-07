@@ -3,11 +3,11 @@ package iprangedb
 import (
 	"errors"
 	"os"
+	"runtime"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"golang.org/x/sys/unix"
 )
 
 // sliceSource4 is one finite caller-owned IPv4 batch source over a
@@ -413,8 +413,11 @@ func feedFailureCode(t *testing.T, err error) ErrorCode {
 // database, so the switch is its only input.
 func TestImmutableFeedPublishFollowsTheProcessSwitch(t *testing.T) {
 	requireLiveCreation(t)
-	previous := unix.Umask(0)
-	defer unix.Umask(previous)
+	if runtime.GOOS == "windows" {
+		t.Skip("mode assertions are POSIX-only; Windows protection is the DACL")
+	}
+	previous := setUmask(0)
+	defer setUmask(previous)
 
 	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
 	destination := filepath.Join(t.TempDir(), "switched-on.v4")

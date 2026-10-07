@@ -10,13 +10,13 @@ package iprangedb
 import (
 	"encoding/binary"
 	"errors"
+	"runtime"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"golang.org/x/sys/unix"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -656,8 +656,11 @@ func TestMergeErrorsKeepsPrimaryCause(t *testing.T) {
 // 0600 and with the switch off it keeps the process default.
 func TestPublishSetFollowsTheProcessSwitch(t *testing.T) {
 	requirePublicationSecurity(t)
-	previous := unix.Umask(0)
-	defer unix.Umask(previous)
+	if runtime.GOOS == "windows" {
+		t.Skip("mode assertions are POSIX-only; Windows protection is the DACL")
+	}
+	previous := setUmask(0)
+	defer setUmask(previous)
 	helpers := publishAlgebraV4(t, 1)
 	defer helpers.closeFn()
 
