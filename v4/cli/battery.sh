@@ -510,20 +510,25 @@ for line in open(log_path, encoding="utf-8", errors="replace"):
         pending_traceback = True
         continue
     if pending_traceback:
-        if stripped.startswith("AssertionError"):
-            # Carries its problem list; falls through to the
-            # GATE_ASSERTION matcher below for attribution.
+        if stripped.startswith("AssertionError") \
+                or stripped.startswith("SystemExit"):
+            # AssertionError carries its problem list and falls
+            # through to the GATE_ASSERTION matcher below; SystemExit
+            # is the sys.exit() wrapper around a reported failure (the
+            # self-test's own exit path), never an uncaught crash.
             pending_traceback = False
-        elif not stripped or stripped.startswith("  ") or stripped.startswith("    "):
-            # A frame or a blank inside the traceback body.
-            continue
-        else:
-            # Any other exception origin (KeyError, ValueError,
-            # FileNotFoundError, StopIteration, a bare message — the
-            # class name does not matter): an uncaught crash.
+        elif not line[0].isspace() and stripped:
+            # Python traceback structure: frame lines and their source
+            # excerpts are indented; the exception origin line is the
+            # only non-indented content. Any non-indented line that is
+            # not an AssertionError is an uncaught crash this run owns.
             complaints += 1
             local.append(stripped)
             pending_traceback = False
+            continue
+        else:
+            # An indented frame, a source excerpt, or a blank — the
+            # traceback body continues.
             continue
     match = GATE_ASSERTION.search(stripped)
     if match:
