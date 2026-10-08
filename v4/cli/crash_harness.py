@@ -32,11 +32,16 @@ scenario):
   control.  E and F keep the destination/publication-residue and
   findings-path coverage; ``publication_reservation`` loses its only
   crash-suite witnesses (see the SOW record).)
-- Scenario B -- ``database.initialize_live`` killed at the state-0
-  sidecar marker: the main is unchanged, both ``database.info`` modes
-  truthfully refuse (``wrong_state``), the resultless
-  ``live_residue.resolve`` completes the transition and a live reader
-  reopens on the resolved generation.
+- (Scenario B -- ``database.initialize_live`` killed at the state-0
+  sidecar marker -- REMOVED 2026-10-08 by user decision, the same
+  principle as the A-family: the poll-then-kill staging missed the
+  creating-state sidecar marker once in ~18 batteries while the
+  transition completed, and one observed flake is a flaky test.  The
+  knowingly uncovered properties: interruption consistency of
+  ``initialize_live``'s live-draft transition and the resultless
+  ``live_residue.resolve`` completion.  Scenario D keeps the other
+  live-draft interruption shape (``direct.replace``) and the crash-side
+  ``live_sidecar`` witnesses.)
 - Scenario C -- ``recover`` killed at the authorized-scratch marker:
   ``maintenance.list`` reports exactly the on-disk abandoned scratch,
   ``maintenance.remove`` returns the directory to empty, and the
@@ -132,7 +137,6 @@ SCRATCH_PREFIX = ".iprange-scratch-"
 PRIVATE_TMP_SUFFIX = ".tmp"
 LIVE_SIDECAR_SUFFIX = ".readers"
 RESERVATION_MAGIC = b"IPR4RSV1"
-SIDECAR_MAGIC = b"IPRDRS4\x00"
 
 # Stall guard for every JSON-RPC service this harness spawns (run.py
 # parity with resource_harness.py).  Each bound applies to ONE read or
@@ -1001,211 +1005,6 @@ def recover_scratch_params(source, dest, scratch_dir, candidate):
     }
 
 
-def sidecar_creating_state_seen(sidecar):
-    """Poll callback: True when the sidecar has a valid creating header."""
-
-    if not os.path.isfile(sidecar):
-        return False
-    try:
-        with open(sidecar, "rb") as stream:
-            head = stream.read(16)
-        return (head[:8] == SIDECAR_MAGIC
-                and int.from_bytes(head[12:16], "little") == 0)
-    except OSError:
-        return False
-
-
-def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
-               scenario_report):
-    """Crash database.initialize_live at the state-0 sidecar marker."""
-
-    work = os.path.join(work_dir, f"b-{direction}-{uuid.uuid4().hex[:8]}")
-    os.makedirs(work)
-    main = os.path.join(work, "direct.iprange")
-    sidecar = main + LIVE_SIDECAR_SUFFIX
-    fixture = subprocess.run(
-        [fixture_tool, "direct-v4", main], capture_output=True, timeout=300,
-        env=child_environment())
-    if fixture.returncode != 0:
-        detail = fixture.stderr.decode("utf-8", "replace").strip()
-        raise ScenarioFailure(
-            f"v4-fixture direct-v4 failed with exit {fixture.returncode}: "
-            f"{detail}")
-    main_sha256 = sha256_file(main)
-    scenario_report["fixture_created_main"] = True
-
-    producer_service = KillableJsonRpcService(
-        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work,
-        read_deadline=CRASH_IO_DEADLINE_SECONDS,
-        write_deadline=CRASH_IO_DEADLINE_SECONDS)
-    try:
-        outcome, seen_ms, thread = call_with_worker(
-            producer_service, "9", "iprange.v1.database.initialize_live",
-            {"path": main, "reader_capacity": 8}, POLL_DEADLINE_SECONDS,
-            seen=lambda: sidecar_creating_state_seen(sidecar))
-        if seen_ms is None:
-            raise ScenarioFailure(
-                "creating-state sidecar marker was not observed; "
-                f"worker outcome={outcome}")
-        scenario_report["marker_seen_ms"] = round(seen_ms, 1)
-        producer_service.kill_process_group()
-        thread.join(timeout=5)
-        # The crashed initialize_live created the sidecar; its
-        # operation ordinal is the live_sidecar creation credit (the
-        # main itself came from the external v4-fixture tool).
-        _record_creation(scenario_report, ("live_sidecar",))
-
-        assert_truthful(
-            sha256_file(main) == main_sha256,
-            "the v4 main must be byte-identical after the kill",
-            scenario_report)
-        assert_truthful(
-            os.path.isfile(sidecar),
-            "the canonical sidecar must remain as the documented residue",
-            scenario_report)
-        scenario_report["destination_state"] = {
-            "class": "main_unchanged_sidecar_present",
-            "main_sha256": main_sha256,
-            "sidecar_present": True,
-            "sidecar_basename": os.path.basename(sidecar),
-        }
-
-        resolver = HarnessJsonRpcService(
-            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work,
-            read_deadline=CRASH_IO_DEADLINE_SECONDS,
-            write_deadline=CRASH_IO_DEADLINE_SECONDS)
-        try:
-            # Both database.info modes truthfully refuse an interrupted
-            # transition (no false success before resolution).
-            for mode in ("live", "immutable"):
-                info = resolver.call(
-                    "i" + mode, "iprange.v1.database.info",
-                    {"source": {"path": main, "mode": mode}})
-                error = info.get("error", {}).get("data", {})
-                assert_truthful(
-                    error.get("code") == "wrong_state"
-                    and error.get("outcome") == "read_only_failure",
-                    f"database.info {mode} must truthfully refuse an "
-                    f"interrupted transition, got {info}", scenario_report)
-            scenario_report["inspect_outcome"] = {
-                "database_info_live": {"code": "wrong_state",
-                                       "outcome": "read_only_failure"},
-                "database_info_immutable": {"code": "wrong_state",
-                                            "outcome": "read_only_failure"},
-            }
-
-            # Bounded residue: the sidecar is the only artifact; the
-            # Linux-listable maintenance kinds are all empty.
-            reports, error = maintenance_reports(
-                resolver, work, os.path.join(work, "pre.jsonl"),
-                ["scratch", "reservation", "publication_temp"])
-            assert_truthful(
-                error is None and count_kind(reports, "scratch") == 0
-                and count_kind(reports, "reservation") == 0
-                and count_kind(reports, "publication_temp") == 0,
-                f"no maintenance residue may exist beside the sidecar, got "
-                f"reports={reports} error={error}", scenario_report)
-            scenario_report["residue_bounded"] = {
-                "sidecar_only": True,
-                "maintenance_list_pre": reports,
-            }
-
-            # Resultless interrupted-transition resolution: complete
-            # advances the state-0 sidecar to ready (the in-memory
-            # transition result was lost with the killed process, so
-            # database.live_transition.resolve cannot be called with
-            # evidence; live_residue.resolve is the documented
-            # resultless resolver).
-            resolved = resolver.call(
-                "4", "iprange.v1.database.live_residue.resolve",
-                {"path": main, "resolution_mode": "complete"})
-            if "error" in resolved:
-                raise ScenarioFailure(
-                    f"live_residue.resolve must complete, got {resolved}")
-            residue = resolved["result"]
-            assert_truthful(
-                residue.get("status") == "completed"
-                and residue.get("kind") == "canonical"
-                and residue.get("residue_possible") is False,
-                f"residue resolution must report the truthful completed "
-                f"transition, got {residue}", scenario_report)
-            scenario_report["resolve_outcome"] = {
-                "status": residue.get("status"),
-                "kind": residue.get("kind"),
-                "residue_possible": residue.get("residue_possible"),
-            }
-
-            # Reopen on the consumer binary: the database is now live;
-            # a live reader succeeds and an immutable open truthfully
-            # refuses (sidecar present).  The producer's database.info
-            # is the truth for the resolved generation; the consumer's
-            # reader must observe exactly that generation.
-            info = resolver.call(
-                "5", "iprange.v1.database.info",
-                {"source": {"path": main, "mode": "live"}})
-            assert_truthful(
-                "error" not in info,
-                f"database.info live must succeed after resolution, got "
-                f"{info}", scenario_report)
-            # The resolver's live database.info opened a live reader:
-            # the producer-side sidecar reader-table open (recorded for
-            # the live_sidecar opened lineage).
-            _record_live_open(scenario_report, "producer")
-            info_facts = info["result"].get("info", {})
-            consumer_service2 = HarnessJsonRpcService(
-                [consumer, "--jsonrpc"], f"consumer2-{direction}", cwd=work,
-                read_deadline=CRASH_IO_DEADLINE_SECONDS,
-                write_deadline=CRASH_IO_DEADLINE_SECONDS)
-            try:
-                open_live = consumer_service2.call(
-                    "6", "iprange.v1.reader.open",
-                    {"source": {"path": main, "mode": "live"}})
-                assert_truthful(
-                    "error" not in open_live,
-                    f"live reader must reopen after resolution, got "
-                    f"{open_live}", scenario_report)
-                _record_live_open(scenario_report, "consumer")
-                main_open_ordinal = _current_ordinal("consumer")
-                reopen_info = open_live["result"].get("info", {})
-                assert_truthful(
-                    reopen_info.get("database_id") == info_facts.get(
-                        "database_id")
-                    and reopen_info.get("transaction_id") == info_facts.get(
-                        "transaction_id"),
-                    "consumer live reader must match the resolved "
-                    "generation", scenario_report)
-                open_immutable = consumer_service2.call(
-                    "7", "iprange.v1.reader.open",
-                    {"source": {"path": main, "mode": "immutable"}})
-                immutable_error = open_immutable.get("error", {}).get(
-                    "data", {})
-                assert_truthful(
-                    immutable_error.get("code") == "wrong_state"
-                    and immutable_error.get("outcome") == "read_only_failure",
-                    "immutable open must truthfully refuse a live database",
-                    scenario_report)
-            finally:
-                consumer_service2.close()
-            scenario_report["reopen_outcome"] = {
-                "live": {
-                    "database_id": reopen_info.get("database_id"),
-                    "transaction_id": reopen_info.get("transaction_id")},
-                "immutable": {
-                    "code": immutable_error.get("code"),
-                    "outcome": immutable_error.get("outcome")},
-                "consumer_main_open_ordinal": main_open_ordinal,
-            }
-        finally:
-            resolver.close()
-    finally:
-        producer_service.kill_process_group()
-        # The kill is this scenario's own crash injection: the teardown
-        # is the explicit intentional-crash exemption (astra turn-2:
-        # exemptions are explicit, never inferred from process timing).
-        producer_service.close(allow_forced=True, broken_exchange=True)
-    return work
-
-
 def scenario_c(direction, producer, consumer, work_dir, scenario_report):
     """Crash recover at the authorized-scratch marker.
 
@@ -1453,8 +1252,8 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
     ``prepublication_checks`` (:120-126: ``verify_pair`` plus
     ``sidecar.scan_at_most_cancellable``, read-only) before
     ``core.publish``.  Sidecar writes exist only in
-    lifecycle_create/initialize_live, which scenario B already
-    covers.  Exact commit/finish interruption is owned by the SDK
+    lifecycle_create/initialize_live, which the removed scenario B
+    covered.  Exact commit/finish interruption is owned by the SDK
     fault gates, not this harness: Go
     ``TestLiveWriterCommitCrashPointsSelectOnlyACompleteGeneration``
     (v4/go/internal/live/lifecycle_crash_test.go:201; points
@@ -2446,8 +2245,7 @@ def _consumer_opened_main(scenario_report):
     The evidence comes from the scenario report's ``reopen_outcome``:
     ``probe_consumer_open`` on an existing destination (E/F),
     the post-resolution consumer reopen of the resolved publication
-    the consumer live reader after the resolved transition
-    (B), or scenario D's consumer live reader of the committed
+    or scenario D's consumer live reader of the committed
     generation.
     """
 
@@ -2647,7 +2445,6 @@ def observed_kinds(scenario_report):
 # loudly as a control that fails.
 CRASH_SELF_TEST_CONTROLS = {
     "scratch": 3,
-    "sidecar": 2,
     "orphan": 2,
     "marker": 5,
     "kinds": 4,
@@ -2713,24 +2510,6 @@ def _self_test():
         check("scratch", "a header with an unexpected version or size is refused",
               not scratch_header_authentic(wrong_version)
               and not scratch_attempt_seen(wrong_room))
-
-        # The live sidecar is only observable in its creating state
-        # (scenario B's kill point).
-        def sidecar_file(tag, state):
-            room = os.path.join(root, f"sidecar-{tag}")
-            os.makedirs(room, exist_ok=True)
-            head = bytearray(16)
-            head[0:8] = SIDECAR_MAGIC
-            head[12:16] = state.to_bytes(4, "little")
-            path = os.path.join(room, "live.iprange" + LIVE_SIDECAR_SUFFIX)
-            with open(path, "wb") as stream:
-                stream.write(bytes(head))
-            return path
-
-        check("sidecar", "a sidecar in the creating state is observed",
-              sidecar_creating_state_seen(sidecar_file("creating", 0)))
-        check("sidecar", "a sidecar past the creating state is not observed",
-              not sidecar_creating_state_seen(sidecar_file("active", 1)))
 
         # The bounded export residue: exactly one private temp, named to the
         # O_EXCL pattern the writers use.  A larger residue would hide a
@@ -2960,9 +2739,6 @@ def main():
         work_base = os.path.join(
             args.work_dir, f"{producer_name}-{consumer_name}")
         for name, runner in (
-                ("B", lambda report, w=work_base, p=producer_bin,
-                 c=consumer_bin: scenario_b(
-                     direction, p, c, w, fixture_tool, report)),
                 ("C", lambda report, w=work_base, p=producer_bin,
                  c=consumer_bin: scenario_c(
                      direction, p, c, w, report)),

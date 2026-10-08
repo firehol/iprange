@@ -323,7 +323,15 @@ def f5(matrices, crash):
 
 @_forgery("F6-crash-empty-assertions")
 def f6(matrices, crash):
-    crash["scenarios"][0]["assertions"] = []
+    # Roster-proof target: the first scenario that records assertions
+    # (round 17: with A1 and B gone, scenarios[0] was B, whose
+    # assertions list is legitimately empty, and the mutation became a
+    # no-op the harness's own guard rejected).
+    target = next((s for s in crash["scenarios"]
+                   if isinstance(s.get("assertions"), list)
+                   and s["assertions"]), None)
+    if target is not None:
+        target["assertions"] = []
 
 
 @_forgery("F7-binary-record-root-relabel")
