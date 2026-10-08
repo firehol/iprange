@@ -56,7 +56,7 @@
         "iprange.v1.system.describe",
         "iprange.v1.validate"
       ],
-      "path": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+      "path": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
       "probe": {
         "crashed": false,
         "reason": null,
@@ -154,7 +154,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881"
+      "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f"
     },
     "rust": {
       "available": true,
@@ -212,7 +212,7 @@
         "iprange.v1.system.describe",
         "iprange.v1.validate"
       ],
-      "path": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+      "path": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
       "probe": {
         "crashed": false,
         "reason": null,
@@ -310,7 +310,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f"
+      "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f"
     }
   },
   "cases": [
@@ -341,23 +341,23 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.cancel",
             "iprange.v1.system.describe"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 4
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.cancel",
             "iprange.v1.system.describe"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -384,22 +384,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.metadata.get"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.database.metadata.replace"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -476,7 +476,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
@@ -484,11 +484,11 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 5
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
@@ -496,7 +496,7 @@
             "iprange.v1.direct.replace",
             "iprange.v1.history.project"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 6
         }
       },
@@ -554,21 +554,21 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 1
         }
       },
@@ -593,22 +593,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.join.direct"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -656,16 +656,16 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
@@ -675,7 +675,7 @@
             "iprange.v1.database.create.resolve",
             "iprange.v1.database.reset_live"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 6
         }
       },
@@ -726,23 +726,23 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.maintenance.remove",
             "iprange.v1.database.create",
             "iprange.v1.database.reclaim"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 3
         }
       },
@@ -781,21 +781,21 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 2
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.maintenance.remove"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 9
         }
       },
@@ -825,21 +825,21 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 2
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.maintenance.remove"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 9
         }
       },
@@ -869,21 +869,21 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 2
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.maintenance.remove"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 7
         }
       },
@@ -913,21 +913,21 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.maintenance.remove"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 7
         }
       },
@@ -950,22 +950,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.metadata.get"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 3
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -1013,21 +1013,21 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.metadata.get"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 1
         }
       },
@@ -1052,22 +1052,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.metadata.get"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 2
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.database.metadata.replace"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 3
         }
       },
@@ -1105,7 +1105,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
@@ -1114,17 +1114,17 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 7
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -1159,22 +1159,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.export"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 4
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish",
             "iprange.v1.export"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 3
         }
       },
@@ -1283,7 +1283,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
@@ -1292,11 +1292,11 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 5
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
@@ -1309,7 +1309,7 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 13
         }
       },
@@ -1353,7 +1353,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
@@ -1363,17 +1363,17 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 7
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.feeds.create"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -1408,22 +1408,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.metadata.get"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 2
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -1467,7 +1467,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.snapshot",
@@ -1475,17 +1475,17 @@
             "iprange.v1.reader.lookup",
             "iprange.v1.reader.close"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 4
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -1529,22 +1529,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.algebra.count"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 4
         }
       },
@@ -1576,19 +1576,19 @@
         {
           "actor": "producer",
           "method": "iprange.v1.algebra.count",
-          "request": "{\"id\":\"case-params.negative.budget_algebra\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.count\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":0},\"selection\":{\"mode\":\"all\"},\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-algebra-0dedbc8a/budget.iprange\"}}]}}",
+          "request": "{\"id\":\"case-params.negative.budget_algebra\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.count\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":0},\"selection\":{\"mode\":\"all\"},\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-algebra-14a03552/budget.iprange\"}}]}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.algebra.count",
-          "request": "{\"id\":\"case-params.negative.budget_algebra\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.count\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":\"0\"},\"selection\":{\"mode\":\"all\"},\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-algebra-0dedbc8a/budget.iprange\"}}]}}",
+          "request": "{\"id\":\"case-params.negative.budget_algebra\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.count\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":\"0\"},\"selection\":{\"mode\":\"all\"},\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-algebra-14a03552/budget.iprange\"}}]}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.algebra.count",
-          "request": "{\"id\":\"case-params.negative.budget_algebra\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.count\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":4294967296},\"selection\":{\"mode\":\"all\"},\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-algebra-0dedbc8a/budget.iprange\"}}]}}",
+          "request": "{\"id\":\"case-params.negative.budget_algebra\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.count\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":4294967296},\"selection\":{\"mode\":\"all\"},\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-algebra-14a03552/budget.iprange\"}}]}}",
           "transport_code": -32602
         }
       ],
@@ -1597,22 +1597,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.algebra.publish"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 4
         }
       },
@@ -1644,19 +1644,19 @@
         {
           "actor": "producer",
           "method": "iprange.v1.algebra.publish",
-          "request": "{\"id\":\"case-params.negative.budget_algebra_output\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.publish\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":1},\"algebra_output_budget\":{\"max_open_files\":0,\"max_output_pages\":\"20000\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-algebra-output-280458d3/budget-algebra.iprange\",\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"algebra\"},\"operation\":{\"kind\":\"union\",\"selection\":{\"mode\":\"all\"}},\"output_mode\":{\"feed\":\"merged\",\"kind\":\"flat\"},\"publication_policy\":\"fail_if_exists\",\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-algebra-output-280458d3/budget.iprange\"}}],\"value_tag\":{\"text\":\"negtag\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_algebra_output\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.publish\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":1},\"algebra_output_budget\":{\"max_open_files\":0,\"max_output_pages\":\"20000\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-algebra-output-900a0961/budget-algebra.iprange\",\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"algebra\"},\"operation\":{\"kind\":\"union\",\"selection\":{\"mode\":\"all\"}},\"output_mode\":{\"feed\":\"merged\",\"kind\":\"flat\"},\"publication_policy\":\"fail_if_exists\",\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-algebra-output-900a0961/budget.iprange\"}}],\"value_tag\":{\"text\":\"negtag\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.algebra.publish",
-          "request": "{\"id\":\"case-params.negative.budget_algebra_output\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.publish\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":1},\"algebra_output_budget\":{\"max_open_files\":\"0\",\"max_output_pages\":\"20000\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-algebra-output-280458d3/budget-algebra.iprange\",\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"algebra\"},\"operation\":{\"kind\":\"union\",\"selection\":{\"mode\":\"all\"}},\"output_mode\":{\"feed\":\"merged\",\"kind\":\"flat\"},\"publication_policy\":\"fail_if_exists\",\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-algebra-output-280458d3/budget.iprange\"}}],\"value_tag\":{\"text\":\"negtag\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_algebra_output\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.publish\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":1},\"algebra_output_budget\":{\"max_open_files\":\"0\",\"max_output_pages\":\"20000\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-algebra-output-900a0961/budget-algebra.iprange\",\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"algebra\"},\"operation\":{\"kind\":\"union\",\"selection\":{\"mode\":\"all\"}},\"output_mode\":{\"feed\":\"merged\",\"kind\":\"flat\"},\"publication_policy\":\"fail_if_exists\",\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-algebra-output-900a0961/budget.iprange\"}}],\"value_tag\":{\"text\":\"negtag\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.algebra.publish",
-          "request": "{\"id\":\"case-params.negative.budget_algebra_output\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.publish\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":1},\"algebra_output_budget\":{\"max_open_files\":4294967296,\"max_output_pages\":\"20000\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-algebra-output-280458d3/budget-algebra.iprange\",\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"algebra\"},\"operation\":{\"kind\":\"union\",\"selection\":{\"mode\":\"all\"}},\"output_mode\":{\"feed\":\"merged\",\"kind\":\"flat\"},\"publication_policy\":\"fail_if_exists\",\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-algebra-output-280458d3/budget.iprange\"}}],\"value_tag\":{\"text\":\"negtag\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_algebra_output\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.publish\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":1},\"algebra_output_budget\":{\"max_open_files\":4294967296,\"max_output_pages\":\"20000\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-algebra-output-900a0961/budget-algebra.iprange\",\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"algebra\"},\"operation\":{\"kind\":\"union\",\"selection\":{\"mode\":\"all\"}},\"output_mode\":{\"feed\":\"merged\",\"kind\":\"flat\"},\"publication_policy\":\"fail_if_exists\",\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-algebra-output-900a0961/budget.iprange\"}}],\"value_tag\":{\"text\":\"negtag\"}}}",
           "transport_code": -32602
         }
       ],
@@ -1665,7 +1665,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
@@ -1674,16 +1674,16 @@
             "iprange.v1.reader.close",
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 12
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 1
         }
       },
@@ -1715,49 +1715,49 @@
         {
           "actor": "consumer",
           "method": "iprange.v1.reader.metadata",
-          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.reader.metadata\",\"params\":{\"delivery\":{\"max_open_files\":0,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-delivery-f1236135/metadata.json\",\"publication_policy\":\"replace_existing\"},\"reader\":\"80bf316c0991cece77d259d0a9f83687\"}}",
+          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.reader.metadata\",\"params\":{\"delivery\":{\"max_open_files\":0,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-delivery-5246ce82/metadata.json\",\"publication_policy\":\"replace_existing\"},\"reader\":\"c25a4374e144d26b8f2ec18b4699c6d5\"}}",
           "transport_code": -32602
         },
         {
           "actor": "consumer",
           "method": "iprange.v1.reader.metadata",
-          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.reader.metadata\",\"params\":{\"delivery\":{\"max_open_files\":0,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-delivery-f1236135/metadata.json\",\"publication_policy\":\"replace_existing\"},\"reader\":\"80bf316c0991cece77d259d0a9f83687\"}}",
+          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.reader.metadata\",\"params\":{\"delivery\":{\"max_open_files\":0,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-delivery-5246ce82/metadata.json\",\"publication_policy\":\"replace_existing\"},\"reader\":\"c25a4374e144d26b8f2ec18b4699c6d5\"}}",
           "transport_code": -32602
         },
         {
           "actor": "consumer",
           "method": "iprange.v1.reader.metadata",
-          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.reader.metadata\",\"params\":{\"delivery\":{\"max_open_files\":-1,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-delivery-f1236135/metadata.json\",\"publication_policy\":\"replace_existing\"},\"reader\":\"80bf316c0991cece77d259d0a9f83687\"}}",
+          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.reader.metadata\",\"params\":{\"delivery\":{\"max_open_files\":-1,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-delivery-5246ce82/metadata.json\",\"publication_policy\":\"replace_existing\"},\"reader\":\"c25a4374e144d26b8f2ec18b4699c6d5\"}}",
           "transport_code": -32602
         },
         {
           "actor": "consumer",
           "method": "iprange.v1.reader.metadata",
-          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.reader.metadata\",\"params\":{\"delivery\":{\"max_open_files\":4294967296,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-delivery-f1236135/metadata.json\",\"publication_policy\":\"replace_existing\"},\"reader\":\"80bf316c0991cece77d259d0a9f83687\"}}",
+          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.reader.metadata\",\"params\":{\"delivery\":{\"max_open_files\":4294967296,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-delivery-5246ce82/metadata.json\",\"publication_policy\":\"replace_existing\"},\"reader\":\"c25a4374e144d26b8f2ec18b4699c6d5\"}}",
           "transport_code": -32602
         },
         {
           "actor": "consumer",
           "method": "iprange.v1.database.metadata.get",
-          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.metadata.get\",\"params\":{\"delivery\":{\"max_open_files\":0,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-delivery-f1236135/metadata.json\",\"publication_policy\":\"replace_existing\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-delivery-f1236135/direct.iprange\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.metadata.get\",\"params\":{\"delivery\":{\"max_open_files\":0,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-delivery-5246ce82/metadata.json\",\"publication_policy\":\"replace_existing\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-delivery-5246ce82/direct.iprange\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "consumer",
           "method": "iprange.v1.database.metadata.get",
-          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.metadata.get\",\"params\":{\"delivery\":{\"max_open_files\":0,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-delivery-f1236135/metadata.json\",\"publication_policy\":\"replace_existing\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-delivery-f1236135/direct.iprange\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.metadata.get\",\"params\":{\"delivery\":{\"max_open_files\":0,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-delivery-5246ce82/metadata.json\",\"publication_policy\":\"replace_existing\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-delivery-5246ce82/direct.iprange\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "consumer",
           "method": "iprange.v1.database.metadata.get",
-          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.metadata.get\",\"params\":{\"delivery\":{\"max_open_files\":-1,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-delivery-f1236135/metadata.json\",\"publication_policy\":\"replace_existing\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-delivery-f1236135/direct.iprange\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.metadata.get\",\"params\":{\"delivery\":{\"max_open_files\":-1,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-delivery-5246ce82/metadata.json\",\"publication_policy\":\"replace_existing\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-delivery-5246ce82/direct.iprange\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "consumer",
           "method": "iprange.v1.database.metadata.get",
-          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.metadata.get\",\"params\":{\"delivery\":{\"max_open_files\":4294967296,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-delivery-f1236135/metadata.json\",\"publication_policy\":\"replace_existing\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-delivery-f1236135/direct.iprange\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_delivery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.metadata.get\",\"params\":{\"delivery\":{\"max_open_files\":4294967296,\"max_output_bytes\":\"4096\",\"mode\":\"file\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-delivery-5246ce82/metadata.json\",\"publication_policy\":\"replace_existing\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-delivery-5246ce82/direct.iprange\"}}}",
           "transport_code": -32602
         }
       ],
@@ -1766,22 +1766,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.current.publish"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 4
         }
       },
@@ -1813,19 +1813,19 @@
         {
           "actor": "producer",
           "method": "iprange.v1.current.publish",
-          "request": "{\"id\":\"case-params.negative.budget_immutable_feed\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.current.publish\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-96268035/budget-published.iprange\",\"feed\":\"negfeed\",\"immutable_feed_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_output_pages\":\"20000\",\"max_workspace_pages\":\"20000\"},\"input\":{\"default_prefix\":32,\"dns\":{\"silent\":true,\"threads\":1},\"expand_at_paths\":false,\"family\":\"ipv4\",\"fix_network\":true,\"max_expanded_paths\":4,\"max_line_bytes\":1024,\"paths\":[\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-96268035/data.csv\"]},\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"published\"},\"publication_policy\":\"fail_if_exists\",\"value_tag\":{\"text\":\"negtag\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_immutable_feed\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.current.publish\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-6a435c6f/budget-published.iprange\",\"feed\":\"negfeed\",\"immutable_feed_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_output_pages\":\"20000\",\"max_workspace_pages\":\"20000\"},\"input\":{\"default_prefix\":32,\"dns\":{\"silent\":true,\"threads\":1},\"expand_at_paths\":false,\"family\":\"ipv4\",\"fix_network\":true,\"max_expanded_paths\":4,\"max_line_bytes\":1024,\"paths\":[\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-6a435c6f/data.csv\"]},\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"published\"},\"publication_policy\":\"fail_if_exists\",\"value_tag\":{\"text\":\"negtag\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.current.publish",
-          "request": "{\"id\":\"case-params.negative.budget_immutable_feed\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.current.publish\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-96268035/budget-published.iprange\",\"feed\":\"negfeed\",\"immutable_feed_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":\"0\",\"max_output_pages\":\"20000\",\"max_workspace_pages\":\"20000\"},\"input\":{\"default_prefix\":32,\"dns\":{\"silent\":true,\"threads\":1},\"expand_at_paths\":false,\"family\":\"ipv4\",\"fix_network\":true,\"max_expanded_paths\":4,\"max_line_bytes\":1024,\"paths\":[\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-96268035/data.csv\"]},\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"published\"},\"publication_policy\":\"fail_if_exists\",\"value_tag\":{\"text\":\"negtag\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_immutable_feed\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.current.publish\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-6a435c6f/budget-published.iprange\",\"feed\":\"negfeed\",\"immutable_feed_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":\"0\",\"max_output_pages\":\"20000\",\"max_workspace_pages\":\"20000\"},\"input\":{\"default_prefix\":32,\"dns\":{\"silent\":true,\"threads\":1},\"expand_at_paths\":false,\"family\":\"ipv4\",\"fix_network\":true,\"max_expanded_paths\":4,\"max_line_bytes\":1024,\"paths\":[\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-6a435c6f/data.csv\"]},\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"published\"},\"publication_policy\":\"fail_if_exists\",\"value_tag\":{\"text\":\"negtag\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.current.publish",
-          "request": "{\"id\":\"case-params.negative.budget_immutable_feed\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.current.publish\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-96268035/budget-published.iprange\",\"feed\":\"negfeed\",\"immutable_feed_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4294967296,\"max_output_pages\":\"20000\",\"max_workspace_pages\":\"20000\"},\"input\":{\"default_prefix\":32,\"dns\":{\"silent\":true,\"threads\":1},\"expand_at_paths\":false,\"family\":\"ipv4\",\"fix_network\":true,\"max_expanded_paths\":4,\"max_line_bytes\":1024,\"paths\":[\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-96268035/data.csv\"]},\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"published\"},\"publication_policy\":\"fail_if_exists\",\"value_tag\":{\"text\":\"negtag\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_immutable_feed\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.current.publish\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-6a435c6f/budget-published.iprange\",\"feed\":\"negfeed\",\"immutable_feed_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4294967296,\"max_output_pages\":\"20000\",\"max_workspace_pages\":\"20000\"},\"input\":{\"default_prefix\":32,\"dns\":{\"silent\":true,\"threads\":1},\"expand_at_paths\":false,\"family\":\"ipv4\",\"fix_network\":true,\"max_expanded_paths\":4,\"max_line_bytes\":1024,\"paths\":[\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-6a435c6f/data.csv\"]},\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"published\"},\"publication_policy\":\"fail_if_exists\",\"value_tag\":{\"text\":\"negtag\"}}}",
           "transport_code": -32602
         }
       ],
@@ -1834,22 +1834,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.recover"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 9
         }
       },
@@ -1881,49 +1881,49 @@
         {
           "actor": "producer",
           "method": "iprange.v1.recover",
-          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/budget.iprange\"}}",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/budget.iprange\"}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.recover",
-          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":\"0\",\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/budget.iprange\"}}",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":\"0\",\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/budget.iprange\"}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.recover",
-          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4294967296,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/budget.iprange\"}}",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4294967296,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/budget.iprange\"}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.recover",
-          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":\"0\"},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/budget.iprange\"}}",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":\"0\"},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/budget.iprange\"}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.recover",
-          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":4294967296},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/budget.iprange\"}}",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":4294967296},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/budget.iprange\"}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.recover",
-          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"4096\",\"max_scratch_files\":0},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/budget.iprange\"}}",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"4096\",\"max_scratch_files\":0},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/budget.iprange\"}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.recover",
-          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":1},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/budget.iprange\"}}",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":1},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/budget.iprange\"}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.recover",
-          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0,\"scratch_directory\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/scratch\"},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-recovery-f8870ab0/budget.iprange\"}}",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0,\"scratch_directory\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/scratch\"},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-recovery-438c3ea7/budget.iprange\"}}",
           "transport_code": -32602
         }
       ],
@@ -1932,22 +1932,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.retention.first_seen.refresh"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 9
         }
       },
@@ -1979,49 +1979,49 @@
         {
           "actor": "producer",
           "method": "iprange.v1.retention.first_seen.refresh",
-          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":0,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":0,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.retention.first_seen.refresh",
-          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":0,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":0,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.retention.first_seen.refresh",
-          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":-1,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":-1,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.retention.first_seen.refresh",
-          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":4294967296,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":4294967296,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.retention.first_seen.refresh",
-          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":0}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":0}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.retention.first_seen.refresh",
-          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":-1}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":-1}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.retention.first_seen.refresh",
-          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":0,\"max_rows\":\"64\"}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":0,\"max_rows\":\"64\"}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.retention.first_seen.refresh",
-          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-removals-d777b4d1/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":-1,\"max_rows\":\"64\"}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_removals\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.retention.first_seen.refresh\",\"params\":{\"current\":{\"feed\":\"alpha\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\"}},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/budget.iprange\",\"refresh_value\":1234,\"removals_output\":{\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-removals-cc3b8838/removals.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":-1,\"max_rows\":\"64\"}},\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         }
       ],
@@ -2030,22 +2030,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.export"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 4
         }
       },
@@ -2077,19 +2077,19 @@
         {
           "actor": "producer",
           "method": "iprange.v1.export",
-          "request": "{\"id\":\"case-params.negative.budget_result\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-result-3705875a/budget-export.ranges\",\"format\":\"ranges\",\"publication_policy\":\"replace_existing\",\"result_budget\":{\"max_open_files\":0,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-result-3705875a/budget.iprange\"},\"view\":{\"kind\":\"direct\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_result\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-result-a1b449a3/budget-export.ranges\",\"format\":\"ranges\",\"publication_policy\":\"replace_existing\",\"result_budget\":{\"max_open_files\":0,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-result-a1b449a3/budget.iprange\"},\"view\":{\"kind\":\"direct\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.export",
-          "request": "{\"id\":\"case-params.negative.budget_result\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-result-3705875a/budget-export.ranges\",\"format\":\"ranges\",\"publication_policy\":\"replace_existing\",\"result_budget\":{\"max_open_files\":\"0\",\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-result-3705875a/budget.iprange\"},\"view\":{\"kind\":\"direct\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_result\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-result-a1b449a3/budget-export.ranges\",\"format\":\"ranges\",\"publication_policy\":\"replace_existing\",\"result_budget\":{\"max_open_files\":\"0\",\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-result-a1b449a3/budget.iprange\"},\"view\":{\"kind\":\"direct\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.export",
-          "request": "{\"id\":\"case-params.negative.budget_result\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-result-3705875a/budget-export.ranges\",\"format\":\"ranges\",\"publication_policy\":\"replace_existing\",\"result_budget\":{\"max_open_files\":4294967296,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-result-3705875a/budget.iprange\"},\"view\":{\"kind\":\"direct\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_result\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-result-a1b449a3/budget-export.ranges\",\"format\":\"ranges\",\"publication_policy\":\"replace_existing\",\"result_budget\":{\"max_open_files\":4294967296,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-result-a1b449a3/budget.iprange\"},\"view\":{\"kind\":\"direct\"}}}",
           "transport_code": -32602
         }
       ],
@@ -2098,22 +2098,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.snapshot"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 4
         }
       },
@@ -2145,19 +2145,19 @@
         {
           "actor": "producer",
           "method": "iprange.v1.snapshot",
-          "request": "{\"id\":\"case-params.negative.budget_snapshot\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.snapshot\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-snapshot-53c260bd/budget-snapshot.iprange\",\"publication_policy\":\"replace_existing\",\"snapshot_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_output_pages\":\"512\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-snapshot-53c260bd/budget.iprange\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_snapshot\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.snapshot\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-snapshot-737c30e0/budget-snapshot.iprange\",\"publication_policy\":\"replace_existing\",\"snapshot_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_output_pages\":\"512\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-snapshot-737c30e0/budget.iprange\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.snapshot",
-          "request": "{\"id\":\"case-params.negative.budget_snapshot\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.snapshot\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-snapshot-53c260bd/budget-snapshot.iprange\",\"publication_policy\":\"replace_existing\",\"snapshot_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":\"0\",\"max_output_pages\":\"512\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-snapshot-53c260bd/budget.iprange\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_snapshot\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.snapshot\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-snapshot-737c30e0/budget-snapshot.iprange\",\"publication_policy\":\"replace_existing\",\"snapshot_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":\"0\",\"max_output_pages\":\"512\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-snapshot-737c30e0/budget.iprange\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.snapshot",
-          "request": "{\"id\":\"case-params.negative.budget_snapshot\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.snapshot\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-snapshot-53c260bd/budget-snapshot.iprange\",\"publication_policy\":\"replace_existing\",\"snapshot_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4294967296,\"max_output_pages\":\"512\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-snapshot-53c260bd/budget.iprange\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_snapshot\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.snapshot\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-snapshot-737c30e0/budget-snapshot.iprange\",\"publication_policy\":\"replace_existing\",\"snapshot_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4294967296,\"max_output_pages\":\"512\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-snapshot-737c30e0/budget.iprange\"}}}",
           "transport_code": -32602
         }
       ],
@@ -2166,22 +2166,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.validate"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 9
         }
       },
@@ -2213,49 +2213,49 @@
         {
           "actor": "producer",
           "method": "iprange.v1.validate",
-          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0}}}",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.validate",
-          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":\"0\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0}}}",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":\"0\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.validate",
-          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4294967296,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0}}}",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4294967296,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.validate",
-          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":\"0\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":\"0\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.validate",
-          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":4294967296}}}",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":4294967296}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.validate",
-          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_scratch_bytes\":\"4096\",\"max_scratch_files\":0}}}",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_scratch_bytes\":\"4096\",\"max_scratch_files\":0}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.validate",
-          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":1}}}",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":1}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.validate",
-          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0,\"scratch_directory\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-budget-validation-16036277/scratch\"}}}",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0,\"scratch_directory\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-budget-validation-87c00f2e/scratch\"}}}",
           "transport_code": -32602
         }
       ],
@@ -2264,22 +2264,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -2311,7 +2311,7 @@
         {
           "actor": "producer",
           "method": "iprange.v1.direct.replace",
-          "request": "{\"id\":\"case-params.negative.direct_replace\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.direct.replace\",\"params\":{\"input\":{\"max_line_bytes\":1024,\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-direct-replace-df7c0c89/data.csv\"},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-direct-replace-df7c0c89/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.direct_replace\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.direct.replace\",\"params\":{\"input\":{\"max_line_bytes\":1024,\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-direct-replace-e47c5ee0/data.csv\"},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-direct-replace-e47c5ee0/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         }
       ],
@@ -2320,22 +2320,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.feeds.create"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -2367,7 +2367,7 @@
         {
           "actor": "producer",
           "method": "iprange.v1.feeds.create",
-          "request": "{\"id\":\"case-params.negative.feeds_create\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.feeds.create\",\"params\":{\"current\":{\"feed\":\"gamma\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-feeds-create-0cbd015f/budget.iprange\"}},\"feed\":\"gamma\",\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-feeds-create-0cbd015f/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.feeds_create\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.feeds.create\",\"params\":{\"current\":{\"feed\":\"gamma\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-feeds-create-9482baf4/budget.iprange\"}},\"feed\":\"gamma\",\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-feeds-create-9482baf4/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         }
       ],
@@ -2376,24 +2376,24 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.system.describe",
             "iprange.v1.database.info",
             "iprange.v1.export"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 3
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish",
             "iprange.v1.export"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 3
         }
       },
@@ -2423,13 +2423,13 @@
         {
           "actor": "producer",
           "method": "iprange.v1.export",
-          "request": "{\"id\":\"case-params.negative.grammar\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-grammar-1fce6614/reject.netset\",\"format\":\"netset\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"1e2\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-grammar-1fce6614/grammar.iprange\"},\"view\":{\"feed\":\"gr\",\"kind\":\"feed\"}}}",
+          "request": "{\"id\":\"case-params.negative.grammar\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-grammar-78c5e3c3/reject.netset\",\"format\":\"netset\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"1e2\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-grammar-78c5e3c3/grammar.iprange\"},\"view\":{\"feed\":\"gr\",\"kind\":\"feed\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.export",
-          "request": "{\"id\":\"case-params.negative.grammar\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-grammar-1fce6614/reject2.netset\",\"format\":\"netset\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":\"3\",\"max_output_bytes\":\"65536\",\"max_rows\":\"10\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-grammar-1fce6614/grammar.iprange\"},\"view\":{\"feed\":\"gr\",\"kind\":\"feed\"}}}",
+          "request": "{\"id\":\"case-params.negative.grammar\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-grammar-78c5e3c3/reject2.netset\",\"format\":\"netset\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":\"3\",\"max_output_bytes\":\"65536\",\"max_rows\":\"10\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-grammar-78c5e3c3/grammar.iprange\"},\"view\":{\"feed\":\"gr\",\"kind\":\"feed\"}}}",
           "transport_code": -32602
         },
         {
@@ -2441,7 +2441,7 @@
         {
           "actor": "consumer",
           "method": "iprange.v1.database.info",
-          "request": "{\"id\":\"case-params.negative.grammar\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.info\",\"params\":{\"source\":{\"extra\":1,\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-grammar-1fce6614/grammar.iprange\"}}}",
+          "request": "{\"id\":\"case-params.negative.grammar\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.info\",\"params\":{\"source\":{\"extra\":1,\"mode\":\"immutable\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-grammar-78c5e3c3/grammar.iprange\"}}}",
           "transport_code": -32602
         }
       ],
@@ -2450,22 +2450,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.database.metadata.replace"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -2497,7 +2497,7 @@
         {
           "actor": "producer",
           "method": "iprange.v1.database.metadata.replace",
-          "request": "{\"id\":\"case-params.negative.metadata_replace\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.metadata.replace\",\"params\":{\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"neg-tag\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-metadata-replace-b1f984e2/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.metadata_replace\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.metadata.replace\",\"params\":{\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"neg-tag\"},\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-metadata-replace-1845582f/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         }
       ],
@@ -2506,22 +2506,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.database.reclaim"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -2553,7 +2553,7 @@
         {
           "actor": "producer",
           "method": "iprange.v1.database.reclaim",
-          "request": "{\"id\":\"case-params.negative.reclaim\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.reclaim\",\"params\":{\"max_pages\":\"64\",\"max_transactions\":\"64\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go/rust-go-params-negative-reclaim-4822f8b4/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.reclaim\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.reclaim\",\"params\":{\"max_pages\":\"64\",\"max_transactions\":\"64\",\"path\":\"/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go/rust-go-params-negative-reclaim-61980b0e/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         }
       ],
@@ -2562,23 +2562,23 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.publication.inspect"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish",
             "iprange.v1.publication.resolve",
             "iprange.v1.publication.residue.remove"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 3
         }
       },
@@ -2604,22 +2604,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.export"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish",
             "iprange.v1.export"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -2754,7 +2754,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.validate",
@@ -2762,18 +2762,18 @@
             "iprange.v1.reader.lookup",
             "iprange.v1.reader.close"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 5
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.recovery.inspect",
             "iprange.v1.recover",
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 3
         }
       },
@@ -2839,24 +2839,24 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
             "iprange.v1.reader.lookup",
             "iprange.v1.reader.close"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 3
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.snapshot",
             "iprange.v1.publication.resolve"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -2882,22 +2882,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.snapshot"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 2
         }
       },
@@ -2943,22 +2943,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.validate",
             "iprange.v1.recovery.inspect"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 2
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.recover"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 1
         }
       },
@@ -2981,7 +2981,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
@@ -2996,11 +2996,11 @@
             "iprange.v1.recovery.inspect",
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 33
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish",
@@ -3017,7 +3017,7 @@
             "iprange.v1.snapshot",
             "iprange.v1.database.reclaim"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 20
         }
       },
@@ -3197,21 +3197,21 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open"
           ],
-          "sha256": "dc9429c009ca0621a1d6db0b0f530cf752fe86966d2e123f4e2608927d3e9881",
+          "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+          "argv": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.direct.replace"
           ],
-          "sha256": "7cded5563c8a522a716f33f33eb17e31d21609f2a7bd729448cdae1d53fa630f",
+          "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
           "steps": 1
         }
       },
@@ -3234,18 +3234,18 @@
   "command": [
     "v4/cli/run.py",
     "--go",
-    "/tmp/opencode/iprange-sow35/battery-gate20/bin/go/iprange",
+    "/tmp/opencode/iprange-sow35/battery-gate22/bin/go/iprange",
     "--rust",
-    "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/iprange",
+    "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/iprange",
     "--fixture-tool",
-    "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/v4-fixture",
+    "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/v4-fixture",
     "--matrix",
     "rust_to_go",
     "--work-dir",
-    "/tmp/opencode/iprange-sow35/battery-gate20/W-rust_to_go",
+    "/tmp/opencode/iprange-sow35/battery-gate22/W-rust_to_go",
     "--allow-skips",
     "--json-report",
-    "/tmp/opencode/iprange-sow35/battery-gate20/reports/matrix-rust_to_go.json"
+    "/tmp/opencode/iprange-sow35/battery-gate22/reports/matrix-rust_to_go.json"
   ],
   "engine_deaths": [],
   "environment_allowlist": [
@@ -3346,8 +3346,8 @@
     }
   },
   "fixture_tool": {
-    "path": "/tmp/opencode/iprange-sow35/battery-gate20/bin/rust/v4-fixture",
-    "sha256": "c5081c57071f1e6fc1214f26b4fd9fff6b810013f258c23218c7ea3d21602eda"
+    "path": "/tmp/opencode/iprange-sow35/battery-gate22/bin/rust/v4-fixture",
+    "sha256": "07d5173417ebc1b8be32ee5a2fce5029f1b559eaa1571dea8262318c2ec69991"
   },
   "frame_sizes": {
     "iprange.v1.algebra.count": {
@@ -3510,7 +3510,7 @@
       "max_response_bytes": 834
     }
   },
-  "git_head": "1395003e20385450c4c56eaa528b82147afad07b",
+  "git_head": "db1c7999d78a58bb3367ab388ce203be8514823c",
   "matrix": "rust_to_go",
   "matrix_verdicts": [],
   "oracle_checks": 22,
