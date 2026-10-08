@@ -325,9 +325,15 @@ REQUIRED_PARAMS_NEGATIVE_METHODS = (
 # main, recover creates scratch (and, when the kill lands in its
 # output phase, the recovery reservation/temp), initialize_live
 # creates the sidecar, export creates the adapter output.
+# publication_reservation is optional (not in REQUIRED_KINDS) but
+# KNOWN: scenario C's recovery output legitimately creates one, and
+# the harness's observed_kinds rule credits it — forbidding it would
+# false-red a healthy landing (round 11 security finding 1).
 CRASH_CREATE_METHODS = {
     "v4_main": ("iprange.v1.current.publish",),
     "live_sidecar": ("iprange.v1.database.initialize_live",),
+    "publication_reservation": ("iprange.v1.current.publish",
+                                "iprange.v1.recover"),
     "publication_temp": ("iprange.v1.current.publish",
                          "iprange.v1.recover"),
     "authorized_scratch": ("iprange.v1.recover",),
@@ -356,6 +362,8 @@ MATRIX_CREATE_METHODS = {
                 "iprange.v1.snapshot"),
     "live_sidecar": ("iprange.v1.database.create",
                      "iprange.v1.database.initialize_live"),
+    "publication_reservation": ("iprange.v1.current.publish",
+                                "iprange.v1.recover"),
     "publication_temp": ("iprange.v1.current.publish",
                          "iprange.v1.recover"),
     "authorized_scratch": ("iprange.v1.recover",),
@@ -2650,7 +2658,7 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
             continue
         _surface_binary_identity(
             path, "create-mode", engine, record, implementation_of,
-            ledger, problems, on_disk, require_provenance=False)
+            ledger, problems, on_disk, require_provenance=True)
     engines = {entry.get("engine") for entry in report.get("engines", [])
                if isinstance(entry, dict)}
     if engines != {"rust", "go"}:
@@ -2689,8 +2697,7 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
             f"{name}:{modes}"
             for name, modes in (entry.get("temp_creates") or {}).items()
             if not isinstance(modes, list)
-            or any(mode != "0o600" for mode in modes
-                   if isinstance(mode, str)))
+            or any(mode != "0o600" for mode in modes))
         if bad_modes:
             problems.append(
                 f"create-mode {path}: {entry.get('engine')} pass "
@@ -5689,7 +5696,14 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
         problems.append(
             "no crash report contributes a PASS scenario: crash evidence "
             "is mandatory")
-    unknown = sorted(kind for kind in coverage if kind not in REQUIRED_KINDS)
+    # publication_reservation is the one optional-but-known kind:
+    # the reservation-marker scenarios were removed, but scenario C's
+    # recovery output legitimately creates one and the harness's
+    # observed_kinds rule credits it (round 11 security finding 1).
+    KNOWN_OPTIONAL_KINDS = {"publication_reservation"}
+    unknown = sorted(kind for kind in coverage
+                     if kind not in REQUIRED_KINDS
+                     and kind not in KNOWN_OPTIONAL_KINDS)
     if unknown:
         problems.append(f"unknown kinds in PASS evidence: {unknown}")
     for kind in REQUIRED_KINDS:
@@ -6209,6 +6223,8 @@ def _self_test():
         "producer": BINARY_PATHS["rust"], "producer_sha256": "1" * 64,
         "consumer": BINARY_PATHS["go"], "consumer_sha256": "2" * 64,
         "fixture_tool": "/tmp/v4-fixture", "fixture_tool_sha256": "3" * 64,
+        "rust": BINARY_PATHS["rust"], "rust_sha256": "1" * 64,
+        "go": BINARY_PATHS["go"], "go_sha256": "2" * 64,
     }
 
     def crash_report(producers, consumers, failed=0, leftover=None,
@@ -6391,8 +6407,10 @@ def _self_test():
         return {"schema": "iprange-cli-create-mode-report-v1",
                 "git_head": revision,
                 "binaries": {
-                    "rust": {"implementation": "rust", "sha256": "1" * 64},
-                    "go": {"implementation": "go", "sha256": "2" * 64}},
+                    "rust": {"implementation": "rust",
+                             "sha256": CRASH_BINARIES["rust_sha256"]},
+                    "go": {"implementation": "go",
+                           "sha256": CRASH_BINARIES["go_sha256"]}},
                 "verdict": "pass", "engines": entries}
 
     def fifo_surface_report():
@@ -8811,7 +8829,7 @@ def _self_test():
 
         def forged_live_sidecar_open(matrices, crash):
             for scenario in crash["scenarios"]:
-                if scenario["scenario"].startswith("B."):
+                if scenario["scenario"].startswith("D."):
                     scenario["kinds"]["live_sidecar"][
                         "opened_by"] = ["producer.3"]
         genuine_mutation_fails("fabricated-sidecar-open",
@@ -8847,7 +8865,7 @@ def _self_test():
         #     GENUINE evidence every one of these must now fail.
         def forged_main_open_ordinal(matrices, crash):
             for scenario in crash["scenarios"]:
-                if scenario["scenario"].startswith("A1."):
+                if scenario["scenario"].startswith("E."):
                     scenario["kinds"]["v4_main"]["opened_by"] = [
                         "consumer.0"]
         genuine_mutation_fails("failed-main-open-ordinal",
@@ -8855,7 +8873,7 @@ def _self_test():
 
         def forged_sidecar_open_ordinal(matrices, crash):
             for scenario in crash["scenarios"]:
-                if scenario["scenario"].startswith("B."):
+                if scenario["scenario"].startswith("D."):
                     scenario["kinds"]["live_sidecar"]["opened_by"] = [
                         "producer.1", "consumer.0"]
         genuine_mutation_fails("failed-sidecar-open-ordinal",
@@ -10648,8 +10666,6 @@ def _self_test():
             paths, crash_path_local, extras = stage_genuine_battery(label)
             document = build_battery_manifest(
                 consumed_set(paths, [crash_path_local], extras["fifo"],
-                             extras.get("create_mode",
-                                        list(genuine_create_mode)),
                              extras["throughput"], extras["parity"],
                              extras["coverage"], extras["negative"],
                              extras["windows"], guard=extras["guard"],
@@ -10657,7 +10673,7 @@ def _self_test():
                              golden=extras["golden"],
                              sensitivity=extras["sensitivity"],
                              posix_guard=extras["posix_guard"],
-                             race=extras["race"]),
+                             create_mode=extras.get("create_mode")),
                 ledger_path=_wave_ledger_path())
             before = [dict(entry) for entry in document["reports"]]
             mutate(document)

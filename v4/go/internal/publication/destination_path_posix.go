@@ -48,5 +48,5 @@ func destinationCreate(dir *live.Directory, name string, _ security.Profile, cre
 	if creatorOnly {
 		return dir.Create(name)
 	}
-	return dir.CreateMode(name, 0o666)
+	return dir.CreateUnprotected(name)
 }

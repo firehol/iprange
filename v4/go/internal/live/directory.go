@@ -117,10 +117,10 @@ func (d *Directory) Create(name string) (*os.File, error) {
 }
 
 // CreateUnprotected creates one name exclusively with the process
-// default (0666 so the umask applies). Every unprotected artifact in
-// the Go tree routes through this one method — the round-7/9/10
-// exact-default pins kept missing sites with their own 0o666 literals,
-// and one shared site makes the one shared pin cover everything.
+// default (0666 so the umask applies). Every unprotected artifact
+// create in the Go tree routes through this method or Create (whose
+// default body is the same call) — the round-7/9/10 exact-default
+// pins kept missing sites with their own 0o666 literals.
 func (d *Directory) CreateUnprotected(name string) (*os.File, error) {
 	return d.CreateMode(name, 0o666)
 }

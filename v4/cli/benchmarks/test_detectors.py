@@ -2033,26 +2033,6 @@ class SolTurn2DetectorTest(unittest.TestCase):
                       "the drainer must route its pending buffer through "
                       "the pinned seam (the assignment, not a bare call)")
 
-    def test_a_quiet_reservation_watch_stops_at_close(self):
-        # A quiet watch (no reservation ever appears) must stop its
-        # thread at close and return promptly (sol turn-2): closing
-        # the inotify fd from another thread does not cancel the
-        # thread's blocked read, so the old close left a live thread
-        # and a leaked inotify resource behind every attempt.
-        import tempfile
-        import crash_harness
-        with tempfile.TemporaryDirectory() as work:
-            watch = crash_harness.ReservationWatch(work, None)
-            thread = watch._thread
-            started = time.monotonic()
-            watch.close()
-            self.assertLess(time.monotonic() - started, 1.5,
-                            "close() lingered on a quiet watch")
-            self.assertIsNone(watch._thread)
-            if thread is not None:
-                self.assertFalse(thread.is_alive(),
-                                 "the watch thread survived close")
-
     def test_a_stuck_stderr_reader_cannot_block_close(self):
         # A descendant retaining stderr pins the drainer's read; the
         # close must still finish under its bound (the buffered

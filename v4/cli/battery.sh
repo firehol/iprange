@@ -405,8 +405,8 @@ record_audit() {
 # artifacts.  The classification is printed either way, so a reader can check a
 # deferral without rerunning the gate.
 windows_hold() {
-  local log="$1"; shift
-  nice python3 - "$log" "$REPO" "$@" <<'WHY'
+  local log="$1"; local step_rc="$2"; shift 2
+  nice python3 - "$log" "$REPO" "$step_rc" "$@" <<'WHY'
 import ast
 import json
 import os
@@ -414,8 +414,12 @@ import re
 import subprocess
 import sys
 
-log_path, repo = sys.argv[1], sys.argv[2]
-consumed = sys.argv[3:]
+log_path, repo, step_rc_text = sys.argv[1], sys.argv[2], sys.argv[3]
+consumed = sys.argv[4:]
+try:
+    step_rc = int(step_rc_text)
+except ValueError:
+    step_rc = None
 try:
     head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
                           capture_output=True, text=True).stdout.strip()
@@ -490,30 +494,36 @@ def attributable(text):
 complaints = 0
 local = []
 pending_traceback = False
+
+# Structural crash-is-never-a-deferral (round 11): the rule is shape,
+# not a name list — a name list re-develops the exact drift disease
+# the preview fix removed. While a traceback is pending, ANY line that
+# looks like an exception origin (an indented frame, a blank, or an
+# exception line) keeps it armed; only an AssertionError falls through
+# to complaint parsing below. EOF with a traceback still pending is a
+# crash this run owns, and so is any non-AssertionError exception line:
+# the structural signal is that an exception escaped uncaught, not its
+# class name.
 for line in open(log_path, encoding="utf-8", errors="replace"):
     stripped = line.strip()
     if stripped.startswith("Traceback (most recent call last)"):
         pending_traceback = True
         continue
     if pending_traceback:
-        # A crash of the harness itself is a defect of THIS run: the
-        # deferral exists to hold Windows-leg artifacts, never to
-        # shelter a traceback (round 10: a KeyError shipped as the
-        # designed DEFERRED). An AssertionError still carries its
-        # problem list and falls through to the GATE_ASSERTION path
-        # below so its complaints are attributed normally; every other
-        # exception type escaping through a traceback is a crash this
-        # run owns.
         if stripped.startswith("AssertionError"):
+            # Carries its problem list; falls through to the
+            # GATE_ASSERTION matcher below for attribution.
             pending_traceback = False
-        elif stripped.startswith(("KeyError:", "NameError:",
-                                  "AttributeError:", "TypeError:",
-                                  "IndexError:", "RuntimeError:")):
+        elif not stripped or stripped.startswith("  ") or stripped.startswith("    "):
+            # A frame or a blank inside the traceback body.
+            continue
+        else:
+            # Any other exception origin (KeyError, ValueError,
+            # FileNotFoundError, StopIteration, a bare message — the
+            # class name does not matter): an uncaught crash.
             complaints += 1
             local.append(stripped)
             pending_traceback = False
-            continue
-        else:
             continue
     match = GATE_ASSERTION.search(stripped)
     if match:
@@ -538,6 +548,18 @@ for line in open(log_path, encoding="utf-8", errors="replace"):
             local.append(stripped)
         break
 
+# A traceback that never resolved by EOF is a crash this run owns;
+# so are the timeout kill (rc 124/137) and the harness's own broken
+# verdict (rc 2) — no complaint line names either, so they must be
+# local here or they defer (round 11: three probe-proven shapes).
+if pending_traceback:
+    complaints += 1
+    local.append("<unresolved traceback at EOF>")
+import os as _os
+_wait_rc = locals().get("_wait_rc")
+if step_rc in (124, 137, 2):
+    complaints += 1
+    local.append("exit %s (timeout kill or harness-broken verdict)" % step_rc)
 print("WINDOWS-HOLD: %d complaint(s), %d local to this leg"
       % (complaints, len(local)))
 for text in local[:12]:
@@ -554,7 +576,7 @@ WHY
 record_gate() {
   local label="$1" rc="$2" log="$3"; shift 3
   if [ "$rc" -eq 0 ]; then record "$label" 0 zero; return; fi
-  if windows_hold "$log" "$@"; then
+  if windows_hold "$log" "$rc" "$@"; then
     echo "$label: the gate refused only the Windows-leg artifacts this leg does"
     echo "  not author (windows-guard.json, windows-housekeeping.json are authored"
     echo "  on the authorized Windows validation host; this leg can neither attest"

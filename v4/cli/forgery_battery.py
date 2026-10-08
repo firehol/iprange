@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 22
+EXPECTED_CLASSES = 23
 
 
 def _forgery(label, whole_bundle=False):
@@ -505,6 +505,24 @@ def w7(bundle):
         if isinstance(provenance, dict):
             provenance["revision"] = forged
     bundle.manifest = MANIFEST_FILE
+
+
+@_forgery("C2-create-mode-purchased-verdict", whole_bundle=True)
+def c2(bundle):
+    # The round-10 digest binding's standing net: a report whose
+    # verdict claims pass while recording non-0600 modes (the
+    # purchased-verdict forge), and whose binaries table swaps in
+    # worker digests (the foreign-digest forge). The gate must reject
+    # both at every rotation.
+    for entry in bundle.create_mode.get("engines", []):
+        if isinstance(entry, dict) and entry.get("temp_creates"):
+            for name in list(entry["temp_creates"]):
+                entry["temp_creates"][name] = [438]
+    binaries = bundle.create_mode.get("binaries") or {}
+    for engine in ("rust", "go"):
+        record = binaries.get(engine)
+        if isinstance(record, dict):
+            record["sha256"] = "f" * 64
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)

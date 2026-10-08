@@ -953,6 +953,22 @@ mod mode_tests {
         }
         assert_eq!(on_mode, 0o600, "switch-on control file mode {on_mode:o}, want 0600 under umask 0");
         assert_eq!(off_mode, 0o666, "switch-off control file mode {off_mode:o}, want the 0666 process default under umask 0");
+
+        // The widening window (parity round 11): under umask 0 the
+        // 0666|0o600 == 0666 identity hides a widened floor; under
+        // umask 027 the default is exactly 0640 and a floor widened
+        // to |0o666 produces 0666. Go twin:
+        // TestCreateParentWideningDetectsFloorWidening.
+        std::env::remove_var("IPRANGE_CREATOR_ONLY");
+        // Set umask to 027 (not 0): restore_umask just wraps umask(2),
+        // which sets and returns the previous mask in one call.
+        let widened_mask = unsafe { restore_umask(0o027) };
+        let widened = control_mode();
+        unsafe { restore_umask(widened_mask) };
+        assert_eq!(
+            widened, 0o640,
+            "switch-off control file mode under umask 027 is {widened:o}, want the exact default 0640 (a widened owner floor would produce 0666)"
+        );
     }
 
     unsafe fn umask0() -> u32 {
@@ -962,10 +978,10 @@ mod mode_tests {
         unsafe { umask(0) }
     }
 
-    unsafe fn restore_umask(mask: u32) {
+    unsafe fn restore_umask(mask: u32) -> u32 {
         extern "C" {
             fn umask(mask: u32) -> u32;
         }
-        unsafe { umask(mask) };
+        unsafe { umask(mask) }
     }
 }

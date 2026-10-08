@@ -98,13 +98,11 @@ only when every scenario passes and no owned process remains.
 """
 
 import argparse
-import ctypes
 import hashlib
 import json
 import os
 import platform
 import shutil
-import signal
 import struct
 import subprocess
 import sys
@@ -135,7 +133,6 @@ RESERVATION_PREFIX = ".iprange-reservation-"
 PUBLISH_TEMP_PREFIX = ".iprange-publish-"
 SCRATCH_PREFIX = ".iprange-scratch-"
 PRIVATE_TMP_SUFFIX = ".tmp"
-LIVE_SIDECAR_SUFFIX = ".readers"
 RESERVATION_MAGIC = b"IPR4RSV1"
 
 # Stall guard for every JSON-RPC service this harness spawns (run.py
@@ -162,14 +159,6 @@ POLL_DEADLINE_SECONDS = 30.0
 # workstation, giving the kill at the reservation marker a safe margin
 # before the destination rename.
 FEED_LINE_COUNT = 1_500_000
-PRIOR_FEED_LINE_COUNT = 200_000
-
-# Per-scenario feed sizes: A/B/C reuse FEED_LINE_COUNT; the live-replace
-# crash (D) uses a 200 000-row direct CSV, the export crash (E) uses a
-# 500 000-range text feed, and the validate crash (F) rebuilds the
-# 1 500 000-range main so its range tree holds enough leaves for the
-# deterministic damage (>= 1000 findings); each is calibrated so the
-# observable marker window is wide enough on both product binaries.
 EXPORT_FEED_LINE_COUNT = 500_000
 DIRECT_FEED_LINE_COUNT = 200_000
 F_DAMAGED_LEAF_PAGES = 1400
@@ -736,166 +725,6 @@ def probe_consumer_open(consumer, work, dest, scenario_report,
         }
     finally:
         consumer_service.close()
-
-
-def resolve_interrupted_publication(producer, consumer, work, dest,
-                                    scenario_report, inspect_absent):
-    """Fresh-producer resolution of one interrupted publication.
-
-    Runs on a fresh producer service: maintenance.list bounded-residue
-    evidence, ``publication.inspect`` (either the truthful refusal for
-    an absent destination or the reconstruction from the retained
-    reservation), ``publication.resolve`` complete (the reservation is
-    the sole authority; the outcome must be the truthful completed
-    publication), empty inspect and maintenance after resolution, and
-    the consumer reopen of the complete published file.
-    """
-
-    resolver = HarnessJsonRpcService(
-        [producer, "--jsonrpc"], f"resolver-{os.path.basename(work)}",
-        cwd=work,
-        read_deadline=CRASH_IO_DEADLINE_SECONDS,
-        write_deadline=CRASH_IO_DEADLINE_SECONDS)
-    try:
-        reports, error = maintenance_reports(
-            resolver, work, os.path.join(work, "pre.jsonl"),
-            ["scratch", "reservation", "publication_temp"])
-        assert_truthful(
-            error is None and count_kind(reports, "reservation") == 1
-            and count_kind(reports, "publication_temp") in (0, 1),
-            f"pre-resolution residue must be exactly reservation=1 and "
-            f"publication_temp=0..1, got reports={reports} error={error}",
-            scenario_report)
-        scenario_report["residue_bounded"] = {
-            "maintenance_list_pre": reports}
-
-        inspect = resolver.call(
-            "2", "iprange.v1.publication.inspect", {"path": dest})
-        if inspect_absent:
-            error = inspect.get("error", {}).get("data", {})
-            assert_truthful(
-                error.get("code") == "invalid_path"
-                and error.get("outcome") == "not_started",
-                f"inspect of an absent destination must be truthful, got "
-                f"{inspect}", scenario_report)
-            scenario_report["inspect_outcome"] = {
-                "code": error.get("code"), "outcome": error.get("outcome")}
-        else:
-            assert_truthful(
-                "error" not in inspect,
-                f"inspect must truthfully report the retained attempt, got "
-                f"{inspect}", scenario_report)
-            inspection = inspect["result"]["inspection"]
-            assert_truthful(
-                inspection.get("coordination") in ("absent",
-                                                   "publication_reservation"),
-                f"unexpected coordination class: {inspection}",
-                scenario_report)
-            reconstructed = inspection.get("publication") or {}
-            assert_truthful(
-                bool(reconstructed.get("attempt")),
-                "inspect must reconstruct the attempt from the reservation",
-                scenario_report)
-            handle = inspection.get("handle")
-            scenario_report["inspect_outcome"] = {
-                "coordination": inspection.get("coordination"),
-                "publication_reconstructed": bool(reconstructed),
-                "handle_present": handle is not None,
-            }
-        if inspect_absent:
-            handle = None
-        else:
-            handle = inspection.get("handle")
-
-        resolved = resolver.call(
-            "4", "iprange.v1.publication.resolve",
-            {"path": dest, "resolution_mode": "complete"})
-        if "error" in resolved:
-            raise ScenarioFailure(f"resolve must complete, got {resolved}")
-        publication = resolved["result"]["publication"]
-        attempt = publication["attempt"]
-        assert_truthful(
-            publication.get("publication") == "published"
-            and publication.get("destination_content") == "desired",
-            f"resolve must report the truthful completed outcome, got "
-            f"{publication.get('publication')}/"
-            f"{publication.get('destination_content')}", scenario_report)
-        assert_truthful(
-            os.path.isfile(dest)
-            and sha512_file(dest) == attempt.get("output_sha512"),
-            "resolved destination must be the exact complete output",
-            scenario_report)
-        assert_truthful(
-            private_artifact_names(work) == {"reservation": [],
-                                             "publish_temp": []},
-            "no private publication artifact may survive resolution",
-            scenario_report)
-        scenario_report["resolve_outcome"] = {
-            "publication": publication.get("publication"),
-            "destination_content": publication.get("destination_content"),
-            "main_namespace_may_have_been_attempted": publication.get(
-                "main_namespace_may_have_been_attempted"),
-            "output_sha512": attempt.get("output_sha512"),
-            "destination_sha512": sha512_file(dest),
-        }
-
-        if handle is not None:
-            removed = resolver.call(
-                "6", "iprange.v1.publication.residue.remove",
-                {"handle": handle})
-            assert_truthful(
-                "error" not in removed,
-                f"retained residue must remove, got {removed}",
-                scenario_report)
-        inspect2 = resolver.call(
-            "5", "iprange.v1.publication.inspect", {"path": dest})
-        assert_truthful(
-            inspect2.get("result", {}).get("inspection", {}).get(
-                "coordination") == "absent",
-            f"inspect after resolution must be empty, got {inspect2}",
-            scenario_report)
-        reports2, error2 = maintenance_reports(
-            resolver, work, os.path.join(work, "post.jsonl"),
-            ["scratch", "reservation", "publication_temp"])
-        assert_truthful(
-            error2 is None and count_kind(reports2, "reservation") == 0
-            and count_kind(reports2, "publication_temp") == 0,
-            f"post-resolution residue must be empty, got reports="
-            f"{reports2}", scenario_report)
-        scenario_report["residue_bounded"]["maintenance_list_post"] = reports2
-
-        consumer_service = HarnessJsonRpcService(
-            [consumer, "--jsonrpc"], f"consumer2-{os.path.basename(work)}",
-            cwd=work,
-            read_deadline=CRASH_IO_DEADLINE_SECONDS,
-            write_deadline=CRASH_IO_DEADLINE_SECONDS)
-        try:
-            reopened = consumer_service.call(
-                "8", "iprange.v1.reader.open",
-                {"source": {"path": dest, "mode": "immutable"}})
-            assert_truthful(
-                "error" not in reopened,
-                f"complete destination must reopen, got {reopened}",
-                scenario_report)
-            info = reopened["result"].get("info", {})
-            assert_truthful(
-                info.get("database_id") == attempt.get("database_id"),
-                "reopened file must carry the resolved attempt database id",
-                scenario_report)
-            scenario_report["reopen_outcome"]["after_resolution"] = {
-                "database_id": info.get("database_id"),
-                "transaction_id": info.get("transaction_id"),
-            }
-            # The consumer main-open credit names this successful
-            # reopen's operation ordinal (a failed probe open is
-            # never credited).
-            scenario_report["reopen_outcome"][
-                "consumer_main_open_ordinal"] = _current_ordinal(
-                    "consumer")
-        finally:
-            consumer_service.close()
-    finally:
-        resolver.close()
 
 
 SCRATCH_MAGIC = b"IPR4SCR1"

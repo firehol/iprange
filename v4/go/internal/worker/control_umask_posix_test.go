@@ -38,6 +38,29 @@ func TestCreateParentModeIndependentOfUmask(t *testing.T) {
 // arm: the control file is a no-source artifact, so with the switch off
 // and umask 0 it keeps the process default 0666 rather than forcing
 // 0600.
+// TestCreateParentWideningDetectsFloorWidening pins the owner-floor
+// widening class (parity round 11): under umask 0 the 0666|0o600 ==
+// 0666 identity makes a widened floor invisible, but under umask 027
+// the process default is exactly 0640 and a floor widened to |0o666
+// produces 0666.
+func TestCreateParentWideningDetectsFloorWidening(t *testing.T) {
+	t.Setenv("IPRANGE_CREATOR_ONLY", "")
+	previous := unix.Umask(0o027)
+	defer unix.Umask(previous)
+	c, err := CreateParent()
+	if err != nil {
+		t.Fatal("create parent:", err)
+	}
+	defer c.Close()
+	st, err := os.Stat(c.path)
+	if err != nil {
+		t.Fatal("stat control:", err)
+	}
+	if mode := st.Mode().Perm(); mode != 0o640 {
+		t.Fatalf("control mode under umask 027 = %#o, want the exact default 0640 (a widened owner floor would produce 0666)", mode)
+	}
+}
+
 func TestCreateParentFollowsProcessDefaultWithoutSwitch(t *testing.T) {
 	t.Setenv("IPRANGE_CREATOR_ONLY", "")
 	previous := unix.Umask(0)
