@@ -500,9 +500,10 @@ for line in open(log_path, encoding="utf-8", errors="replace"):
         # deferral exists to hold Windows-leg artifacts, never to
         # shelter a traceback (round 10: a KeyError shipped as the
         # designed DEFERRED). An AssertionError still carries its
-        # problem list and is judged by the GATE_ASSERTION path below;
-        # every other exception type escaping through a traceback is a
-        # crash this run owns.
+        # problem list and falls through to the GATE_ASSERTION path
+        # below so its complaints are attributed normally; every other
+        # exception type escaping through a traceback is a crash this
+        # run owns.
         if stripped.startswith("AssertionError"):
             pending_traceback = False
         elif stripped.startswith(("KeyError:", "NameError:",
@@ -511,7 +512,9 @@ for line in open(log_path, encoding="utf-8", errors="replace"):
             complaints += 1
             local.append(stripped)
             pending_traceback = False
-        continue
+            continue
+        else:
+            continue
     match = GATE_ASSERTION.search(stripped)
     if match:
         # The gate's own --self-test reports the blocking problems as a Python
