@@ -10,11 +10,11 @@
  "command": [
   "v4/cli/command_sanitize.py",
   "--emit-build-ids",
-  "/tmp/opencode/iprange-sow35/battery-gate15b/reports/build-ids.json",
+  "/tmp/opencode/iprange-sow35/battery-gate20/reports/build-ids.json",
   "--built-cli",
-  "/tmp/opencode/iprange-sow35/battery-gate15b/rust-target/release/iprange",
+  "/tmp/opencode/iprange-sow35/battery-gate20/rust-target/release/iprange",
   "--built-worker",
-  "/tmp/opencode/iprange-sow35/battery-gate15b/rust-target/release/iprange-v4-worker"
+  "/tmp/opencode/iprange-sow35/battery-gate20/rust-target/release/iprange-v4-worker"
  ],
  "expected_build_id": {
   "darwin": "39ecf3a1fd83f4756c097e944d0fb55dd21fb31524588e7e59326c9318957c51",
@@ -22,7 +22,7 @@
   "linux": "39ecf3a1fd83f4756c097e944d0fb55dd21fb31524588e7e59326c9318957c51",
   "windows": "39ecf3a1fd83f4756c097e944d0fb55dd21fb31524588e7e59326c9318957c51"
  },
- "git_head": "e9a9845e51a16ea2b9b5f9a5ae555128b1789647",
+ "git_head": "1395003e20385450c4c56eaa528b82147afad07b",
  "inputs": {
   "manifest": "Cargo.toml",
   "source_files": 357
@@ -50,7 +50,7 @@
  "schema": "iprange-cli-build-ids-v1",
  "source_state": {
   "note": "the value is a pure function of iprange-livedb's Cargo.toml and src/**.rs content; any change under that package regenerates it. Regenerate this file whenever the package changes and never hand-edit a digest.",
-  "revision": "e9a9845e51a16ea2b9b5f9a5ae555128b1789647"
+  "revision": "1395003e20385450c4c56eaa528b82147afad07b"
  },
  "verified_against_built_products": {
   "cli_contains_expected": true,
