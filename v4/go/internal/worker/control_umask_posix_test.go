@@ -34,10 +34,6 @@ func TestCreateParentModeIndependentOfUmask(t *testing.T) {
 	}
 }
 
-// TestCreateParentFollowsProcessDefaultWithoutSwitch proves the other
-// arm: the control file is a no-source artifact, so with the switch off
-// and umask 0 it keeps the process default 0666 rather than forcing
-// 0600.
 // TestCreateParentWideningDetectsFloorWidening pins the owner-floor
 // widening class (parity round 11): under umask 0 the 0666|0o600 ==
 // 0666 identity makes a widened floor invisible, but under umask 027
@@ -61,6 +57,10 @@ func TestCreateParentWideningDetectsFloorWidening(t *testing.T) {
 	}
 }
 
+// TestCreateParentFollowsProcessDefaultWithoutSwitch proves the other
+// arm: the control file is a no-source artifact, so with the switch off
+// and umask 0 it keeps the process default 0666 rather than forcing
+// 0600.
 func TestCreateParentFollowsProcessDefaultWithoutSwitch(t *testing.T) {
 	t.Setenv("IPRANGE_CREATOR_ONLY", "")
 	previous := unix.Umask(0)

@@ -574,7 +574,7 @@ table:
   must be created by both product languages and, whenever any
   service opens the kind, opened by both languages too; PASS
   evidence containing any kind outside the required universe
-  (v4_main, live_sidecar, publication_reservation, publication_temp,
+  (v4_main, live_sidecar, publication_temp,
   authorized_scratch, adapter_output, metadata_delivery) fails the
   gate. The gate consumes PASS-case lineage only (the report-root
   aggregate merges partial ledgers even for FAIL cases and is never

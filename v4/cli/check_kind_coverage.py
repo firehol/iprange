@@ -2697,6 +2697,7 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
             f"{name}:{modes}"
             for name, modes in (entry.get("temp_creates") or {}).items()
             if not isinstance(modes, list)
+            or not modes
             or any(mode != "0o600" for mode in modes))
         if bad_modes:
             problems.append(
@@ -8867,7 +8868,7 @@ def _self_test():
             for scenario in crash["scenarios"]:
                 if scenario["scenario"].startswith("E."):
                     scenario["kinds"]["v4_main"]["opened_by"] = [
-                        "consumer.0"]
+                        "producer.9"]
         genuine_mutation_fails("failed-main-open-ordinal",
                                forged_main_open_ordinal)
 
@@ -8881,7 +8882,7 @@ def _self_test():
 
         def forged_creation_ordinal(matrices, crash):
             for scenario in crash["scenarios"]:
-                if scenario["scenario"].startswith("D."):
+                if scenario["scenario"].startswith("C."):
                     scenario["kinds"]["publication_temp"][
                         "created_by"] = ["producer.0"]
         genuine_mutation_fails("wrong-creation-ordinal",
@@ -10673,6 +10674,7 @@ def _self_test():
                              golden=extras["golden"],
                              sensitivity=extras["sensitivity"],
                              posix_guard=extras["posix_guard"],
+                             race=extras["race"],
                              create_mode=extras.get("create_mode")),
                 ledger_path=_wave_ledger_path())
             before = [dict(entry) for entry in document["reports"]]

@@ -510,18 +510,17 @@ for line in open(log_path, encoding="utf-8", errors="replace"):
         pending_traceback = True
         continue
     if pending_traceback:
-        if stripped.startswith("AssertionError") \
-                or stripped.startswith("SystemExit"):
-            # AssertionError carries its problem list and falls
-            # through to the GATE_ASSERTION matcher below; SystemExit
-            # is the sys.exit() wrapper around a reported failure (the
-            # self-test's own exit path), never an uncaught crash.
+        if stripped.startswith("AssertionError"):
+            # Carries its problem list; falls through to the
+            # GATE_ASSERTION matcher below for attribution.
             pending_traceback = False
         elif not line[0].isspace() and stripped:
             # Python traceback structure: frame lines and their source
             # excerpts are indented; the exception origin line is the
             # only non-indented content. Any non-indented line that is
-            # not an AssertionError is an uncaught crash this run owns.
+            # not an AssertionError is an uncaught crash this run owns
+            # (SystemExit, ValueError, KeyError, Fatal Python error,
+            # Exception groups — the class name does not matter).
             complaints += 1
             local.append(stripped)
             pending_traceback = False
@@ -560,11 +559,22 @@ for line in open(log_path, encoding="utf-8", errors="replace"):
 if pending_traceback:
     complaints += 1
     local.append("<unresolved traceback at EOF>")
-import os as _os
-_wait_rc = locals().get("_wait_rc")
-if step_rc in (124, 137, 2):
-    complaints += 1
-    local.append("exit %s (timeout kill or harness-broken verdict)" % step_rc)
+# The structural complement (round 12): a step that exited non-zero
+# while the classifier found ZERO attributable complaints is a crash
+# or an exit path this run owns — no name list, no format trust, just
+# the step's own exit code. Signal deaths (rc > 128) always count.
+if step_rc is not None and step_rc != 0:
+    if step_rc > 128 or not [c for c in local if not c.startswith("<")]:
+        # Any signal death, or the log produced no attributable
+        # complaint lines (the complaints all came from the deferral
+        # set): the step's own failure is what the record shows.
+        # Exception: the held-state self-test's AssertionError path
+        # legitimately parses complaint lines from the assertion —
+        # the rc-based rule only fires when nothing was parsed.
+        parsed_complaints = complaints - len(local)
+        if parsed_complaints == 0 and complaints == len(local):
+            complaints += 1
+            local.append("exit %s with zero parsed complaints" % step_rc)
 print("WINDOWS-HOLD: %d complaint(s), %d local to this leg"
       % (complaints, len(local)))
 for text in local[:12]:

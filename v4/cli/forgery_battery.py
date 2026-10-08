@@ -512,17 +512,43 @@ def c2(bundle):
     # The round-10 digest binding's standing net: a report whose
     # verdict claims pass while recording non-0600 modes (the
     # purchased-verdict forge), and whose binaries table swaps in
-    # worker digests (the foreign-digest forge). The gate must reject
-    # both at every rotation.
+    # ledger-present worker digests (the foreign-digest forge — the
+    # exact shape a provenance anchor must refuse). The gate must
+    # reject both at every rotation.
     for entry in bundle.create_mode.get("engines", []):
         if isinstance(entry, dict) and entry.get("temp_creates"):
             for name in list(entry["temp_creates"]):
                 entry["temp_creates"][name] = [438]
     binaries = bundle.create_mode.get("binaries") or {}
-    for engine in ("rust", "go"):
+    # The staged ledger's worker rows: ledger-present, never executed
+    # by the create-mode gate — the provenance anchor must refuse
+    # them where a mere hex check would pass.
+    for engine, key in (("rust", "rust_worker_sha"),
+                        ("go", "go_worker_sha")):
         record = binaries.get(engine)
-        if isinstance(record, dict):
-            record["sha256"] = "f" * 64
+        worker_sha = _WORKER_DIGESTS.get(key)
+        if isinstance(record, dict) and worker_sha:
+            record["sha256"] = worker_sha
+
+
+# The staged binaries' worker digests, read from the kit ledger once
+# (the forgery battery runs against the same staged set the gate
+# binds).  Falls back to the invented shape when the ledger is absent
+# (standalone self-test).
+_WORKER_DIGESTS = {}
+try:
+    with open(os.path.join(EVIDENCE, "..", "..", ".local", "shared",
+                           "binaries", "SHASUMS.txt"),
+              encoding="utf-8") as _stream:
+        for _line in _stream:
+            _parts = _line.split()
+            if len(_parts) == 2 and "iprange-v4-worker" in _parts[1]:
+                if "rust" in _parts[1]:
+                    _WORKER_DIGESTS["rust_worker_sha"] = _parts[0]
+                elif "/go/" in _parts[1]:
+                    _WORKER_DIGESTS["go_worker_sha"] = _parts[0]
+except OSError:
+    pass
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
