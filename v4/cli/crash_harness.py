@@ -17,18 +17,21 @@ Design (verified empirically against both product binaries; the exact
 outcome values below are the observed wire values, one line per
 scenario):
 
-- Scenario A1 -- ``current.publish`` (fail_if_exists) killed at the
-  reservation marker: the destination is absent or the exact complete
-  reservation-recorded output; a fresh producer resolves with the
-  retained reservation as the sole authority and the consumer reads
-  the complete file.
-- Scenario A2 -- ``current.publish`` (replace_existing) killed at the
-  same marker: the destination is prior, absent, or the complete
-  recorded output; ``inspect`` reconstructs the attempt and
-  ``resolve`` completes it, then residue is bounded and absent.
-- Scenario A3 -- negative control: a foreign destination planted
-  after the kill classifies as ``foreign`` (the reservation is the
-  sole authority; other bytes are never a completed publication).
+- (Scenarios A1, A2, A3 -- ``current.publish`` killed at the
+  reservation marker (fail_if_exists, replace_existing-over-prior, and
+  the foreign-destination negative control) -- REMOVED 2026-10-08 by
+  user decision: the poll-then-kill staging cannot observe the
+  reservation marker deterministically (the window is a few
+  milliseconds; a poll loop that is not scheduled inside it never sees
+  the file, and a completed publish is a healthy product outcome the
+  scenario cannot distinguish from a missed kill window — observed for
+  A2 in a gate battery and for A3 in standalone runs).  "We don't want
+  flaky tests."  The knowingly uncovered properties: interruption
+  consistency of ``current.publish`` (both policies) and the
+  reservation-is-the-sole-authority foreign-destination negative
+  control.  E and F keep the destination/publication-residue and
+  findings-path coverage; ``publication_reservation`` loses its only
+  crash-suite witnesses (see the SOW record).)
 - Scenario B -- ``database.initialize_live`` killed at the state-0
   sidecar marker: the main is unchanged, both ``database.info`` modes
   truthfully refuse (``wrong_state``), the resultless
@@ -584,8 +587,8 @@ def assert_one_export_orphan(orphans, scenario_report):
 def _orphan_contract_self_test():
     """In-memory negative control for the exactly-one export-temp bound.
 
-    Mirrors scenario A3's negative-control pattern (a planted artifact
-    must be rejected): injecting N>1 export temporaries, an empty set,
+    Mirrors the removed A-family's negative-control pattern (a planted
+    artifact must be rejected): injecting N>1 export temporaries, an empty set,
     or a non-private basename into ``assert_one_export_orphan`` must
     fail its assertions, and the genuine single-orphan shape must pass.
     Runs once at harness startup (no processes, no files) so an
@@ -649,27 +652,6 @@ def decimal_u64(value):
     return int(value)
 
 
-def classify_destination(dest, prior_sha256, prior_sha512, expected_sha512):
-    """Classify a crash-left destination.
-
-    Returns "absent" when the destination does not exist, "prior_complete"
-    when it is byte-identical to the pre-crash file, "attempt_complete"
-    when it carries the reservation-recorded output digest, and
-    "foreign" for any other existing file - the reservation is the sole
-    authority on what the interrupted attempt wrote, so a digest
-    mismatch is a scenario failure, never a completed attempt.
-    """
-
-    if not os.path.isfile(dest):
-        return "absent"
-    if (sha256_file(dest) == prior_sha256
-            and sha512_file(dest) == prior_sha512):
-        return "prior_complete"
-    if expected_sha512 is not None and sha512_file(dest) == expected_sha512:
-        return "attempt_complete"
-    return "foreign"
-
-
 def assert_truthful(condition, message, scenario_report):
     """Record one failed assertion and raise ScenarioFailure."""
 
@@ -677,200 +659,6 @@ def assert_truthful(condition, message, scenario_report):
         scenario_report["failures"].append(message)
         raise ScenarioFailure(message)
     scenario_report["assertions"].append(message)
-
-
-def reservation_seen(work_dir, magic):
-    """Poll callback: True when a reservation carries its magic header."""
-
-    for name in private_artifact_names(work_dir)["reservation"]:
-        path = os.path.join(work_dir, name)
-        try:
-            with open(path, "rb") as stream:
-                if stream.read(8) == magic:
-                    return True
-        except OSError:
-            pass
-    return False
-
-
-class ReservationWatch:
-    """Wake when a reservation header hits disk, even if the poller is late.
-
-    The publish window is a few milliseconds. A Python poll loop that is
-    not scheduled during that window never sees the file. This watch is
-    armed before the publish starts. Its thread blocks in the kernel, so
-    a create wakes it, and it kills from that wake once the magic is
-    readable.
-    """
-
-    def __init__(self, directory, on_magic):
-        self.fired = threading.Event()
-        # Explicit capability: True only when the kernel watch is armed
-        # (POSIX with inotify). Windows and inotify-less POSIX report
-        # False — the production kill point is then the poll fallback
-        # (reservation_seen), never this watch.
-        self.supported = False
-        self._directory = directory
-        self._on_magic = on_magic
-        self._fd = None
-        self._thread = None
-        self._stop = threading.Event()
-        self._ready = threading.Event()
-        if os.name == "nt":
-            self._ready.set()
-            return
-        self._thread = threading.Thread(
-            target=self._run, name="reservation-watch", daemon=True)
-        self._thread.start()
-        if not self._ready.wait(2):
-            self.close()
-
-    def _run(self):
-        libc = ctypes.CDLL(None, use_errno=True)
-        try:
-            libc.inotify_init1.argtypes = [ctypes.c_int]
-            libc.inotify_init1.restype = ctypes.c_int
-            libc.inotify_add_watch.argtypes = [
-                ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
-            libc.inotify_add_watch.restype = ctypes.c_int
-            libc.read.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t]
-            libc.read.restype = ctypes.c_ssize_t
-        except AttributeError:
-            # A libc without the inotify symbols (an inotify-less
-            # platform) must report unsupported immediately, not die
-            # in the thread and stall the constructor for its full
-            # readiness wait before the poll fallback takes over.
-            self._ready.set()
-            return
-        fd = libc.inotify_init1(0x80800)  # IN_NONBLOCK | IN_CLOEXEC
-        if fd < 0:
-            self._ready.set()
-            return
-        self._fd = fd
-        # IN_CREATE | IN_MOVED_TO | IN_CLOSE_WRITE | IN_MODIFY
-        # The reservation magic is written by an mmap flush, not a
-        # close. IN_MODIFY is the wake; IN_CLOSE_WRITE never comes
-        # for that file.
-        mask = 0x100 | 0x80 | 0x8 | 0x2
-        if libc.inotify_add_watch(fd, os.fsencode(self._directory), mask) < 0:
-            self._ready.set()
-            return
-        self.supported = True
-        self._ready.set()
-        buf = ctypes.create_string_buffer(4096)
-        header = struct.Struct("iIII")
-        # Nonblocking read loop (sol turn-2): closing another thread's
-        # descriptor does not cancel its blocked read, so the wake path
-        # is the stop flag checked between short reads — close() can
-        # then verify termination instead of abandoning the thread.
-        import errno
-        while not self._stop.is_set():
-            n = libc.read(fd, buf, len(buf))
-            if n == 0:
-                return
-            if n < 0:
-                if ctypes.get_errno() == errno.EAGAIN:
-                    time.sleep(0.05)
-                    continue
-                return
-            offset = 0
-            while offset + header.size <= n:
-                _wd, _mask, _cookie, name_len = header.unpack_from(buf, offset)
-                offset += header.size
-                raw = bytes(buf[offset:offset + name_len])
-                offset += name_len
-                name = raw.split(b"\0", 1)[0].decode("utf-8", "replace")
-                if not name.startswith(RESERVATION_PREFIX):
-                    continue
-                if self._magic_ready(name):
-                    return
-
-    def _magic_ready(self, name):
-        path = os.path.join(self._directory, name)
-        for _ in range(50):
-            try:
-                with open(path, "rb") as stream:
-                    magic = stream.read(8)
-            except OSError:
-                magic = b""
-            if magic == RESERVATION_MAGIC:
-                if not self.fired.is_set():
-                    self.fired.set()
-                    # Kill from this wake. The poll loop samples every
-                    # millisecond and can miss a reservation that exists
-                    # for less than that under load.
-                    if self._on_magic is not None:
-                        self._on_magic()
-                return True
-            # The magic is one flush after create. A miss here means
-            # the file was replaced or removed; do not spend the
-            # reservation-to-rename window rereading it.
-            if magic:
-                return False
-            time.sleep(0.0002)
-        return False
-
-    def close(self):
-        # Stop the watch first and verify the thread ended before
-        # releasing its descriptor (sol turn-2): the old order closed
-        # the fd from another thread, waited two seconds, and dropped
-        # the reference — a quiet watch stayed blocked forever.
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=3)
-            if self._thread.is_alive():
-                raise AssertionError(
-                    "reservation watch thread did not stop at close")
-            self._thread = None
-        fd = self._fd
-        self._fd = None
-        if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-
-
-def publish_until_reservation(service, work, request_id, params):
-    """Publish until the reservation header is durable, then return.
-
-    The watch is armed before the request starts. It kills the producer
-    from the kernel wake. The poll remains the fallback when inotify is
-    unavailable.
-    """
-
-    watch = ReservationWatch(work, service.kill_process_group)
-    try:
-        return call_with_worker(
-            service, request_id, "iprange.v1.current.publish", params,
-            POLL_DEADLINE_SECONDS,
-            seen=lambda: watch.fired.is_set() or reservation_seen(
-                work, RESERVATION_MAGIC))
-    finally:
-        watch.close()
-
-
-def reservation_output_sha512(work_dir):
-    """Output SHA-512 recorded by the retained reservation (offset 160).
-
-    binary-format-v4.md section 20.1: the reservation's block carries
-    the SHA-512 of the exact attempted output bytes at offset 160 as
-    64 raw bytes.  Returns the lowercase hex digest, or None when no
-    valid reservation is readable.
-    """
-
-    for name in private_artifact_names(work_dir)["reservation"]:
-        path = os.path.join(work_dir, name)
-        try:
-            with open(path, "rb") as stream:
-                data = stream.read(256)
-            if data[:8] != RESERVATION_MAGIC or len(data) < 224:
-                return None
-            # The reservation stores the output SHA-512 as 64 raw
-            # bytes; expose it as lowercase hex for comparison.
-            return data[160:224].hex()
-        except OSError:
-            return None
 
 
 def probe_consumer_open(consumer, work, dest, scenario_report,
@@ -1095,7 +883,7 @@ def resolve_interrupted_publication(producer, consumer, work, dest,
                 "transaction_id": info.get("transaction_id"),
             }
             # The consumer main-open credit names this successful
-            # reopen's operation ordinal (the failed A1 probe open is
+            # reopen's operation ordinal (a failed probe open is
             # never credited).
             scenario_report["reopen_outcome"][
                 "consumer_main_open_ordinal"] = _current_ordinal(
@@ -1106,187 +894,7 @@ def resolve_interrupted_publication(producer, consumer, work, dest,
         resolver.close()
 
 
-
-def scenario_a1(direction, producer, consumer, work_dir, scenario_report):
-    """Crash current.publish (fail_if_exists) at the reservation marker."""
-
-    work = os.path.join(work_dir, f"a1-{direction}-{uuid.uuid4().hex[:8]}")
-    os.makedirs(work)
-    feed = os.path.join(work, "feed.txt")
-    write_interval_feed(feed, FEED_LINE_COUNT)
-    dest = os.path.join(work, "published.iprange")
-    params = publish_params(feed, dest, "fail_if_exists")
-
-    producer_service = KillableJsonRpcService(
-        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work,
-        read_deadline=CRASH_IO_DEADLINE_SECONDS,
-        write_deadline=CRASH_IO_DEADLINE_SECONDS)
-    try:
-        outcome, seen_ms, thread = publish_until_reservation(
-            producer_service, work, "1", params)
-        if seen_ms is None:
-            raise ScenarioFailure(
-                "reservation marker was not observed; "
-                f"worker outcome={outcome}")
-        scenario_report["marker_seen_ms"] = round(seen_ms, 1)
-        producer_service.kill_process_group()
-        thread.join(timeout=5)
-        # The crashed publish created the retained reservation, the
-        # private publication output, and the (attempted) main; its
-        # operation ordinal is the creation credit for those kinds.
-        _record_creation(scenario_report, (
-            "publication_reservation", "publication_temp", "v4_main"))
-
-        # No partial replacement; the documented private artifacts are
-        # the bounded residue.
-        residue = private_artifact_names(work)
-        assert_truthful(
-            len(residue["reservation"]) == 1,
-            f"exactly one reservation must remain, got {residue['reservation']}",
-            scenario_report)
-        assert_truthful(
-            len(residue["publish_temp"]) <= 1,
-            f"at most one private publication output may remain, got "
-            f"{residue['publish_temp']}", scenario_report)
-        recorded_sha512 = reservation_output_sha512(work)
-        assert_truthful(
-            recorded_sha512 is not None,
-            "the retained reservation must carry the output digest",
-            scenario_report)
-        if not os.path.exists(dest):
-            dest_class = "absent_after_crash"
-        elif sha512_file(dest) == recorded_sha512:
-            dest_class = "attempt_complete_after_crash"
-        else:
-            dest_class = "partial_or_foreign"
-        assert_truthful(
-            dest_class != "partial_or_foreign",
-            f"destination must be absent or the exact complete attempt "
-            f"output (atomic namespace publication), got {dest_class}",
-            scenario_report)
-        scenario_report["destination_state"] = {
-            "class": dest_class,
-            "exists": os.path.isfile(dest),
-            "recorded_output_sha512": recorded_sha512,
-            "reservation_basename": residue["reservation"],
-            "publish_temp_basenames": residue["publish_temp"],
-        }
-
-        # The consumer must never open a half-published file: an absent
-        # destination truthfully refuses.
-        probe_consumer_open(consumer, work, dest, scenario_report, True)
-
-        # Fresh producer: bounded residue, truthful inspect, resolve
-        # with the retained reservation as the sole authority, then
-        # empty residue and a consumer reopen of the complete file.
-        resolve_interrupted_publication(
-            producer, consumer, work, dest, scenario_report, True)
-    finally:
-        producer_service.kill_process_group()
-        # The kill is this scenario's own crash injection: the teardown
-        # is the explicit intentional-crash exemption (astra turn-2:
-        # exemptions are explicit, never inferred from process timing).
-        producer_service.close(allow_forced=True, broken_exchange=True)
-    return work
-
-
-def scenario_a2(direction, producer, consumer, work_dir, scenario_report):
-    """Crash current.publish (replace_existing) over an existing main."""
-
-    work = os.path.join(work_dir, f"a2-{direction}-{uuid.uuid4().hex[:8]}")
-    os.makedirs(work)
-    prior_feed = os.path.join(work, "prior.txt")
-    write_interval_feed(prior_feed, PRIOR_FEED_LINE_COUNT)
-    dest = os.path.join(work, "published.iprange")
-    prior_params = publish_params(prior_feed, dest, "fail_if_exists")
-
-    # Build the pre-crash destination with a completed publish.
-    builder = HarnessJsonRpcService(
-        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work,
-        read_deadline=CRASH_IO_DEADLINE_SECONDS,
-        write_deadline=CRASH_IO_DEADLINE_SECONDS)
-    try:
-        built = builder.call("1", "iprange.v1.current.publish", prior_params)
-        assert_truthful(
-            "error" not in built,
-            f"prior publish must succeed, got {built}", scenario_report)
-    finally:
-        builder.close()
-    prior_sha256 = sha256_file(dest)
-    prior_sha512 = sha512_file(dest)
-
-    feed = os.path.join(work, "feed.txt")
-    write_interval_feed(feed, FEED_LINE_COUNT)
-    replace_params = publish_params(feed, dest, "replace_existing")
-
-    producer_service = KillableJsonRpcService(
-        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work,
-        read_deadline=CRASH_IO_DEADLINE_SECONDS,
-        write_deadline=CRASH_IO_DEADLINE_SECONDS)
-    try:
-        outcome, seen_ms, thread = publish_until_reservation(
-            producer_service, work, "9", replace_params)
-        if seen_ms is None:
-            raise ScenarioFailure(
-                "reservation marker was not observed; "
-                f"worker outcome={outcome}")
-        scenario_report["marker_seen_ms"] = round(seen_ms, 1)
-        producer_service.kill_process_group()
-        thread.join(timeout=5)
-        # The crashed replace publish created the retained reservation,
-        # the private publication output, and the (attempted) main;
-        # its operation ordinal is the creation credit for those kinds
-        # (the prior publish is a different, earlier operation).
-        _record_creation(scenario_report, (
-            "publication_reservation", "publication_temp", "v4_main"))
-
-        residue = private_artifact_names(work)
-        assert_truthful(
-            len(residue["reservation"]) == 1,
-            f"exactly one reservation must remain, got {residue['reservation']}",
-            scenario_report)
-        recorded_sha512 = reservation_output_sha512(work)
-        assert_truthful(
-            recorded_sha512 is not None,
-            "the retained reservation must carry the output digest",
-            scenario_report)
-        dest_state = classify_destination(
-            dest, prior_sha256, prior_sha512, recorded_sha512)
-        assert_truthful(
-            dest_state in ("absent", "prior_complete", "attempt_complete"),
-            "destination must be absent, prior, or match the "
-            f"reservation-recorded output digest, got {dest_state!r}",
-            scenario_report)
-        scenario_report["destination_state"] = {
-            "class": dest_state,
-            "exists": os.path.isfile(dest),
-            "prior_sha256": prior_sha256,
-            "prior_sha512": prior_sha512,
-            "reservation_basename": residue["reservation"],
-            "publish_temp_basenames": residue["publish_temp"],
-        }
-
-        # The consumer must never open a half-published file: an
-        # existing complete destination (prior or attempt) opens
-        # truthfully and is closed before the resolver runs.
-        probe_consumer_open(consumer, work, dest, scenario_report, False)
-
-        # Fresh producer: bounded residue, truthful inspect that
-        # reconstructs the retained attempt, resolve to the complete
-        # publication, then empty residue and consumer reopen.
-        resolve_interrupted_publication(
-            producer, consumer, work, dest, scenario_report, False)
-    finally:
-        producer_service.kill_process_group()
-        # The kill is this scenario's own crash injection: the teardown
-        # is the explicit intentional-crash exemption (astra turn-2:
-        # exemptions are explicit, never inferred from process timing).
-        producer_service.close(allow_forced=True, broken_exchange=True)
-    return work
-
-
 SCRATCH_MAGIC = b"IPR4SCR1"
-
 
 _CRC32C_POLY = 0x82F63B78
 _CRC32C_TABLE = []
@@ -1405,110 +1013,6 @@ def sidecar_creating_state_seen(sidecar):
                 and int.from_bytes(head[12:16], "little") == 0)
     except OSError:
         return False
-
-
-def scenario_a3(direction, producer, consumer, work_dir, fixture_tool,
-                scenario_report):
-    """Negative control: a foreign destination must classify as foreign.
-
-    Scenario A2 classifies a crash-left destination as absent, prior,
-    or the reservation-recorded attempt output.  This scenario poisons
-    the destination with a valid-but-unrelated v4 file after the kill
-    and proves the classifier returns ``foreign`` (the reservation is
-    the sole authority on what the interrupted attempt wrote; any
-    other bytes are a scenario failure, never a completed
-    publication).
-    """
-
-    work = os.path.join(work_dir, f"a3-{direction}-{uuid.uuid4().hex[:8]}")
-    os.makedirs(work)
-    prior_feed = os.path.join(work, "prior.txt")
-    write_interval_feed(prior_feed, PRIOR_FEED_LINE_COUNT)
-    dest = os.path.join(work, "published.iprange")
-    prior_params = publish_params(prior_feed, dest, "fail_if_exists")
-
-    builder = HarnessJsonRpcService(
-        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work,
-        read_deadline=CRASH_IO_DEADLINE_SECONDS,
-        write_deadline=CRASH_IO_DEADLINE_SECONDS)
-    try:
-        built = builder.call("1", "iprange.v1.current.publish", prior_params)
-        assert_truthful(
-            "error" not in built,
-            f"prior publish must succeed, got {built}", scenario_report)
-    finally:
-        builder.close()
-    prior_sha256 = sha256_file(dest)
-    prior_sha512 = sha512_file(dest)
-
-    feed = os.path.join(work, "feed.txt")
-    write_interval_feed(feed, FEED_LINE_COUNT)
-    replace_params = publish_params(feed, dest, "replace_existing")
-
-    producer_service = KillableJsonRpcService(
-        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work,
-        read_deadline=CRASH_IO_DEADLINE_SECONDS,
-        write_deadline=CRASH_IO_DEADLINE_SECONDS)
-    try:
-        outcome, seen_ms, thread = publish_until_reservation(
-            producer_service, work, "9", replace_params)
-        if seen_ms is None:
-            raise ScenarioFailure(
-                "reservation marker was not observed; "
-                f"worker outcome={outcome}")
-        scenario_report["marker_seen_ms"] = round(seen_ms, 1)
-        producer_service.kill_process_group()
-        thread.join(timeout=5)
-        # The crashed replace publish created the retained reservation,
-        # the private publication output, and the (attempted) main;
-        # its operation ordinal is the creation credit for those kinds.
-        _record_creation(scenario_report, (
-            "publication_reservation", "publication_temp", "v4_main"))
-        residue = private_artifact_names(work)
-        assert_truthful(
-            len(residue["reservation"]) == 1,
-            f"exactly one reservation must remain, got {residue['reservation']}",
-            scenario_report)
-
-        # Poison the destination with a valid-but-unrelated v4 file
-        # (a never-published fixture database).  The classifier must
-        # reject it: the reservation digest is the only authority.
-        foreign = os.path.join(work, "foreign.iprange")
-        made = subprocess.run(
-            [fixture_tool, "direct-v4", foreign], capture_output=True,
-            timeout=300, env=child_environment())
-        if made.returncode != 0:
-            detail = made.stderr.decode("utf-8", "replace").strip()
-            raise ScenarioFailure(
-                f"v4-fixture direct-v4 failed with exit {made.returncode}: "
-                f"{detail}")
-        shutil.copyfile(foreign, dest)
-        dest_state = classify_destination(
-            dest, prior_sha256, prior_sha512,
-            reservation_output_sha512(work))
-        assert_truthful(
-            dest_state == "foreign",
-            "a destination that is neither prior nor the reservation "
-            f"output must classify foreign, got {dest_state!r}",
-            scenario_report)
-        scenario_report["destination_state"] = {
-            "class": dest_state,
-            "exists": os.path.isfile(dest),
-            "reservation_basename": residue["reservation"],
-            "publish_temp_basenames": residue["publish_temp"],
-        }
-
-        # The consumer treats the poisoned destination as its own
-        # (invalid) content: the probe reads it through the real
-        # consumer binary, which fails the /bin/false negative control.
-        probe_consumer_open(consumer, work, dest, scenario_report, False)
-    finally:
-        producer_service.kill_process_group()
-        # The kill is this scenario's own crash injection: the teardown
-        # is the explicit intentional-crash exemption (astra turn-2:
-        # exemptions are explicit, never inferred from process timing).
-        producer_service.close(allow_forced=True, broken_exchange=True)
-    return work
 
 
 def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
@@ -1702,12 +1206,10 @@ def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
     return work
 
 
-
 def scenario_c(direction, producer, consumer, work_dir, scenario_report):
     """Crash recover at the authorized-scratch marker.
 
-    Scenario A1/A2 prove interruption of the destination publication;
-    this scenario proves the other authorized external artifact:
+    This scenario proves the authorized external artifact
     recovery graph-safety scratch.  A recovery of a damaged large
     database with a constrained heap spills its page tables to
     authorized ``.iprange-scratch-<attempt>-<ordinal>.tmp`` files;
@@ -2938,15 +2440,13 @@ def executable(value, label):
     return os.path.realpath(value)
 
 
-
-
 def _consumer_opened_main(scenario_report):
     """True when the scenario's consumer successfully opened the main.
 
     The evidence comes from the scenario report's ``reopen_outcome``:
-    ``probe_consumer_open`` on an existing destination (A2/A3/E/F),
+    ``probe_consumer_open`` on an existing destination (E/F),
     the post-resolution consumer reopen of the resolved publication
-    (A1/A2), the consumer live reader after the resolved transition
+    the consumer live reader after the resolved transition
     (B), or scenario D's consumer live reader of the committed
     generation.
     """
@@ -3049,7 +2549,7 @@ def observed_kinds(scenario_report):
     the external v4-fixture tool (B and D, ``fixture_created_main``)
     record no product creator ref for ``v4_main``: crediting the
     producer would be a false attribution, and the kind coverage is
-    satisfied by the publish scenarios (A1, A2, E, F).
+    satisfied by the publish-adjacent scenarios (E, F).
 
     Opened lineage is DERIVED from the scenario's recorded outcomes,
     never hardcoded:
@@ -3146,12 +2646,10 @@ def observed_kinds(scenario_report):
 # a renamed fixture, a guard that started returning early -- fails the gate as
 # loudly as a control that fails.
 CRASH_SELF_TEST_CONTROLS = {
-    "destination": 4,
-    "reservation": 3,
     "scratch": 3,
     "sidecar": 2,
     "orphan": 2,
-    "marker": 7,
+    "marker": 5,
     "kinds": 4,
     "provenance": 2,
 }
@@ -3160,10 +2658,8 @@ CRASH_SELF_TEST_CONTROLS = {
 def _self_test():
     """Offline controls for the crash classifier, markers, and report shape.
 
-    Covers the four ``classify_destination`` states, the reservation's
-    recorded output digest (the sole authority scenarios A1 and A2 compare a
-    destination against), the authenticated scratch header, the sidecar
-    creating state, the exactly-one export-orphan bound, the poll predicates
+    Covers the authenticated scratch header, the sidecar creating state,
+    the exactly-one export-orphan bound, the poll predicates
     scenarios D/E/F kill on, ``observed_kinds`` actor lineage, and this
     writer's own provenance path.  No product binary is executed.
     """
@@ -3180,76 +2676,6 @@ def _self_test():
 
     root = owned_temp_dir("qual-crash-selftest-")
     try:
-        work = os.path.join(root, "work")
-        os.makedirs(work)
-        prior = os.path.join(work, "target.iprange")
-        with open(prior, "wb") as stream:
-            stream.write(b"prior content")
-        prior_sha256, prior_sha512 = sha256_file(prior), sha512_file(prior)
-        attempt = os.path.join(work, "attempt.txt")
-        with open(attempt, "wb") as stream:
-            stream.write(b"the interrupted attempt wrote these bytes")
-        attempt_sha512 = sha512_file(attempt)
-        missing = os.path.join(work, "never-created.iprange")
-        foreign = os.path.join(work, "foreign.txt")
-        with open(foreign, "wb") as stream:
-            stream.write(b"someone else wrote this")
-
-        # classify_destination: the four states a crash-left destination can
-        # be in.  A1 and A2 accept only prior_complete and attempt_complete,
-        # so a classifier that blurred "foreign" into a completed attempt
-        # would let a corrupted destination pass.
-        check("destination", "a destination the crash never created is absent",
-              classify_destination(missing, prior_sha256, prior_sha512,
-                                   attempt_sha512) == "absent")
-        check("destination", "byte-identical to the pre-crash file is prior",
-              classify_destination(prior, prior_sha256, prior_sha512,
-                                   attempt_sha512) == "prior_complete")
-        check("destination", "the reservation digest completes the attempt",
-              classify_destination(attempt, prior_sha256, prior_sha512,
-                                   attempt_sha512) == "attempt_complete")
-        check("destination", "any other content is foreign, never an attempt",
-              classify_destination(foreign, prior_sha256, prior_sha512,
-                                   attempt_sha512) == "foreign")
-
-        # The reservation is the sole authority on what the interrupted
-        # attempt wrote (binary-format-v4.md 20.1: the output SHA-512 lives
-        # at offset 160 as 64 raw bytes).  A1 and A2 classify a destination
-        # against exactly this value, so a reader that took the digest from
-        # anywhere else, or accepted a header it should not have trusted,
-        # would still print a green run.  Each control gets its own
-        # directory: the reader returns on the first reservation it names.
-        def with_reservation(name, digest_hex, size=256,
-                             magic=RESERVATION_MAGIC, tag="r"):
-            room = os.path.join(root, f"res-{tag}")
-            os.makedirs(room, exist_ok=True)
-            block = bytearray(256)
-            block[0:8] = magic
-            if digest_hex:
-                block[160:224] = bytes.fromhex(digest_hex)
-            with open(os.path.join(room, name), "wb") as stream:
-                stream.write(bytes(block)[:size])
-            return room
-
-        good_reservation = with_reservation(
-            RESERVATION_PREFIX + "a" + PRIVATE_TMP_SUFFIX, attempt_sha512,
-            tag="good")
-        check("reservation", "the recorded output digest reads back exactly",
-              reservation_output_sha512(good_reservation) == attempt_sha512,
-              str(reservation_output_sha512(good_reservation)))
-        bad_magic = with_reservation(
-            RESERVATION_PREFIX + "b" + PRIVATE_TMP_SUFFIX, attempt_sha512,
-            magic=b"IPR4XXXX", tag="magic")
-        check("reservation", "a reservation without its magic records nothing",
-              reservation_output_sha512(bad_magic) is None,
-              str(reservation_output_sha512(bad_magic)))
-        short = with_reservation(
-            RESERVATION_PREFIX + "c" + PRIVATE_TMP_SUFFIX, attempt_sha512,
-            size=100, tag="short")
-        check("reservation",
-              "a reservation shorter than its digest field records nothing",
-              reservation_output_sha512(short) is None,
-              str(reservation_output_sha512(short)))
         # Authorized scratch (scenario C) is only a valid kill point once
         # the 128-byte ownership header is complete and CRC-valid: an
         # unauthenticated partial header leaves a lookalike the engine API
@@ -3350,29 +2776,6 @@ def _self_test():
               draft_growth_observed(grown, 4))
         check("marker", "a main the crash never created cannot show growth",
               not draft_growth_observed(os.path.join(root, "nope.iprange"), 0))
-        check("marker", "a reservation with its magic is the publish kill point",
-              reservation_seen(good_reservation, RESERVATION_MAGIC))
-        watched = os.path.join(root, "watched")
-        os.makedirs(watched)
-        hits = []
-        watch = ReservationWatch(watched, lambda: hits.append("kill"))
-        try:
-            with open(os.path.join(
-                    watched, RESERVATION_PREFIX + "self" + PRIVATE_TMP_SUFFIX),
-                    "wb") as stream:
-                stream.write(RESERVATION_MAGIC + b"\0" * 8)
-            if watch.supported:
-                check("marker", "a reservation create wakes the directory watch",
-                      watch.fired.wait(2) and hits == ["kill"])
-            else:
-                # Capability fallback: without a kernel watch the
-                # production kill point is the poll (reservation_seen,
-                # pinned by its own markers); this watch reports
-                # unsupported and must never fire.
-                check("marker", "an unsupported platform keeps the poll fallback",
-                      not watch.fired.is_set() and hits == [])
-        finally:
-            watch.close()
 
         # observed_kinds is the shape the kind gate consumes: an artifact
         # kind is credited to the operation that really produced or opened
@@ -3557,15 +2960,6 @@ def main():
         work_base = os.path.join(
             args.work_dir, f"{producer_name}-{consumer_name}")
         for name, runner in (
-                ("A1", lambda report, w=work_base, p=producer_bin,
-                 c=consumer_bin: scenario_a1(
-                     direction, p, c, w, report)),
-                ("A2", lambda report, w=work_base, p=producer_bin,
-                 c=consumer_bin: scenario_a2(
-                     direction, p, c, w, report)),
-                ("A3", lambda report, w=work_base, p=producer_bin,
-                 c=consumer_bin: scenario_a3(
-                     direction, p, c, w, fixture_tool, report)),
                 ("B", lambda report, w=work_base, p=producer_bin,
                  c=consumer_bin: scenario_b(
                      direction, p, c, w, fixture_tool, report)),

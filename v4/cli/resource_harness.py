@@ -119,9 +119,29 @@ from crash_harness import (  # noqa: E402  (side-effect free)
     private_artifact_names,
     publish_params,
     record_spawn,
-    reservation_seen,
     write_interval_feed,
 )
+
+
+def reservation_seen(work_dir, magic):
+    """The reservation poll (re-homed from crash_harness 2026-10-08).
+
+    The crash suite's reservation-marker scenarios were removed (their
+    windows were milliseconds wide and unobservable by a poll loop);
+    this harness keeps the predicate for proof C, whose 500,000-line
+    feed holds the publish — and therefore the reservation — open for
+    seconds, a window the poll reliably lands inside (stable across
+    every battery to date).
+    """
+    for name in private_artifact_names(work_dir)["reservation"]:
+        path = os.path.join(work_dir, name)
+        try:
+            with open(path, "rb") as stream:
+                if stream.read(8) == magic:
+                    return True
+        except OSError:
+            pass
+    return False
 
 # One export of a 500,000-line feed keeps the connection queue
 # occupied long enough for 19 pipelined describes.  The harness

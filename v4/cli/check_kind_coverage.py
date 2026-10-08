@@ -137,7 +137,7 @@ Evidence integrity rules:
   self-consistent forged fields of one report.
 - Crash evidence is mandatory: at least one crash report must be
   supplied and at least one of its scenarios must PASS.  The three
-  crash-only kinds (``publication_reservation``,
+  crash-only kinds (
   ``publication_temp``, ``authorized_scratch``) additionally require
   at least one crash scenario contributing the kind: fabricating
   them through matrix file ledgers alone cannot satisfy the gate.
@@ -244,10 +244,15 @@ from command_sanitize import (  # noqa: E402  (side-effect free)
 from schema.frame import STD_INVALID_PARAMS as _STD_INVALID_PARAMS  # noqa: E402
 
 
+# publication_reservation is NOT required: its only crash-suite
+# witnesses (the A-family reservation-marker scenarios) were removed
+# 2026-10-08 by user decision (unobservable kill window; flaky tests
+# rejected). The reservation artifact itself remains part of every
+# publish; this gate simply no longer claims crash-level coverage of
+# the kind.
 REQUIRED_KINDS = [
     "v4_main",
     "live_sidecar",
-    "publication_reservation",
     "publication_temp",
     "authorized_scratch",
     "adapter_output",
@@ -267,7 +272,6 @@ CASE_MATRIX_NAMES = {
 # Kinds that only the crash battery observes; they must be backed by
 # at least one complying crash scenario, never by matrices alone.
 CRASH_ONLY_KINDS = (
-    "publication_reservation",
     "publication_temp",
     "authorized_scratch",
 )
@@ -324,8 +328,6 @@ REQUIRED_PARAMS_NEGATIVE_METHODS = (
 CRASH_CREATE_METHODS = {
     "v4_main": ("iprange.v1.current.publish",),
     "live_sidecar": ("iprange.v1.database.initialize_live",),
-    "publication_reservation": ("iprange.v1.current.publish",
-                                "iprange.v1.recover"),
     "publication_temp": ("iprange.v1.current.publish",
                          "iprange.v1.recover"),
     "authorized_scratch": ("iprange.v1.recover",),
@@ -354,7 +356,6 @@ MATRIX_CREATE_METHODS = {
                 "iprange.v1.snapshot"),
     "live_sidecar": ("iprange.v1.database.create",
                      "iprange.v1.database.initialize_live"),
-    "publication_reservation": ("iprange.v1.current.publish",),
     "publication_temp": ("iprange.v1.current.publish",
                          "iprange.v1.recover"),
     "authorized_scratch": ("iprange.v1.recover",),
@@ -2146,7 +2147,7 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                 # Scenarios whose v4 main was produced by the external
                 # v4-fixture tool (B, D) truthfully record no product
                 # creator ref for v4_main; the kind coverage is met by
-                # the publish scenarios (A1, A2, E, F).  Any other
+                # the publish-adjacent scenarios (E, F).  Any other
                 # kind, and any scenario without the flag, must name a
                 # creator.
                 fixture_main = (kind == "v4_main" and bool(
@@ -6288,8 +6289,6 @@ def _self_test():
             main_open_ordinal = {"A": 1, "B": 0, "C": None, "E": 0}[shape]
             kinds = {}
             if shape == "A":
-                kinds["publication_reservation"] = {
-                    "created_by": ["producer.0"], "opened_by": []}
                 kinds["publication_temp"] = {
                     "created_by": ["producer.0"], "opened_by": []}
                 kinds["v4_main"] = {
@@ -6315,8 +6314,7 @@ def _self_test():
                     "created_by": ["producer.0"],
                     "opened_by": ["consumer.0"]}
             created_ordinals = {
-                "A": {"publication_reservation": 0,
-                      "publication_temp": 0, "v4_main": 0},
+                "A": {"publication_temp": 0, "v4_main": 0},
                 "B": {"live_sidecar": 0},
                 "C": {"authorized_scratch": 2,
                       "publication_temp": 2, "v4_main": 0},
@@ -6699,7 +6697,10 @@ def _self_test():
         scenarios = []
         for index, (producer, consumer) in enumerate(
                 [("rust", "consumer"), ("consumer", "rust")]):
-            for name in ("A1", "A2", "A3", "B", "C", "D", "E", "F"):
+            # The synthetic battery models the real scenario roster;
+            # the A-family (reservation-marker publish kills) was
+            # removed 2026-10-08 by user decision.
+            for name in ("B", "C", "D", "E", "F"):
                 identity = {"rust": BINARY_PATHS["rust"],
                             "go": BINARY_PATHS["go"],
                             "consumer": "/bin/false"}
@@ -8008,8 +8009,7 @@ def _self_test():
         #     fails the gate.
         flat = crash_report(["rust", "go"], ["go", "rust"])
         flat["scenarios"][0]["kinds"] = [
-            "publication_temp", "publication_reservation",
-            "authorized_scratch"]
+            "publication_temp", "authorized_scratch"]
         flat_path = os.path.join(work, "crash-flat-kinds.json")
         assign(flat_path, flat)
         problems, _c, _s = assess(four, [flat_path])
@@ -8023,25 +8023,25 @@ def _self_test():
         malformed = []
         broken_missing = crash_report(["rust", "go"], ["go", "rust"])
         del broken_missing["scenarios"][0]["kinds"][
-            "publication_reservation"]["opened_by"]
+            "publication_temp"]["opened_by"]
         malformed.append(("missing-opened-by",
                           "lacks created_by/opened_by keys",
                           broken_missing))
         broken_unknown = crash_report(["rust", "go"], ["go", "rust"])
         broken_unknown["scenarios"][0]["kinds"][
-            "publication_reservation"]["created_by"] = ["mystery.0"]
+            "publication_temp"]["created_by"] = ["mystery.0"]
         malformed.append(("unknown-prefix",
                           "unknown or malformed actor prefix",
                           broken_unknown))
         broken_empty = crash_report(["rust", "go"], ["go", "rust"])
         broken_empty["scenarios"][0]["kinds"][
-            "publication_reservation"]["created_by"] = []
+            "publication_temp"]["created_by"] = []
         malformed.append(("empty-created-by",
                           "records empty created_by lineage",
                           broken_empty))
         broken_lineage_type = crash_report(["rust", "go"], ["go", "rust"])
         broken_lineage_type["scenarios"][0]["kinds"][
-            "publication_reservation"] = ["producer.0"]
+            "publication_temp"] = ["producer.0"]
         malformed.append(("lineage-not-object",
                           "lineage that is not an object",
                           broken_lineage_type))
@@ -8221,7 +8221,7 @@ def _self_test():
         #     operations: an ordinal past the end of the actor's list
         #     fails the gate.
         beyond_ops = crash_report(["rust", "go"], ["go", "rust"])
-        beyond_ops["scenarios"][0]["kinds"]["publication_reservation"][
+        beyond_ops["scenarios"][0]["kinds"]["publication_temp"][
             "created_by"] = ["producer.9"]
         beyond_ops_path = os.path.join(work, "crash-ordinal.json")
         assign(beyond_ops_path, beyond_ops)
@@ -8608,12 +8608,12 @@ def _self_test():
                                 for ref in facts[field]]
         genuine_mutation_fails("invented-legacy", invented_legacy)
 
-        # False main-open operation: the A2 v4_main open ref indexes
+        # False main-open operation: the D v4_main open ref indexes
         # reader.close, an in-range ordinal that is not an open-capable
         # method of the kind.
         def false_main_open(matrices, crash):
             for scenario in crash["scenarios"]:
-                if scenario["scenario"].startswith("A2."):
+                if scenario["scenario"].startswith("D."):
                     scenario["kinds"]["v4_main"]["opened_by"] = [
                         "consumer.1"]
         genuine_mutation_fails("false-main-open-operation",
@@ -8863,8 +8863,8 @@ def _self_test():
 
         def forged_creation_ordinal(matrices, crash):
             for scenario in crash["scenarios"]:
-                if scenario["scenario"].startswith("A2."):
-                    scenario["kinds"]["publication_reservation"][
+                if scenario["scenario"].startswith("D."):
+                    scenario["kinds"]["publication_temp"][
                         "created_by"] = ["producer.0"]
         genuine_mutation_fails("wrong-creation-ordinal",
                                forged_creation_ordinal)
