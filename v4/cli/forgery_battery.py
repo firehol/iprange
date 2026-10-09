@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 31
+EXPECTED_CLASSES = 33
 
 
 def _forgery(label, whole_bundle=False):
@@ -664,6 +664,27 @@ def c2i(bundle):
     for entry in bundle.create_mode.get("engines", []):
         if isinstance(entry, dict):
             entry["watched"] = ["control", "main", "readers", "temp"]
+
+
+@_forgery("C2j-create-mode-list-temp-creates", whole_bundle=True)
+def c2j(bundle):
+    # The temp_creates type guard's feeder: a truthy list temp_creates
+    # must redden with the "is not an object" problem before any
+    # consumer crashes (round 19 security finding 1).
+    for entry in bundle.create_mode.get("engines", []):
+        if isinstance(entry, dict):
+            entry["temp_creates"] = ["control", "main", "readers", "temp"]
+
+
+@_forgery("C2k-create-mode-int-watched-keys-values", whole_bundle=True)
+def c2k(bundle):
+    # The watched_keys VALUES guard's feeder: int values must redden
+    # with the "must be lists" problem before len() crashes (round 19
+    # security finding 1).
+    for entry in bundle.create_mode.get("engines", []):
+        if isinstance(entry, dict) and isinstance(entry.get("watched_keys"), dict):
+            for label in entry["watched_keys"]:
+                entry["watched_keys"][label] = 7
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
