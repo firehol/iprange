@@ -362,8 +362,8 @@ the pre-close search):
 - pending — the windows_hold negative control (a committed battery.sh
   self-test addition; the structural rule is probe-verified across
   rounds 11-19).
-- pending — the reviewer-sandbox symlink farms (the r20 measured inventory: ~19.3k tracked-tree links across six sandboxes — tester/portability/fit-for-purpose/parity/operations/security — all dormant since Oct 02; the sweep enumerates what it removes) and the stale /tmp/pauli-base-11003d8
-  worktree (another session's — 11 flags).
+- EXECUTED (2026-10-09, post-round-20, per the binding r19/r20 commitment): the reviewer-sandbox symlink sweep. Procedure: enumerated every into-tree link under the six reviewer sandboxes (18,800 named paths — none pointing at reports/heartbeats, verified), removed exactly those links, then removed the 309 now-empty parent dirs bottom-up. Checks recorded: ownership (all under round-scoped reviewer probe farms), inactivity (zero links modified since Oct 3; the tracked tree clean at every round — no write ever leaked through), preservation (probe results live in the reports; farms reproducible from git archive). Post-sweep verification: zero into-tree links remain, the tracked tree clean, all seven role reports intact.
+- pending — the stale /tmp/pauli-base-11003d8 worktree (another session's — 12 flags; not mine to remove without consent).
 - pending — the tree strays (v4/go/iprange, l, .pi/, the seven
   archive-* dirs at ~189 MB, the glm-cwd-* dirs, the empty
   MARKER-MISMATCH/sub — the 2026-10-09 fit-for-purpose inventory) —
