@@ -761,6 +761,7 @@ def c2q(bundle):
             delete=False, mode="w", encoding="utf-8") as stream:
         json.dump(document, stream, sort_keys=True, indent=1)
         bundle.manifest = stream.name
+        _TEMP_MANIFESTS.append(stream.name)
 
 
 @_forgery("C2r-manifest-int-entry-name", whole_bundle=True)
@@ -792,6 +793,7 @@ def c2r(bundle):
             delete=False, mode="w", encoding="utf-8") as stream:
         json.dump(document, stream, sort_keys=True, indent=1)
         bundle.manifest = stream.name
+        _TEMP_MANIFESTS.append(stream.name)
 
 
 @_forgery("C2s-throughput-bool-method-fields", whole_bundle=True)
@@ -832,6 +834,7 @@ def c2t(bundle):
             delete=False, mode="w", encoding="utf-8") as stream:
         json.dump(document, stream, sort_keys=True, indent=1)
         bundle.manifest = stream.name
+        _TEMP_MANIFESTS.append(stream.name)
 
 
 @_forgery("C2u-throughput-bool-requests-per-round", whole_bundle=True)
@@ -1098,8 +1101,27 @@ def _duplicate_groups(new_reasons):
     return [group for group in by_reasons.values() if len(group) > 1]
 
 
+# The temp manifests the manifest-forging classes write (owned_temp_root
+# outlives a class run; the battery unlinks them at close — the r25 leak).
+_TEMP_MANIFESTS = []
+
+
+def _forget_temp_manifests():
+    for manifest_path in _TEMP_MANIFESTS:
+        try:
+            os.remove(manifest_path)
+        except OSError:
+            pass
+    del _TEMP_MANIFESTS[:]
+
+
+import atexit as _atexit
+_atexit.register(_forget_temp_manifests)
+
+
 def _run_battery(ledger):
     """Run the positive control and every class; return the exit code."""
+    _forget_temp_manifests()
     with tempfile.TemporaryDirectory(dir=owned_temp_root()) as work:
         # G1 + positive control: the unmutated genuine evidence must reach a
         # gate verdict before any forgery is worth judging.
