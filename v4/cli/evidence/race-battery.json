@@ -1,11 +1,11 @@
 {
   "binaries": {
     "go": {
-      "path": "/tmp/opencode/iprange-sow35/battery-gate40/bin/go/iprange",
+      "path": "/tmp/opencode/iprange-sow35/battery-gate41/bin/go/iprange",
       "sha256": "2e3d1574a1d1e07703e421b00714b2d7ddfb6385b3095f25a82fa3df5e88870a"
     },
     "rust": {
-      "path": "/tmp/opencode/iprange-sow35/battery-gate40/bin/rust/iprange",
+      "path": "/tmp/opencode/iprange-sow35/battery-gate41/bin/rust/iprange",
       "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f"
     }
   },
@@ -13,19 +13,611 @@
   "command": [
     "v4/cli/races/runner.py",
     "--report-dir",
-    "/tmp/opencode/iprange-sow35/battery-gate40/W-race",
+    "/tmp/opencode/iprange-sow35/battery-gate41/W-race",
     "--rust",
-    "/tmp/opencode/iprange-sow35/battery-gate40/bin/rust/iprange",
+    "/tmp/opencode/iprange-sow35/battery-gate41/bin/rust/iprange",
     "--go",
-    "/tmp/opencode/iprange-sow35/battery-gate40/bin/go/iprange",
+    "/tmp/opencode/iprange-sow35/battery-gate41/bin/go/iprange",
     "--fixture-tool",
-    "/tmp/opencode/iprange-sow35/battery-gate40/bin/rust/v4-fixture",
+    "/tmp/opencode/iprange-sow35/battery-gate41/bin/rust/v4-fixture",
     "--attempts",
     "30",
     "--provenance-note",
-    "wave-19.25 Linux battery; engines staged under the wave staging root labelled battery-gate40 and bound by the staged-binary ledger .local/shared/binaries/SHASUMS.txt (entries are staging-relative digests); no requirement waiver"
+    "wave-19.25 Linux battery; engines staged under the wave staging root labelled battery-gate41 and bound by the staged-binary ledger .local/shared/binaries/SHASUMS.txt (entries are staging-relative digests); no requirement waiver"
   ],
   "entries": [
+    {
+      "arm": "meta",
+      "attempts_completed": 30,
+      "classes": {
+        "-32010/invalid_path": 11,
+        "RESULT": 19
+      },
+      "controls": [
+        {
+          "blocked": [],
+          "control": "regular",
+          "expected": [
+            "RESULT"
+          ],
+          "host_at_attempt_start": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.76,
+            "loadavg_1m": 9.32,
+            "loadavg_5m": 6.75,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 19,
+            "source": "proc/loadavg"
+          },
+          "host_at_detection": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.76,
+            "loadavg_1m": 9.32,
+            "loadavg_5m": 6.75,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 19,
+            "source": "proc/loadavg"
+          },
+          "kind": "answered",
+          "ok": true,
+          "shape": "RESULT",
+          "wedge": null
+        },
+        {
+          "blocked": [],
+          "control": "fifo",
+          "expected": [
+            "-32010/invalid_path"
+          ],
+          "host_at_attempt_start": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.76,
+            "loadavg_1m": 9.32,
+            "loadavg_5m": 6.75,
+            "nproc": 24,
+            "over_cpus": true,
+            "run_queue": 27,
+            "source": "proc/loadavg"
+          },
+          "host_at_detection": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.76,
+            "loadavg_1m": 9.32,
+            "loadavg_5m": 6.75,
+            "nproc": 24,
+            "over_cpus": true,
+            "run_queue": 27,
+            "source": "proc/loadavg"
+          },
+          "kind": "answered",
+          "ok": true,
+          "shape": "-32010/invalid_path",
+          "wedge": null
+        }
+      ],
+      "engine": "rust",
+      "host_context": {
+        "deadline": 1.5,
+        "loadavg_1m": {
+          "max": 10.42,
+          "median": 9.32,
+          "min": 9.32
+        },
+        "nproc": 24,
+        "over_cpus_samples": 12,
+        "oversubscribed": false,
+        "run_queue": {
+          "max": 62,
+          "median": 21,
+          "min": 9
+        },
+        "samples": 30,
+        "source": "proc/loadavg"
+      },
+      "method": "iprange.v1.direct.replace",
+      "raced_only_refusals_observed": 0,
+      "raced_refusals": [
+        "-32010/invalid_path"
+      ],
+      "refusal_observed_in_race": 11,
+      "replacement_activity": {
+        "helper_errors": 0,
+        "observed": true,
+        "to_fifo": 563,
+        "to_regular": 563,
+        "toggles": 1126
+      },
+      "stable_refusal": [
+        "-32010/invalid_path"
+      ],
+      "stable_success": [
+        "RESULT"
+      ],
+      "subject": "rust/meta",
+      "target": "/tmp/opencode/iprange-sow35/battery-gate41/W-race/work/rust-meta/meta.t",
+      "timing_window": {
+        "exercised": true,
+        "in_flight_to_fifo": 550,
+        "in_flight_to_regular": 549,
+        "required_in_flight_to_fifo": 1
+      }
+    },
+    {
+      "arm": "csv",
+      "attempts_completed": 30,
+      "classes": {
+        "-32010/invalid_path": 10,
+        "RESULT": 20
+      },
+      "controls": [
+        {
+          "blocked": [],
+          "control": "regular",
+          "expected": [
+            "RESULT"
+          ],
+          "host_at_attempt_start": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 14,
+            "source": "proc/loadavg"
+          },
+          "host_at_detection": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 14,
+            "source": "proc/loadavg"
+          },
+          "kind": "answered",
+          "ok": true,
+          "shape": "RESULT",
+          "wedge": null
+        },
+        {
+          "blocked": [],
+          "control": "fifo",
+          "expected": [
+            "-32010/invalid_path"
+          ],
+          "host_at_attempt_start": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 22,
+            "source": "proc/loadavg"
+          },
+          "host_at_detection": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 22,
+            "source": "proc/loadavg"
+          },
+          "kind": "answered",
+          "ok": true,
+          "shape": "-32010/invalid_path",
+          "wedge": null
+        }
+      ],
+      "engine": "rust",
+      "host_context": {
+        "deadline": 1.5,
+        "loadavg_1m": {
+          "max": 10.42,
+          "median": 10.42,
+          "min": 10.42
+        },
+        "nproc": 24,
+        "over_cpus_samples": 2,
+        "oversubscribed": false,
+        "run_queue": {
+          "max": 29,
+          "median": 11,
+          "min": 7
+        },
+        "samples": 30,
+        "source": "proc/loadavg"
+      },
+      "method": "iprange.v1.direct.replace",
+      "raced_only_refusals_observed": 0,
+      "raced_refusals": [
+        "-32010/invalid_path"
+      ],
+      "refusal_observed_in_race": 10,
+      "replacement_activity": {
+        "helper_errors": 0,
+        "observed": true,
+        "to_fifo": 311,
+        "to_regular": 311,
+        "toggles": 622
+      },
+      "stable_refusal": [
+        "-32010/invalid_path"
+      ],
+      "stable_success": [
+        "RESULT"
+      ],
+      "subject": "rust/csv",
+      "target": "/tmp/opencode/iprange-sow35/battery-gate41/W-race/work/rust-csv/csv.t",
+      "timing_window": {
+        "exercised": true,
+        "in_flight_to_fifo": 302,
+        "in_flight_to_regular": 304,
+        "required_in_flight_to_fifo": 1
+      }
+    },
+    {
+      "arm": "feed",
+      "attempts_completed": 30,
+      "classes": {
+        "-32010/invalid_path": 9,
+        "RESULT": 21
+      },
+      "controls": [
+        {
+          "blocked": [],
+          "control": "regular",
+          "expected": [
+            "RESULT"
+          ],
+          "host_at_attempt_start": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 13,
+            "source": "proc/loadavg"
+          },
+          "host_at_detection": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 13,
+            "source": "proc/loadavg"
+          },
+          "kind": "answered",
+          "ok": true,
+          "shape": "RESULT",
+          "wedge": null
+        },
+        {
+          "blocked": [],
+          "control": "fifo",
+          "expected": [
+            "-32010/invalid_path"
+          ],
+          "host_at_attempt_start": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 5,
+            "source": "proc/loadavg"
+          },
+          "host_at_detection": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 5,
+            "source": "proc/loadavg"
+          },
+          "kind": "answered",
+          "ok": true,
+          "shape": "-32010/invalid_path",
+          "wedge": null
+        }
+      ],
+      "engine": "rust",
+      "host_context": {
+        "deadline": 1.5,
+        "loadavg_1m": {
+          "max": 10.42,
+          "median": 10.42,
+          "min": 10.42
+        },
+        "nproc": 24,
+        "over_cpus_samples": 0,
+        "oversubscribed": false,
+        "run_queue": {
+          "max": 19,
+          "median": 8,
+          "min": 3
+        },
+        "samples": 30,
+        "source": "proc/loadavg"
+      },
+      "method": "iprange.v1.current.publish",
+      "raced_only_refusals_observed": 0,
+      "raced_refusals": [
+        "-32010/invalid_path"
+      ],
+      "refusal_observed_in_race": 9,
+      "replacement_activity": {
+        "helper_errors": 0,
+        "observed": true,
+        "to_fifo": 2020,
+        "to_regular": 2020,
+        "toggles": 4040
+      },
+      "stable_refusal": [
+        "-32010/invalid_path"
+      ],
+      "stable_success": [
+        "RESULT"
+      ],
+      "subject": "rust/feed",
+      "target": "/tmp/opencode/iprange-sow35/battery-gate41/W-race/work/rust-feed/in.netset",
+      "timing_window": {
+        "exercised": true,
+        "in_flight_to_fifo": 1990,
+        "in_flight_to_regular": 1988,
+        "required_in_flight_to_fifo": 1
+      }
+    },
+    {
+      "arm": "atlist",
+      "attempts_completed": 30,
+      "classes": {
+        "-32010/invalid_path": 13,
+        "RESULT": 17
+      },
+      "controls": [
+        {
+          "blocked": [],
+          "control": "regular",
+          "expected": [
+            "RESULT"
+          ],
+          "host_at_attempt_start": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 11,
+            "source": "proc/loadavg"
+          },
+          "host_at_detection": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 11,
+            "source": "proc/loadavg"
+          },
+          "kind": "answered",
+          "ok": true,
+          "shape": "RESULT",
+          "wedge": null
+        },
+        {
+          "blocked": [],
+          "control": "fifo",
+          "expected": [
+            "-32010/invalid_path"
+          ],
+          "host_at_attempt_start": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 11,
+            "source": "proc/loadavg"
+          },
+          "host_at_detection": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 11,
+            "source": "proc/loadavg"
+          },
+          "kind": "answered",
+          "ok": true,
+          "shape": "-32010/invalid_path",
+          "wedge": null
+        }
+      ],
+      "engine": "rust",
+      "host_context": {
+        "deadline": 1.5,
+        "loadavg_1m": {
+          "max": 10.42,
+          "median": 10.42,
+          "min": 10.42
+        },
+        "nproc": 24,
+        "over_cpus_samples": 1,
+        "oversubscribed": false,
+        "run_queue": {
+          "max": 26,
+          "median": 6,
+          "min": 2
+        },
+        "samples": 30,
+        "source": "proc/loadavg"
+      },
+      "method": "iprange.v1.current.publish",
+      "raced_only_refusals_observed": 0,
+      "raced_refusals": [
+        "-32010/invalid_path"
+      ],
+      "refusal_observed_in_race": 13,
+      "replacement_activity": {
+        "helper_errors": 0,
+        "observed": true,
+        "to_fifo": 1299,
+        "to_regular": 1299,
+        "toggles": 2598
+      },
+      "stable_refusal": [
+        "-32010/invalid_path"
+      ],
+      "stable_success": [
+        "RESULT"
+      ],
+      "subject": "rust/atlist",
+      "target": "/tmp/opencode/iprange-sow35/battery-gate41/W-race/work/rust-atlist/list.t",
+      "timing_window": {
+        "exercised": true,
+        "in_flight_to_fifo": 1284,
+        "in_flight_to_regular": 1284,
+        "required_in_flight_to_fifo": 1
+      }
+    },
+    {
+      "arm": "reader",
+      "attempts_completed": 30,
+      "classes": {
+        "-32010/invalid_argument": 10,
+        "-32010/wrong_state": 1,
+        "RESULT": 19
+      },
+      "controls": [
+        {
+          "blocked": [],
+          "control": "regular",
+          "expected": [
+            "RESULT"
+          ],
+          "host_at_attempt_start": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 4,
+            "source": "proc/loadavg"
+          },
+          "host_at_detection": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 4,
+            "source": "proc/loadavg"
+          },
+          "kind": "answered",
+          "ok": true,
+          "shape": "RESULT",
+          "wedge": null
+        },
+        {
+          "blocked": [],
+          "control": "fifo",
+          "expected": [
+            "-32010/invalid_argument"
+          ],
+          "host_at_attempt_start": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 4,
+            "source": "proc/loadavg"
+          },
+          "host_at_detection": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.84,
+            "loadavg_1m": 10.42,
+            "loadavg_5m": 7.02,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 4,
+            "source": "proc/loadavg"
+          },
+          "kind": "answered",
+          "ok": true,
+          "shape": "-32010/invalid_argument",
+          "wedge": null
+        }
+      ],
+      "engine": "rust",
+      "host_context": {
+        "deadline": 1.5,
+        "loadavg_1m": {
+          "max": 10.42,
+          "median": 10.42,
+          "min": 10.42
+        },
+        "nproc": 24,
+        "over_cpus_samples": 0,
+        "oversubscribed": false,
+        "run_queue": {
+          "max": 14,
+          "median": 6,
+          "min": 3
+        },
+        "samples": 30,
+        "source": "proc/loadavg"
+      },
+      "method": "iprange.v1.reader.open",
+      "raced_only_refusals_observed": 1,
+      "raced_refusals": [
+        "-32010/invalid_argument",
+        "-32010/wrong_state"
+      ],
+      "refusal_observed_in_race": 11,
+      "replacement_activity": {
+        "helper_errors": 0,
+        "observed": true,
+        "to_fifo": 94,
+        "to_regular": 94,
+        "toggles": 188
+      },
+      "stable_refusal": [
+        "-32010/invalid_argument"
+      ],
+      "stable_success": [
+        "RESULT"
+      ],
+      "subject": "rust/reader",
+      "target": "/tmp/opencode/iprange-sow35/battery-gate41/W-race/work/rust-reader/db.t",
+      "timing_window": {
+        "exercised": true,
+        "in_flight_to_fifo": 80,
+        "in_flight_to_regular": 79,
+        "required_in_flight_to_fifo": 1
+      }
+    },
     {
       "arm": "meta",
       "attempts_completed": 30,
@@ -42,22 +634,22 @@
           ],
           "host_at_attempt_start": {
             "deadline": 1.5,
-            "loadavg_15m": 9.24,
-            "loadavg_1m": 10.69,
-            "loadavg_5m": 7.3,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
-            "over_cpus": true,
-            "run_queue": 32,
+            "over_cpus": false,
+            "run_queue": 6,
             "source": "proc/loadavg"
           },
           "host_at_detection": {
             "deadline": 1.5,
-            "loadavg_15m": 9.24,
-            "loadavg_1m": 10.69,
-            "loadavg_5m": 7.3,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
-            "over_cpus": true,
-            "run_queue": 32,
+            "over_cpus": false,
+            "run_queue": 6,
             "source": "proc/loadavg"
           },
           "kind": "answered",
@@ -73,22 +665,22 @@
           ],
           "host_at_attempt_start": {
             "deadline": 1.5,
-            "loadavg_15m": 9.24,
-            "loadavg_1m": 10.69,
-            "loadavg_5m": 7.3,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
-            "over_cpus": true,
-            "run_queue": 32,
+            "over_cpus": false,
+            "run_queue": 7,
             "source": "proc/loadavg"
           },
           "host_at_detection": {
             "deadline": 1.5,
-            "loadavg_15m": 9.24,
-            "loadavg_1m": 10.69,
-            "loadavg_5m": 7.3,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
-            "over_cpus": true,
-            "run_queue": 32,
+            "over_cpus": false,
+            "run_queue": 7,
             "source": "proc/loadavg"
           },
           "kind": "answered",
@@ -97,21 +689,21 @@
           "wedge": null
         }
       ],
-      "engine": "rust",
+      "engine": "go",
       "host_context": {
         "deadline": 1.5,
         "loadavg_1m": {
-          "max": 11.6,
-          "median": 11.6,
-          "min": 10.69
+          "max": 10.31,
+          "median": 10.31,
+          "min": 10.31
         },
         "nproc": 24,
-        "over_cpus_samples": 11,
+        "over_cpus_samples": 1,
         "oversubscribed": false,
         "run_queue": {
-          "max": 60,
-          "median": 17,
-          "min": 6
+          "max": 32,
+          "median": 10,
+          "min": 4
         },
         "samples": 30,
         "source": "proc/loadavg"
@@ -125,9 +717,9 @@
       "replacement_activity": {
         "helper_errors": 0,
         "observed": true,
-        "to_fifo": 742,
-        "to_regular": 742,
-        "toggles": 1484
+        "to_fifo": 811,
+        "to_regular": 811,
+        "toggles": 1622
       },
       "stable_refusal": [
         "-32010/invalid_path"
@@ -135,12 +727,12 @@
       "stable_success": [
         "RESULT"
       ],
-      "subject": "rust/meta",
-      "target": "/tmp/opencode/iprange-sow35/battery-gate40/W-race/work/rust-meta/meta.t",
+      "subject": "go/meta",
+      "target": "/tmp/opencode/iprange-sow35/battery-gate41/W-race/work/go-meta/meta.t",
       "timing_window": {
         "exercised": true,
-        "in_flight_to_fifo": 729,
-        "in_flight_to_regular": 730,
+        "in_flight_to_fifo": 799,
+        "in_flight_to_regular": 797,
         "required_in_flight_to_fifo": 1
       }
     },
@@ -148,8 +740,8 @@
       "arm": "csv",
       "attempts_completed": 30,
       "classes": {
-        "-32010/invalid_path": 7,
-        "RESULT": 23
+        "-32010/invalid_path": 12,
+        "RESULT": 18
       },
       "controls": [
         {
@@ -160,22 +752,22 @@
           ],
           "host_at_attempt_start": {
             "deadline": 1.5,
-            "loadavg_15m": 9.31,
-            "loadavg_1m": 11.6,
-            "loadavg_5m": 7.54,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 22,
+            "run_queue": 17,
             "source": "proc/loadavg"
           },
           "host_at_detection": {
             "deadline": 1.5,
-            "loadavg_15m": 9.31,
-            "loadavg_1m": 11.6,
-            "loadavg_5m": 7.54,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 22,
+            "run_queue": 17,
             "source": "proc/loadavg"
           },
           "kind": "answered",
@@ -191,22 +783,22 @@
           ],
           "host_at_attempt_start": {
             "deadline": 1.5,
-            "loadavg_15m": 9.31,
-            "loadavg_1m": 11.6,
-            "loadavg_5m": 7.54,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 11,
+            "run_queue": 14,
             "source": "proc/loadavg"
           },
           "host_at_detection": {
             "deadline": 1.5,
-            "loadavg_15m": 9.31,
-            "loadavg_1m": 11.6,
-            "loadavg_5m": 7.54,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 11,
+            "run_queue": 14,
             "source": "proc/loadavg"
           },
           "kind": "answered",
@@ -215,21 +807,21 @@
           "wedge": null
         }
       ],
-      "engine": "rust",
+      "engine": "go",
       "host_context": {
         "deadline": 1.5,
         "loadavg_1m": {
-          "max": 11.6,
-          "median": 11.6,
-          "min": 11.6
+          "max": 10.31,
+          "median": 10.31,
+          "min": 10.31
         },
         "nproc": 24,
         "over_cpus_samples": 1,
         "oversubscribed": false,
         "run_queue": {
-          "max": 28,
-          "median": 14,
-          "min": 7
+          "max": 33,
+          "median": 13,
+          "min": 8
         },
         "samples": 30,
         "source": "proc/loadavg"
@@ -239,13 +831,13 @@
       "raced_refusals": [
         "-32010/invalid_path"
       ],
-      "refusal_observed_in_race": 7,
+      "refusal_observed_in_race": 12,
       "replacement_activity": {
         "helper_errors": 0,
         "observed": true,
-        "to_fifo": 332,
-        "to_regular": 332,
-        "toggles": 664
+        "to_fifo": 350,
+        "to_regular": 350,
+        "toggles": 700
       },
       "stable_refusal": [
         "-32010/invalid_path"
@@ -253,12 +845,12 @@
       "stable_success": [
         "RESULT"
       ],
-      "subject": "rust/csv",
-      "target": "/tmp/opencode/iprange-sow35/battery-gate40/W-race/work/rust-csv/csv.t",
+      "subject": "go/csv",
+      "target": "/tmp/opencode/iprange-sow35/battery-gate41/W-race/work/go-csv/csv.t",
       "timing_window": {
         "exercised": true,
-        "in_flight_to_fifo": 300,
-        "in_flight_to_regular": 305,
+        "in_flight_to_fifo": 331,
+        "in_flight_to_regular": 332,
         "required_in_flight_to_fifo": 1
       }
     },
@@ -278,22 +870,22 @@
           ],
           "host_at_attempt_start": {
             "deadline": 1.5,
-            "loadavg_15m": 9.31,
-            "loadavg_1m": 11.6,
-            "loadavg_5m": 7.54,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 8,
+            "run_queue": 24,
             "source": "proc/loadavg"
           },
           "host_at_detection": {
             "deadline": 1.5,
-            "loadavg_15m": 9.31,
-            "loadavg_1m": 11.6,
-            "loadavg_5m": 7.54,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 8,
+            "run_queue": 24,
             "source": "proc/loadavg"
           },
           "kind": "answered",
@@ -309,22 +901,22 @@
           ],
           "host_at_attempt_start": {
             "deadline": 1.5,
-            "loadavg_15m": 9.31,
-            "loadavg_1m": 11.6,
-            "loadavg_5m": 7.54,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 21,
+            "run_queue": 16,
             "source": "proc/loadavg"
           },
           "host_at_detection": {
             "deadline": 1.5,
-            "loadavg_15m": 9.31,
-            "loadavg_1m": 11.6,
-            "loadavg_5m": 7.54,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 21,
+            "run_queue": 16,
             "source": "proc/loadavg"
           },
           "kind": "answered",
@@ -333,21 +925,21 @@
           "wedge": null
         }
       ],
-      "engine": "rust",
+      "engine": "go",
       "host_context": {
         "deadline": 1.5,
         "loadavg_1m": {
-          "max": 11.6,
-          "median": 11.6,
-          "min": 11.6
+          "max": 10.31,
+          "median": 10.31,
+          "min": 10.31
         },
         "nproc": 24,
-        "over_cpus_samples": 1,
+        "over_cpus_samples": 3,
         "oversubscribed": false,
         "run_queue": {
-          "max": 34,
-          "median": 10,
-          "min": 6
+          "max": 36,
+          "median": 15,
+          "min": 9
         },
         "samples": 30,
         "source": "proc/loadavg"
@@ -361,9 +953,9 @@
       "replacement_activity": {
         "helper_errors": 0,
         "observed": true,
-        "to_fifo": 1749,
-        "to_regular": 1749,
-        "toggles": 3498
+        "to_fifo": 1512,
+        "to_regular": 1512,
+        "toggles": 3024
       },
       "stable_refusal": [
         "-32010/invalid_path"
@@ -371,12 +963,12 @@
       "stable_success": [
         "RESULT"
       ],
-      "subject": "rust/feed",
-      "target": "/tmp/opencode/iprange-sow35/battery-gate40/W-race/work/rust-feed/in.netset",
+      "subject": "go/feed",
+      "target": "/tmp/opencode/iprange-sow35/battery-gate41/W-race/work/go-feed/in.netset",
       "timing_window": {
         "exercised": true,
-        "in_flight_to_fifo": 1725,
-        "in_flight_to_regular": 1723,
+        "in_flight_to_fifo": 1493,
+        "in_flight_to_regular": 1488,
         "required_in_flight_to_fifo": 1
       }
     },
@@ -384,7 +976,126 @@
       "arm": "atlist",
       "attempts_completed": 30,
       "classes": {
-        "-32010/invalid_path": 11,
+        "-32010/invalid_path": 15,
+        "RESULT": 15
+      },
+      "controls": [
+        {
+          "blocked": [],
+          "control": "regular",
+          "expected": [
+            "RESULT"
+          ],
+          "host_at_attempt_start": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 17,
+            "source": "proc/loadavg"
+          },
+          "host_at_detection": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 17,
+            "source": "proc/loadavg"
+          },
+          "kind": "answered",
+          "ok": true,
+          "shape": "RESULT",
+          "wedge": null
+        },
+        {
+          "blocked": [],
+          "control": "fifo",
+          "expected": [
+            "-32010/invalid_path"
+          ],
+          "host_at_attempt_start": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 24,
+            "source": "proc/loadavg"
+          },
+          "host_at_detection": {
+            "deadline": 1.5,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
+            "nproc": 24,
+            "over_cpus": false,
+            "run_queue": 24,
+            "source": "proc/loadavg"
+          },
+          "kind": "answered",
+          "ok": true,
+          "shape": "-32010/invalid_path",
+          "wedge": null
+        }
+      ],
+      "engine": "go",
+      "host_context": {
+        "deadline": 1.5,
+        "loadavg_1m": {
+          "max": 10.31,
+          "median": 10.31,
+          "min": 10.31
+        },
+        "nproc": 24,
+        "over_cpus_samples": 7,
+        "oversubscribed": false,
+        "run_queue": {
+          "max": 69,
+          "median": 18,
+          "min": 10
+        },
+        "samples": 30,
+        "source": "proc/loadavg"
+      },
+      "method": "iprange.v1.current.publish",
+      "raced_only_refusals_observed": 0,
+      "raced_refusals": [
+        "-32010/invalid_path"
+      ],
+      "refusal_observed_in_race": 15,
+      "replacement_activity": {
+        "helper_errors": 0,
+        "observed": true,
+        "to_fifo": 1110,
+        "to_regular": 1110,
+        "toggles": 2220
+      },
+      "stable_refusal": [
+        "-32010/invalid_path"
+      ],
+      "stable_success": [
+        "RESULT"
+      ],
+      "subject": "go/atlist",
+      "target": "/tmp/opencode/iprange-sow35/battery-gate41/W-race/work/go-atlist/list.t",
+      "timing_window": {
+        "exercised": true,
+        "in_flight_to_fifo": 1088,
+        "in_flight_to_regular": 1078,
+        "required_in_flight_to_fifo": 1
+      }
+    },
+    {
+      "arm": "reader",
+      "attempts_completed": 30,
+      "classes": {
+        "-32010/invalid_argument": 8,
+        "-32010/wrong_state": 3,
         "RESULT": 19
       },
       "controls": [
@@ -396,141 +1107,22 @@
           ],
           "host_at_attempt_start": {
             "deadline": 1.5,
-            "loadavg_15m": 9.31,
-            "loadavg_1m": 11.6,
-            "loadavg_5m": 7.54,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 8,
+            "run_queue": 17,
             "source": "proc/loadavg"
           },
           "host_at_detection": {
             "deadline": 1.5,
-            "loadavg_15m": 9.31,
-            "loadavg_1m": 11.6,
-            "loadavg_5m": 7.54,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 8,
-            "source": "proc/loadavg"
-          },
-          "kind": "answered",
-          "ok": true,
-          "shape": "RESULT",
-          "wedge": null
-        },
-        {
-          "blocked": [],
-          "control": "fifo",
-          "expected": [
-            "-32010/invalid_path"
-          ],
-          "host_at_attempt_start": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.31,
-            "loadavg_1m": 11.6,
-            "loadavg_5m": 7.54,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 11,
-            "source": "proc/loadavg"
-          },
-          "host_at_detection": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.31,
-            "loadavg_1m": 11.6,
-            "loadavg_5m": 7.54,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 11,
-            "source": "proc/loadavg"
-          },
-          "kind": "answered",
-          "ok": true,
-          "shape": "-32010/invalid_path",
-          "wedge": null
-        }
-      ],
-      "engine": "rust",
-      "host_context": {
-        "deadline": 1.5,
-        "loadavg_1m": {
-          "max": 12.83,
-          "median": 11.6,
-          "min": 11.6
-        },
-        "nproc": 24,
-        "over_cpus_samples": 0,
-        "oversubscribed": false,
-        "run_queue": {
-          "max": 13,
-          "median": 6,
-          "min": 2
-        },
-        "samples": 30,
-        "source": "proc/loadavg"
-      },
-      "method": "iprange.v1.current.publish",
-      "raced_only_refusals_observed": 0,
-      "raced_refusals": [
-        "-32010/invalid_path"
-      ],
-      "refusal_observed_in_race": 11,
-      "replacement_activity": {
-        "helper_errors": 0,
-        "observed": true,
-        "to_fifo": 1567,
-        "to_regular": 1567,
-        "toggles": 3134
-      },
-      "stable_refusal": [
-        "-32010/invalid_path"
-      ],
-      "stable_success": [
-        "RESULT"
-      ],
-      "subject": "rust/atlist",
-      "target": "/tmp/opencode/iprange-sow35/battery-gate40/W-race/work/rust-atlist/list.t",
-      "timing_window": {
-        "exercised": true,
-        "in_flight_to_fifo": 1537,
-        "in_flight_to_regular": 1528,
-        "required_in_flight_to_fifo": 1
-      }
-    },
-    {
-      "arm": "reader",
-      "attempts_completed": 30,
-      "classes": {
-        "-32010/invalid_argument": 13,
-        "-32010/wrong_state": 3,
-        "RESULT": 14
-      },
-      "controls": [
-        {
-          "blocked": [],
-          "control": "regular",
-          "expected": [
-            "RESULT"
-          ],
-          "host_at_attempt_start": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 10,
-            "source": "proc/loadavg"
-          },
-          "host_at_detection": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 10,
+            "run_queue": 17,
             "source": "proc/loadavg"
           },
           "kind": "answered",
@@ -546,22 +1138,22 @@
           ],
           "host_at_attempt_start": {
             "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 9,
+            "run_queue": 14,
             "source": "proc/loadavg"
           },
           "host_at_detection": {
             "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
+            "loadavg_15m": 7.85,
+            "loadavg_1m": 10.31,
+            "loadavg_5m": 7.05,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 9,
+            "run_queue": 14,
             "source": "proc/loadavg"
           },
           "kind": "answered",
@@ -570,21 +1162,21 @@
           "wedge": null
         }
       ],
-      "engine": "rust",
+      "engine": "go",
       "host_context": {
         "deadline": 1.5,
         "loadavg_1m": {
-          "max": 12.83,
-          "median": 12.83,
-          "min": 12.83
+          "max": 10.31,
+          "median": 10.31,
+          "min": 10.31
         },
         "nproc": 24,
         "over_cpus_samples": 0,
         "oversubscribed": false,
         "run_queue": {
-          "max": 20,
-          "median": 7,
-          "min": 4
+          "max": 24,
+          "median": 15,
+          "min": 11
         },
         "samples": 30,
         "source": "proc/loadavg"
@@ -595,605 +1187,13 @@
         "-32010/invalid_argument",
         "-32010/wrong_state"
       ],
-      "refusal_observed_in_race": 16,
+      "refusal_observed_in_race": 11,
       "replacement_activity": {
         "helper_errors": 0,
         "observed": true,
-        "to_fifo": 101,
-        "to_regular": 101,
-        "toggles": 202
-      },
-      "stable_refusal": [
-        "-32010/invalid_argument"
-      ],
-      "stable_success": [
-        "RESULT"
-      ],
-      "subject": "rust/reader",
-      "target": "/tmp/opencode/iprange-sow35/battery-gate40/W-race/work/rust-reader/db.t",
-      "timing_window": {
-        "exercised": true,
-        "in_flight_to_fifo": 88,
-        "in_flight_to_regular": 85,
-        "required_in_flight_to_fifo": 1
-      }
-    },
-    {
-      "arm": "meta",
-      "attempts_completed": 30,
-      "classes": {
-        "-32010/invalid_path": 7,
-        "RESULT": 23
-      },
-      "controls": [
-        {
-          "blocked": [],
-          "control": "regular",
-          "expected": [
-            "RESULT"
-          ],
-          "host_at_attempt_start": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 8,
-            "source": "proc/loadavg"
-          },
-          "host_at_detection": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 8,
-            "source": "proc/loadavg"
-          },
-          "kind": "answered",
-          "ok": true,
-          "shape": "RESULT",
-          "wedge": null
-        },
-        {
-          "blocked": [],
-          "control": "fifo",
-          "expected": [
-            "-32010/invalid_path"
-          ],
-          "host_at_attempt_start": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 9,
-            "source": "proc/loadavg"
-          },
-          "host_at_detection": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 9,
-            "source": "proc/loadavg"
-          },
-          "kind": "answered",
-          "ok": true,
-          "shape": "-32010/invalid_path",
-          "wedge": null
-        }
-      ],
-      "engine": "go",
-      "host_context": {
-        "deadline": 1.5,
-        "loadavg_1m": {
-          "max": 12.83,
-          "median": 12.83,
-          "min": 12.83
-        },
-        "nproc": 24,
-        "over_cpus_samples": 2,
-        "oversubscribed": false,
-        "run_queue": {
-          "max": 34,
-          "median": 9,
-          "min": 6
-        },
-        "samples": 30,
-        "source": "proc/loadavg"
-      },
-      "method": "iprange.v1.direct.replace",
-      "raced_only_refusals_observed": 0,
-      "raced_refusals": [
-        "-32010/invalid_path"
-      ],
-      "refusal_observed_in_race": 7,
-      "replacement_activity": {
-        "helper_errors": 0,
-        "observed": true,
-        "to_fifo": 882,
-        "to_regular": 882,
-        "toggles": 1764
-      },
-      "stable_refusal": [
-        "-32010/invalid_path"
-      ],
-      "stable_success": [
-        "RESULT"
-      ],
-      "subject": "go/meta",
-      "target": "/tmp/opencode/iprange-sow35/battery-gate40/W-race/work/go-meta/meta.t",
-      "timing_window": {
-        "exercised": true,
-        "in_flight_to_fifo": 844,
-        "in_flight_to_regular": 844,
-        "required_in_flight_to_fifo": 1
-      }
-    },
-    {
-      "arm": "csv",
-      "attempts_completed": 30,
-      "classes": {
-        "-32010/invalid_path": 10,
-        "RESULT": 20
-      },
-      "controls": [
-        {
-          "blocked": [],
-          "control": "regular",
-          "expected": [
-            "RESULT"
-          ],
-          "host_at_attempt_start": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 11,
-            "source": "proc/loadavg"
-          },
-          "host_at_detection": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 11,
-            "source": "proc/loadavg"
-          },
-          "kind": "answered",
-          "ok": true,
-          "shape": "RESULT",
-          "wedge": null
-        },
-        {
-          "blocked": [],
-          "control": "fifo",
-          "expected": [
-            "-32010/invalid_path"
-          ],
-          "host_at_attempt_start": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 10,
-            "source": "proc/loadavg"
-          },
-          "host_at_detection": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 10,
-            "source": "proc/loadavg"
-          },
-          "kind": "answered",
-          "ok": true,
-          "shape": "-32010/invalid_path",
-          "wedge": null
-        }
-      ],
-      "engine": "go",
-      "host_context": {
-        "deadline": 1.5,
-        "loadavg_1m": {
-          "max": 12.83,
-          "median": 12.83,
-          "min": 12.83
-        },
-        "nproc": 24,
-        "over_cpus_samples": 1,
-        "oversubscribed": false,
-        "run_queue": {
-          "max": 25,
-          "median": 13,
-          "min": 7
-        },
-        "samples": 30,
-        "source": "proc/loadavg"
-      },
-      "method": "iprange.v1.direct.replace",
-      "raced_only_refusals_observed": 0,
-      "raced_refusals": [
-        "-32010/invalid_path"
-      ],
-      "refusal_observed_in_race": 10,
-      "replacement_activity": {
-        "helper_errors": 0,
-        "observed": true,
-        "to_fifo": 354,
-        "to_regular": 354,
-        "toggles": 708
-      },
-      "stable_refusal": [
-        "-32010/invalid_path"
-      ],
-      "stable_success": [
-        "RESULT"
-      ],
-      "subject": "go/csv",
-      "target": "/tmp/opencode/iprange-sow35/battery-gate40/W-race/work/go-csv/csv.t",
-      "timing_window": {
-        "exercised": true,
-        "in_flight_to_fifo": 337,
-        "in_flight_to_regular": 334,
-        "required_in_flight_to_fifo": 1
-      }
-    },
-    {
-      "arm": "feed",
-      "attempts_completed": 30,
-      "classes": {
-        "-32010/invalid_path": 10,
-        "RESULT": 20
-      },
-      "controls": [
-        {
-          "blocked": [],
-          "control": "regular",
-          "expected": [
-            "RESULT"
-          ],
-          "host_at_attempt_start": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 15,
-            "source": "proc/loadavg"
-          },
-          "host_at_detection": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 15,
-            "source": "proc/loadavg"
-          },
-          "kind": "answered",
-          "ok": true,
-          "shape": "RESULT",
-          "wedge": null
-        },
-        {
-          "blocked": [],
-          "control": "fifo",
-          "expected": [
-            "-32010/invalid_path"
-          ],
-          "host_at_attempt_start": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 11,
-            "source": "proc/loadavg"
-          },
-          "host_at_detection": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 11,
-            "source": "proc/loadavg"
-          },
-          "kind": "answered",
-          "ok": true,
-          "shape": "-32010/invalid_path",
-          "wedge": null
-        }
-      ],
-      "engine": "go",
-      "host_context": {
-        "deadline": 1.5,
-        "loadavg_1m": {
-          "max": 12.83,
-          "median": 12.83,
-          "min": 12.83
-        },
-        "nproc": 24,
-        "over_cpus_samples": 3,
-        "oversubscribed": false,
-        "run_queue": {
-          "max": 68,
-          "median": 13,
-          "min": 7
-        },
-        "samples": 30,
-        "source": "proc/loadavg"
-      },
-      "method": "iprange.v1.current.publish",
-      "raced_only_refusals_observed": 0,
-      "raced_refusals": [
-        "-32010/invalid_path"
-      ],
-      "refusal_observed_in_race": 10,
-      "replacement_activity": {
-        "helper_errors": 0,
-        "observed": true,
-        "to_fifo": 1616,
-        "to_regular": 1616,
-        "toggles": 3232
-      },
-      "stable_refusal": [
-        "-32010/invalid_path"
-      ],
-      "stable_success": [
-        "RESULT"
-      ],
-      "subject": "go/feed",
-      "target": "/tmp/opencode/iprange-sow35/battery-gate40/W-race/work/go-feed/in.netset",
-      "timing_window": {
-        "exercised": true,
-        "in_flight_to_fifo": 1606,
-        "in_flight_to_regular": 1605,
-        "required_in_flight_to_fifo": 1
-      }
-    },
-    {
-      "arm": "atlist",
-      "attempts_completed": 30,
-      "classes": {
-        "-32010/invalid_path": 8,
-        "RESULT": 22
-      },
-      "controls": [
-        {
-          "blocked": [],
-          "control": "regular",
-          "expected": [
-            "RESULT"
-          ],
-          "host_at_attempt_start": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 18,
-            "source": "proc/loadavg"
-          },
-          "host_at_detection": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 18,
-            "source": "proc/loadavg"
-          },
-          "kind": "answered",
-          "ok": true,
-          "shape": "RESULT",
-          "wedge": null
-        },
-        {
-          "blocked": [],
-          "control": "fifo",
-          "expected": [
-            "-32010/invalid_path"
-          ],
-          "host_at_attempt_start": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 17,
-            "source": "proc/loadavg"
-          },
-          "host_at_detection": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.41,
-            "loadavg_1m": 12.83,
-            "loadavg_5m": 7.86,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 17,
-            "source": "proc/loadavg"
-          },
-          "kind": "answered",
-          "ok": true,
-          "shape": "-32010/invalid_path",
-          "wedge": null
-        }
-      ],
-      "engine": "go",
-      "host_context": {
-        "deadline": 1.5,
-        "loadavg_1m": {
-          "max": 12.92,
-          "median": 12.83,
-          "min": 12.83
-        },
-        "nproc": 24,
-        "over_cpus_samples": 0,
-        "oversubscribed": false,
-        "run_queue": {
-          "max": 24,
-          "median": 14,
-          "min": 5
-        },
-        "samples": 30,
-        "source": "proc/loadavg"
-      },
-      "method": "iprange.v1.current.publish",
-      "raced_only_refusals_observed": 0,
-      "raced_refusals": [
-        "-32010/invalid_path"
-      ],
-      "refusal_observed_in_race": 8,
-      "replacement_activity": {
-        "helper_errors": 0,
-        "observed": true,
-        "to_fifo": 1606,
-        "to_regular": 1606,
-        "toggles": 3212
-      },
-      "stable_refusal": [
-        "-32010/invalid_path"
-      ],
-      "stable_success": [
-        "RESULT"
-      ],
-      "subject": "go/atlist",
-      "target": "/tmp/opencode/iprange-sow35/battery-gate40/W-race/work/go-atlist/list.t",
-      "timing_window": {
-        "exercised": true,
-        "in_flight_to_fifo": 1594,
-        "in_flight_to_regular": 1593,
-        "required_in_flight_to_fifo": 1
-      }
-    },
-    {
-      "arm": "reader",
-      "attempts_completed": 30,
-      "classes": {
-        "-32010/invalid_argument": 11,
-        "-32010/wrong_state": 2,
-        "RESULT": 17
-      },
-      "controls": [
-        {
-          "blocked": [],
-          "control": "regular",
-          "expected": [
-            "RESULT"
-          ],
-          "host_at_attempt_start": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.43,
-            "loadavg_1m": 12.92,
-            "loadavg_5m": 7.96,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 8,
-            "source": "proc/loadavg"
-          },
-          "host_at_detection": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.43,
-            "loadavg_1m": 12.92,
-            "loadavg_5m": 7.96,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 8,
-            "source": "proc/loadavg"
-          },
-          "kind": "answered",
-          "ok": true,
-          "shape": "RESULT",
-          "wedge": null
-        },
-        {
-          "blocked": [],
-          "control": "fifo",
-          "expected": [
-            "-32010/invalid_argument"
-          ],
-          "host_at_attempt_start": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.43,
-            "loadavg_1m": 12.92,
-            "loadavg_5m": 7.96,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 9,
-            "source": "proc/loadavg"
-          },
-          "host_at_detection": {
-            "deadline": 1.5,
-            "loadavg_15m": 9.43,
-            "loadavg_1m": 12.92,
-            "loadavg_5m": 7.96,
-            "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 9,
-            "source": "proc/loadavg"
-          },
-          "kind": "answered",
-          "ok": true,
-          "shape": "-32010/invalid_argument",
-          "wedge": null
-        }
-      ],
-      "engine": "go",
-      "host_context": {
-        "deadline": 1.5,
-        "loadavg_1m": {
-          "max": 12.92,
-          "median": 12.92,
-          "min": 12.92
-        },
-        "nproc": 24,
-        "over_cpus_samples": 0,
-        "oversubscribed": false,
-        "run_queue": {
-          "max": 14,
-          "median": 7,
-          "min": 4
-        },
-        "samples": 30,
-        "source": "proc/loadavg"
-      },
-      "method": "iprange.v1.reader.open",
-      "raced_only_refusals_observed": 2,
-      "raced_refusals": [
-        "-32010/invalid_argument",
-        "-32010/wrong_state"
-      ],
-      "refusal_observed_in_race": 13,
-      "replacement_activity": {
-        "helper_errors": 0,
-        "observed": true,
-        "to_fifo": 171,
-        "to_regular": 171,
-        "toggles": 342
+        "to_fifo": 157,
+        "to_regular": 157,
+        "toggles": 314
       },
       "stable_refusal": [
         "-32010/invalid_argument"
@@ -1202,113 +1202,113 @@
         "RESULT"
       ],
       "subject": "go/reader",
-      "target": "/tmp/opencode/iprange-sow35/battery-gate40/W-race/work/go-reader/db.t",
+      "target": "/tmp/opencode/iprange-sow35/battery-gate41/W-race/work/go-reader/db.t",
       "timing_window": {
         "exercised": true,
-        "in_flight_to_fifo": 155,
-        "in_flight_to_regular": 154,
+        "in_flight_to_fifo": 148,
+        "in_flight_to_regular": 144,
         "required_in_flight_to_fifo": 1
       }
     },
     {
-      "attempts": 4,
+      "attempts": 6,
       "confirmed_wedges": 2,
       "hang_observations": [
         {
           "blocked": [
-            "tid1737416=wait_for_partner"
+            "tid1962423=wait_for_partner"
           ],
           "host_at_attempt_start": {
             "deadline": 1.5,
-            "loadavg_15m": 9.43,
-            "loadavg_1m": 12.92,
-            "loadavg_5m": 7.96,
+            "loadavg_15m": 7.89,
+            "loadavg_1m": 10.68,
+            "loadavg_5m": 7.18,
             "nproc": 24,
             "over_cpus": false,
-            "run_queue": 20,
+            "run_queue": 15,
             "source": "proc/loadavg"
           },
           "host_at_detection": {
             "deadline": 1.5,
-            "loadavg_15m": 9.43,
-            "loadavg_1m": 12.92,
-            "loadavg_5m": 7.96,
+            "loadavg_15m": 7.89,
+            "loadavg_1m": 10.68,
+            "loadavg_5m": 7.18,
             "nproc": 24,
-            "over_cpus": true,
-            "run_queue": 82,
+            "over_cpus": false,
+            "run_queue": 13,
             "source": "proc/loadavg"
           },
           "kind": "hang",
           "shape": "OPENED",
-          "wedge": "wedge-confirmed:answered-after-writer-attach:fifo-0007"
+          "wedge": "wedge-confirmed:answered-after-writer-attach:fifo-0001"
         },
         {
           "blocked": [
-            "tid1741270=wait_for_partner"
+            "tid1964635=wait_for_partner"
           ],
           "host_at_attempt_start": {
             "deadline": 1.5,
-            "loadavg_15m": 9.43,
-            "loadavg_1m": 12.92,
-            "loadavg_5m": 7.96,
+            "loadavg_15m": 7.89,
+            "loadavg_1m": 10.68,
+            "loadavg_5m": 7.18,
             "nproc": 24,
-            "over_cpus": true,
-            "run_queue": 62,
+            "over_cpus": false,
+            "run_queue": 16,
             "source": "proc/loadavg"
           },
           "host_at_detection": {
             "deadline": 1.5,
-            "loadavg_15m": 9.43,
-            "loadavg_1m": 12.92,
-            "loadavg_5m": 7.96,
+            "loadavg_15m": 7.89,
+            "loadavg_1m": 10.68,
+            "loadavg_5m": 7.18,
             "nproc": 24,
-            "over_cpus": false,
-            "run_queue": 9,
+            "over_cpus": true,
+            "run_queue": 87,
             "source": "proc/loadavg"
           },
           "kind": "hang",
           "shape": "OPENED",
-          "wedge": "wedge-confirmed:answered-after-writer-attach:fifo-0005"
+          "wedge": "wedge-confirmed:answered-after-writer-attach:sentinel.t"
         }
       ],
       "hangs": 2,
       "host_context": {
         "deadline": 1.5,
         "loadavg_1m": {
-          "max": 12.92,
-          "median": 12.92,
-          "min": 12.92
+          "max": 10.68,
+          "median": 10.68,
+          "min": 10.31
         },
         "nproc": 24,
-        "over_cpus_samples": 3,
-        "oversubscribed": true,
+        "over_cpus_samples": 0,
+        "oversubscribed": false,
         "run_queue": {
-          "max": 82,
-          "median": 62,
-          "min": 20
+          "max": 19,
+          "median": 15,
+          "min": 10
         },
-        "samples": 4,
+        "samples": 6,
         "source": "proc/loadavg"
       },
       "replacement_activity": {
         "observed": true,
-        "to_fifo": 2224,
-        "toggles": 4448
+        "to_fifo": 3099,
+        "toggles": 6198
       },
       "subject": "detector/sentinel",
       "subject_label": "detector",
       "timing_window": {
         "exercised": true,
-        "in_flight_to_fifo": 2220
+        "in_flight_to_fifo": 3073
       }
     }
   ],
   "failures": [],
   "fixture_tool": {
-    "path": "/tmp/opencode/iprange-sow35/battery-gate40/bin/rust/v4-fixture",
+    "path": "/tmp/opencode/iprange-sow35/battery-gate41/bin/rust/v4-fixture",
     "sha256": "07d5173417ebc1b8be32ee5a2fce5029f1b559eaa1571dea8262318c2ec69991"
   },
-  "git_head": "0a6961113b1297bb90d683d8ad53a6a400a986bf",
+  "git_head": "204be3d7372538910abb258d625a63314235fa89",
   "options": {
     "arms": [
       "meta",
@@ -1333,7 +1333,7 @@
     "personal_path_in_report": null,
     "sanitizer": "command_sanitize.write_committed_report"
   },
-  "provenance_note": "wave-19.25 Linux battery; engines staged under the wave staging root labelled battery-gate40 and bound by the staged-binary ledger .local/shared/binaries/SHASUMS.txt (entries are staging-relative digests); no requirement waiver",
+  "provenance_note": "wave-19.25 Linux battery; engines staged under the wave staging root labelled battery-gate41 and bound by the staged-binary ledger .local/shared/binaries/SHASUMS.txt (entries are staging-relative digests); no requirement waiver",
   "schema": "iprange-cli-race-battery-report-v1",
   "verdict": "PASS"
 }
