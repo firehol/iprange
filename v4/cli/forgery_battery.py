@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 42
+EXPECTED_CLASSES = 44
 
 
 def _forgery(label, whole_bundle=False):
@@ -834,6 +834,27 @@ def c2t(bundle):
         bundle.manifest = stream.name
 
 
+@_forgery("C2u-throughput-bool-requests-per-round", whole_bundle=True)
+def c2u(bundle):
+    # The requests_per_round bool arm's feeder (security r25: C2s fed
+    # the rounds arm only; this arm has no second net — its revert is
+    # silent without a feeder). One detector, loud pin.
+    document = bundle.throughput
+    if isinstance(document, dict) \
+            and isinstance(document.get("method"), dict):
+        document["method"]["requests_per_round"] = True
+
+
+@_forgery("C2v-throughput-bool-burst-frames", whole_bundle=True)
+def c2v(bundle):
+    # The burst_frames bool arm's feeder (security r25, same class).
+    # One detector, loud pin.
+    document = bundle.throughput
+    if isinstance(document, dict) \
+            and isinstance(document.get("method"), dict):
+        document["method"]["burst_frames"] = True
+
+
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
 def c1(bundle):
     # The round-8 identity layer enforces the exact (engine, pass) set;
@@ -997,7 +1018,11 @@ def _run_gate(work_dir, bundle, tag, ledger):
         tokens.append((path, f"crash-negative#{index}"))
     if bundle.manifest:
         paths["battery-manifest"] = [bundle.manifest]
-        tokens.append((bundle.manifest, "battery-manifest#committed"))
+        # One token for both branches (tester r25 F1): the committed/
+        # rebuilt suffix let identical baseline texts compare unequal
+        # across branches — the label channel credited a baseline-
+        # shared reason as an own reason (the 9bc0eb7e false catch).
+        tokens.append((bundle.manifest, "battery-manifest"))
     else:
         # The manifest speaks the gate's role names; the sandbox speaks the
         # battery's short names.  One mapping, in one place.
@@ -1020,7 +1045,7 @@ def _run_gate(work_dir, bundle, tag, ledger):
         manifest_path = os.path.join(work_dir, f"{tag}-manifest.json")
         with open(manifest_path, "w", encoding="utf-8") as stream:
             json.dump(document, stream, sort_keys=True, indent=1)
-        tokens.append((manifest_path, "battery-manifest#rebuilt"))
+        tokens.append((manifest_path, "battery-manifest"))
         paths["battery-manifest"] = [manifest_path]
     command = _gate_command(paths, ledger)
     rc, stdout, stderr = _invoke_gate(command)
