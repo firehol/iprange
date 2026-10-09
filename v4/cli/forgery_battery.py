@@ -518,7 +518,9 @@ def c2(bundle):
     for entry in bundle.create_mode.get("engines", []):
         if isinstance(entry, dict) and entry.get("temp_creates"):
             for name in list(entry["temp_creates"]):
-                entry["temp_creates"][name] = [438]
+                # The vacuous-pass shape: an empty modes list with a
+                # pass verdict must fail (round 13 security finding).
+                entry["temp_creates"][name] = []
     binaries = bundle.create_mode.get("binaries") or {}
     # The staged ledger's worker rows: ledger-present, never executed
     # by the create-mode gate — the provenance anchor must refuse
@@ -529,6 +531,15 @@ def c2(bundle):
         worker_sha = _WORKER_DIGESTS.get(key)
         if isinstance(record, dict) and worker_sha:
             record["sha256"] = worker_sha
+    # The single-class-drop shape: hiding a 0666 regression by
+    # deleting one watched class's temp_creates key entirely (round
+    # 13 security finding 2).
+    for entry in bundle.create_mode.get("engines", []):
+        if isinstance(entry, dict) and entry.get("temp_creates"):
+            keys = list(entry["temp_creates"])
+            if keys:
+                del entry["temp_creates"][keys[0]]
+            break
 
 
 # The staged binaries' worker digests, read from the kit ledger once
@@ -536,19 +547,32 @@ def c2(bundle):
 # binds).  Falls back to the invented shape when the ledger is absent
 # (standalone self-test).
 _WORKER_DIGESTS = {}
+_LEDGER = os.path.join(EVIDENCE, "..", "..", "..", ".local", "shared",
+                       "binaries", "SHASUMS.txt")
+if not os.path.isfile(_LEDGER):
+    # Standalone self-test without the kit: fall back to the win/
+    # rows the battery stages beside the CLI products.
+    _LEDGER = os.path.join(EVIDENCE, "..", "..", "..", ".local",
+                           "shared", "binaries", "win", "SHASUMS-win.txt")
 try:
-    with open(os.path.join(EVIDENCE, "..", "..", ".local", "shared",
-                           "binaries", "SHASUMS.txt"),
-              encoding="utf-8") as _stream:
+    with open(_LEDGER, encoding="utf-8") as _stream:
         for _line in _stream:
             _parts = _line.split()
             if len(_parts) == 2 and "iprange-v4-worker" in _parts[1]:
-                if "rust" in _parts[1]:
+                _path = _parts[1]
+                if "/rust/" in _path or _path.startswith("rust/"):
                     _WORKER_DIGESTS["rust_worker_sha"] = _parts[0]
-                elif "/go/" in _parts[1]:
+                elif "/go/" in _path or _path.startswith("go/"):
                     _WORKER_DIGESTS["go_worker_sha"] = _parts[0]
 except OSError:
     pass
+if not _WORKER_DIGESTS:
+    # No ledger found: the foreign-digest arm cannot run.  This is a
+    # harness defect (the net silently loses a leg), so the c2 control
+    # must not pass vacuously — raise at import time.
+    raise RuntimeError(
+        "C2 worker-digest loader found no staged ledger at %r; the "
+        "foreign-digest forgery arm cannot run" % _LEDGER)
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)

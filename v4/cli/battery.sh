@@ -559,22 +559,24 @@ for line in open(log_path, encoding="utf-8", errors="replace"):
 if pending_traceback:
     complaints += 1
     local.append("<unresolved traceback at EOF>")
-# The structural complement (round 12): a step that exited non-zero
-# while the classifier found ZERO attributable complaints is a crash
-# or an exit path this run owns — no name list, no format trust, just
-# the step's own exit code. Signal deaths (rc > 128) always count.
+# The structural complement (round 13): signal deaths (rc > 128) and
+# the harness's own broken verdict (rc 2) count local UNCONDITIONALLY —
+# they are the step's own failure regardless of what complaint lines
+# preceded them (the held-state baseline always prints complaints, and
+# that must not mask a kill). Separately, a step that exited non-zero
+# while the classifier found ZERO attributable complaints is a crash.
 if step_rc is not None and step_rc != 0:
-    if step_rc > 128 or not [c for c in local if not c.startswith("<")]:
-        # Any signal death, or the log produced no attributable
-        # complaint lines (the complaints all came from the deferral
-        # set): the step's own failure is what the record shows.
-        # Exception: the held-state self-test's AssertionError path
-        # legitimately parses complaint lines from the assertion —
-        # the rc-based rule only fires when nothing was parsed.
-        parsed_complaints = complaints - len(local)
-        if parsed_complaints == 0 and complaints == len(local):
-            complaints += 1
-            local.append("exit %s with zero parsed complaints" % step_rc)
+    if step_rc > 128 or step_rc in (2, 101, 124):
+        # Signal death, Rust panic, timeout TERM kill, or the
+        # harness's own broken-verdict exit: this run's failure.
+        complaints += 1
+        local.append("exit %s (signal death, panic, timeout kill, "
+                     "or harness-broken verdict)" % step_rc)
+    elif complaints == len(local):
+        # Every complaint was local (zero attributable/deferred
+        # complaints parsed): the step's own failure.
+        complaints += 1
+        local.append("exit %s with zero parsed complaints" % step_rc)
 print("WINDOWS-HOLD: %d complaint(s), %d local to this leg"
       % (complaints, len(local)))
 for text in local[:12]:
