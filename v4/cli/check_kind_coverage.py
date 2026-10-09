@@ -2693,6 +2693,17 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                 f"{entry.get('pass')!r} verdict {entry.get('verdict')!r} "
                 "with no watched creates")
             continue
+        # The type guard runs BEFORE every consumer (round 19): a
+        # non-dict temp_creates must redden here, not crash the first
+        # consumer below.
+        creates_value = entry.get("temp_creates")
+        if not isinstance(creates_value, dict):
+            problems.append(
+                f"create-mode {path}: {entry.get('engine')} "
+                f"temp_creates field {creates_value!r} is not an "
+                f"object")
+            entry["temp_creates"] = {}
+            continue
         bad_modes = sorted(
             f"{name}:{modes}"
             for name, modes in (entry.get("temp_creates") or {}).items()
@@ -2713,21 +2724,22 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
             watched = {}
         else:
             watched = watched_value
-        # The same guard for the sibling fields (round 18 tester): a
-        # list temp_creates or int watched_keys values redden with a
-        # problem instead of crashing the gate.
-        creates_value = entry.get("temp_creates")
-        if not isinstance(creates_value, dict):
-            problems.append(
-                f"create-mode {path}: {entry.get('engine')} "
-                f"temp_creates field {creates_value!r} is not an "
-                f"object")
-            entry["temp_creates"] = {}
+        # The watched_keys field guard (round 18-19): the field must
+        # be a dict of lists — an int field or int VALUES redden with
+        # a problem instead of crashing the len() consumers.
         keys_value = entry.get("watched_keys")
-        if keys_value is not None and not isinstance(keys_value, dict):
+        if not isinstance(keys_value, dict):
+            if keys_value is not None:
+                problems.append(
+                    f"create-mode {path}: {entry.get('engine')} "
+                    f"watched_keys field {keys_value!r} is not an "
+                    f"object")
+                entry["watched_keys"] = {}
+        elif any(not isinstance(v, list) for v in keys_value.values()):
             problems.append(
                 f"create-mode {path}: {entry.get('engine')} "
-                f"watched_keys field {keys_value!r} is not an object")
+                f"watched_keys values must be lists; got "
+                f"{ {k: type(v).__name__ for k, v in keys_value.items()} }")
             entry["watched_keys"] = {}
         if "switched" in str(entry.get("pass")) and sorted(watched) != [
                 "control", "main", "readers", "temp"]:
