@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 26
+EXPECTED_CLASSES = 27
 
 
 def _forgery(label, whole_bundle=False):
@@ -584,6 +584,25 @@ def c2d(bundle):
         if isinstance(entry, dict) and entry.get("temp_creates"):
             for name in list(entry["temp_creates"]):
                 entry["temp_creates"][name] = ["0o666"]
+
+
+@_forgery("C2e-create-mode-key-substitution", whole_bundle=True)
+def c2e(bundle):
+    # The key-identity binding's standing net: delete one key from a
+    # switched entry and add a dummy so the COUNT stays four — only the
+    # watched_keys identity binding catches this (the count pin sees a
+    # healthy four). One detector.
+    for entry in bundle.create_mode.get("engines", []):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("pass", "")).startswith("switched") \
+                and entry.get("temp_creates"):
+            keys = sorted(entry["temp_creates"])
+            if len(keys) == 4:
+                modes = entry["temp_creates"][keys[0]]
+                del entry["temp_creates"][keys[0]]
+                entry["temp_creates"]["/tmp/benign-dummy"] = modes
+            break
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)

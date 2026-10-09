@@ -2740,9 +2740,18 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                 # substitution (delete one key, add a dummy) must fail.
                 watched_keys = entry.get("watched_keys") or {}
                 if isinstance(watched_keys, dict) and watched_keys:
+                    # The watcher records basenames; temp_creates keys
+                    # are absolute paths. Compare on the basename so
+                    # the genuine report binds and a substituted key
+                    # (different basename) fails.
+                    import os as _os
+                    creates = entry.get("temp_creates") or {}
+                    create_names = {_os.path.basename(k)
+                                    for k in creates}
                     for label in sorted(expected_classes):
                         bound = watched_keys.get(label) or []
-                        if not any(k in (entry.get('temp_creates') or {}) for k in bound):
+                        if not any(str(k) in create_names
+                                   for k in bound):
                             problems.append(
                                 f"create-mode {path}: "
                                 f"{entry.get('engine')} switched "
