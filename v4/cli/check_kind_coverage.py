@@ -2712,24 +2712,28 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                 f"create-mode {path}: {entry.get('engine')} switched "
                 f"watched classes {sorted(watched)}; want all four of "
                 "control/main/readers/temp")
-        # The key-set pin (round 14): a switched entry must carry
-        # exactly the four watched keys in temp_creates — a deleted
-        # key hides a 0666 regression behind a healthy report.
+        # The key-set pin (round 14): a switched entry's temp_creates
+        # must carry exactly as many entries as the watched field
+        # reports classes, and the watched field must report all four.
+        # The temp_creates keys are file paths (not class names), so
+        # the pin cross-references the counts — a deleted key drops
+        # the count and the class hides behind a healthy report.
         if "switched" in str(entry.get("pass")):
-            expected_keys = {"control", "main", "readers", "temp"}
-            for label, source in (("watched", watched),
-                                  ("temp_creates",
-                                   entry.get("temp_creates") or {})):
-                present = set(source)
-                missing = expected_keys - present
-                extra = present - expected_keys
-                if missing or extra:
-                    problems.append(
-                        f"create-mode {path}: {entry.get('engine')} "
-                        f"switched {label} keys {sorted(present)}; "
-                        f"want exactly {sorted(expected_keys)} "
-                        f"(missing {sorted(missing)}, extra "
-                        f"{sorted(extra)})")
+            expected_classes = {"control", "main", "readers", "temp"}
+            watched_classes = set(watched)
+            creates_count = len(entry.get("temp_creates") or {})
+            if watched_classes != expected_classes:
+                problems.append(
+                    f"create-mode {path}: {entry.get('engine')} "
+                    f"switched watched {sorted(watched_classes)}; "
+                    f"want exactly {sorted(expected_classes)}")
+            elif creates_count != len(expected_classes):
+                problems.append(
+                    f"create-mode {path}: {entry.get('engine')} "
+                    f"switched temp_creates has {creates_count} "
+                    f"entries; want exactly {len(expected_classes)} "
+                    f"(one per watched class — a deleted key hides a "
+                    f"regression)")
 
 
 def fifo_surface_evidence(path, report, implementation_of, ledger, problems,
@@ -6421,9 +6425,10 @@ def _self_test():
                 # watched class names — the key-set pin enforces this
                 # against the committed report.
                 if subject.startswith("switched"):
-                    creates = {name: ["0o600"] for name in watched}
+                    creates = {f"/tmp/watched-{name}": ["0o600"]
+                               for name in watched}
                 else:
-                    creates = {"temp": ["0o600"]}
+                    creates = {"/tmp/watched-temp": ["0o600"]}
                 entries.append({
                     "engine": engine, "pass": subject, "verdict": "pass",
                     "temp_creates": creates,
