@@ -997,7 +997,12 @@ def _run_battery(ledger):
             bundle = _load_bundle()
             reference = copy.deepcopy(bundle.state())
             mutator(bundle)
-            if bundle.state() == reference:
+            # JSON-textual comparison: Python object equality treats
+            # True == 1, so the C2o bool shape mutated yet compared
+            # equal (gate-42's own guard flagged a real mutation as a
+            # no-op). The serialized forms differ where it counts.
+            if json.dumps(bundle.state(), sort_keys=True) \
+                    == json.dumps(reference, sort_keys=True):
                 raise BatteryHarnessError(
                     f"{label}: the mutator left the report set identical to "
                     "the genuine evidence, so this class tests nothing; a "
