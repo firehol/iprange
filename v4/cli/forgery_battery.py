@@ -745,6 +745,16 @@ def c2q(bundle):
     # hostile type and points the bundle at the mutated copy.
     import tempfile
     document = _read(MANIFEST_FILE)
+    # Normalize to the single-revision close state (the two-revision
+    # early return fires before the container guard in the held
+    # state); the hostile reports field is the mutation under test.
+    single = document.get("git_head") or "0" * 40
+    if not (isinstance(single, str) and len(set(single)) > 1):
+        single = next((r for r in (document.get("revisions") or [])
+                       if isinstance(r, str) and len(set(r)) > 1),
+                      "1" * 12 + "2" * 28)
+    document["git_head"] = single
+    document["revisions"] = [single]
     document["reports"] = 5
     with tempfile.NamedTemporaryFile(
             dir=owned_temp_root(), suffix=".json",
