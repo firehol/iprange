@@ -2728,12 +2728,11 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
             problems.extend(type_errors)
         else:
             entries.append(entry)
-    if not entries:
-        return
     engines = {entry.get("engine") for entry in entries}
     if engines != {"rust", "go"}:
-        problems.append(f"create-mode {path}: engines {sorted(engines)}; "
-                        "both engines must be attested")
+        problems.append(f"create-mode {path}: engines "
+                        f"{sorted(map(repr, engines))}; both engines "
+                        "must be attested")
         return
     # The (engine, pass) set is exact: the switched pass is the round-7
     # security surface, and a default-only report must not consume
@@ -5117,11 +5116,23 @@ def battery_manifest_evidence(path, manifest, consumed_by_role, problems,
                         f"its reports were produced from")
         return
     listed = {}
-    for entry in manifest.get("reports") or []:
+    reports_field = manifest.get("reports")
+    if not isinstance(reports_field, list):
+        problems.append(f"{where}: reports field is "
+                        f"{type(reports_field).__name__}; want a list")
+        return
+    for entry in reports_field:
         if not isinstance(entry, dict):
             problems.append(f"{where}: report entry is not an object")
             continue
-        listed.setdefault(entry.get("role"), []).append(entry)
+        role = entry.get("role")
+        digest = entry.get("content_sha256")
+        if not isinstance(role, str) or not isinstance(digest, str):
+            problems.append(f"{where}: manifest entry "
+                            f"{entry!r} needs str role and "
+                            "content_sha256")
+            continue
+        listed.setdefault(role, []).append(entry)
     unknown_roles = sorted(set(listed) - set(CONSUMED_ROLES))
     if unknown_roles:
         problems.append(f"{where}: manifest lists roles the gate consumes "

@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 35
+EXPECTED_CLASSES = 38
 
 
 def _forgery(label, whole_bundle=False):
@@ -703,6 +703,36 @@ def c2m(bundle):
     # field must redden with the container-named problem before the
     # set-build consumers crash (round 21 security finding 1).
     bundle.create_mode["engines"] = 5
+
+
+@_forgery("C2n-create-mode-empty-engines", whole_bundle=True)
+def c2n(bundle):
+    # The engines-set check's empty-container feeder: engines=[] must
+    # redden "both engines must be attested" (round 22 security P1 —
+    # a pre-pass early return had silently accepted it).
+    bundle.create_mode["engines"] = []
+
+
+@_forgery("C2o-create-mode-bool-watched-count", whole_bundle=True)
+def c2o(bundle):
+    # The bool clause's feeder: JSON true is not an int for watched
+    # counts (round 22 tester — the clause shipped unfed).
+    for entry in bundle.create_mode.get("engines", []):
+        if isinstance(entry, dict) and isinstance(entry.get("watched"), dict):
+            for label in entry["watched"]:
+                entry["watched"][label] = True
+
+
+@_forgery("C2p-create-mode-int-engine-entry", whole_bundle=True)
+def c2p(bundle):
+    # The engine-str arm's feeder: an int engine on an entry must
+    # redden the pre-pass's field-named problem (round 22 tester —
+    # the arm became crash-load-bearing at the hoist without a
+    # feeder).
+    for entry in bundle.create_mode.get("engines", []):
+        if isinstance(entry, dict):
+            entry["engine"] = 7
+            break
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
