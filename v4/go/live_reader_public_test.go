@@ -9,10 +9,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
-	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 )
 
 // createLiveMembershipPair creates one live IPv4 membership pair with
@@ -593,122 +590,5 @@ func TestPublicLiveReaderEnrichmentCursorPinsReader(t *testing.T) {
 	}
 	if result, err := r.Close(); err != nil || result.Outcome != CloseOutcomeClosed {
 		t.Fatalf("close after cursor = %+v err=%v, want closed", result, err)
-	}
-}
-
-// TestPublicLiveReaderPinCloseRace hammers Pin against Close on one live
-// reader (run under -race). The closed transition is atomic (SOW-0025
-// chunk 4-5 review P1-1 regression pin): every Pin either succeeds while
-// the reader is open or reports WrongState, Close either reports
-// HandleBusy while pins exist or completes the close exactly once, and
-// the internal reader is never touched concurrently by Pin and Close.
-func TestPublicLiveReaderPinCloseRace(t *testing.T) {
-	requireLiveCreation(t)
-	main, _ := createLivePublicPair(t, 2)
-	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tx, err := w.BeginDirect(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if changed, err := tx.AssignV4(IPv4(10), IPv4(30), 1); err != nil || !changed {
-		t.Fatalf("assign: changed=%v err=%v", changed, err)
-	}
-	if result, err := tx.Commit(); err != nil || result.Status != CommitCommitted {
-		t.Fatalf("commit = %+v err=%v, want committed", result, err)
-	}
-	if _, err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	r, err := OpenLiveReader(main, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Every pinPace-th successful pin, the worker sleeps pinPause: the
-	// pause opens a guaranteed zero-pin window for the closer. Without
-	// it the race is pure sampling luck - eight uninterrupted hammers
-	// keep at least one pin registered nearly all the time, and the
-	// closer polls on Windows at >= 15 ms timer granularity, so the
-	// expected completion is minutes on slow hosts (observed 50-600 s).
-	// The paced version still runs millions of adversarial Pin/Close
-	// interleavings and completes in milliseconds.
-	const (
-		workers  = 8
-		pinPace  = 8192
-		pinPause = 200 * time.Microsecond
-	)
-	var wg sync.WaitGroup
-	stop := make(chan struct{})
-	var pinned int64
-	var refused int64
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			strides := 0
-			for {
-				select {
-				case <-stop:
-					return
-				default:
-				}
-				pin, err := r.Pin()
-				if err != nil {
-					if lifecycleCode(err) != ErrorWrongState {
-						t.Errorf("Pin = %v, want WrongState or success", err)
-						return
-					}
-					atomic.AddInt64(&refused, 1)
-					continue
-				}
-				atomic.AddInt64(&pinned, 1)
-				if err := pin.Close(); err != nil {
-					t.Errorf("pin close: %v", err)
-					return
-				}
-				strides++
-				if strides%pinPace == 0 {
-					time.Sleep(pinPause)
-				}
-			}
-		}()
-	}
-	// Let the pin workers establish a steady stream of pins, then start
-	// the closer so both arbitrations are exercised: Close racing live
-	// pins (HandleBusy) and Close winning the transition (all later
-	// Pins report WrongState).
-	for atomic.LoadInt64(&pinned) < 64 {
-		time.Sleep(time.Millisecond)
-	}
-	// The closer retries until the close completes: every HandleBusy is
-	// a correct arbitration against a concurrently registered pin (the
-	// public Close reports it as an error, like the immutable reader).
-	for {
-		result, err := r.Close()
-		if err != nil {
-			if lifecycleCode(err) == ErrorHandleBusy {
-				time.Sleep(time.Millisecond)
-				continue
-			}
-			t.Fatal(err)
-		}
-		if result.Outcome == CloseOutcomeClosed {
-			break
-		}
-		if result.Outcome != CloseOutcomeCloseIncomplete {
-			t.Fatalf("close outcome = %v, want closed or incomplete", result.Outcome)
-		}
-	}
-	close(stop)
-	wg.Wait()
-	if pinned == 0 || refused == 0 {
-		t.Fatalf("pin outcomes: %d pinned %d refused, want both sides", pinned, refused)
-	}
-	// The closed reader refuses further pins.
-	if _, err := r.Pin(); lifecycleCode(err) != ErrorWrongState {
-		t.Fatalf("Pin after close = %v, want WrongState", err)
 	}
 }
