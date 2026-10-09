@@ -5,23 +5,23 @@
   "command": [
     "v4/cli/windows_guard_harness.py",
     "--rust",
-    "/tmp/opencode/iprange-sow35/battery-gate37/bin/rust/iprange",
+    "/tmp/opencode/iprange-sow35/battery-gate38/bin/rust/iprange",
     "--go",
-    "/tmp/opencode/iprange-sow35/battery-gate37/bin/go/iprange",
+    "/tmp/opencode/iprange-sow35/battery-gate38/bin/go/iprange",
     "--fixture",
-    "/tmp/opencode/iprange-sow35/battery-gate37/fixture-937396.iprange",
+    "/tmp/opencode/iprange-sow35/battery-gate38/fixture-1300462.iprange",
     "--work",
-    "/tmp/opencode/iprange-sow35/battery-gate37/W-guard",
+    "/tmp/opencode/iprange-sow35/battery-gate38/W-guard",
     "--out",
-    "/tmp/opencode/iprange-sow35/battery-gate37/reports/guard-posix.json"
+    "/tmp/opencode/iprange-sow35/battery-gate38/reports/guard-posix.json"
   ],
   "fixture": {
-    "mtime": 1791567842.5609264,
-    "path": "/tmp/opencode/iprange-sow35/battery-gate37/fixture-937396.iprange",
-    "sha256": "3c4c18872927045ef91bd4f7883a7bbd6256235a551e47b8edf8af4c265ae149",
+    "mtime": 1791569191.6199167,
+    "path": "/tmp/opencode/iprange-sow35/battery-gate38/fixture-1300462.iprange",
+    "sha256": "c6f00aa3e4117923347ee62aefa32edfdacc06e4f719b6f4d0b02343792bb024",
     "size": 16384
   },
-  "git_head": "029c094af489cb40b8badd6d05be705da1127f33",
+  "git_head": "21ef5d161b57b192c9ffb16e473b59cd661ad907",
   "platform": "posix",
   "privacy": {
     "checked_inputs": [
@@ -39,14 +39,14 @@
     "go": {
       "all_ok": true,
       "binary": {
-        "mtime": 1791567714.4762533,
-        "path": "/tmp/opencode/iprange-sow35/battery-gate37/bin/go/iprange",
+        "mtime": 1791569061.731874,
+        "path": "/tmp/opencode/iprange-sow35/battery-gate38/bin/go/iprange",
         "sha256": "2e3d1574a1d1e07703e421b00714b2d7ddfb6385b3095f25a82fa3df5e88870a",
         "size": 14425956
       },
       "cases": {
         "absolute_trailing_dot": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/go/db.iprange.readers.",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/go/db.iprange.readers.",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -55,7 +55,7 @@
           "refused": false
         },
         "absolute_trailing_space": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/go/db.iprange.readers ",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/go/db.iprange.readers ",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -64,7 +64,7 @@
           "refused": false
         },
         "absolute_upper": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/go/DB.IPRANGE.READERS",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/go/DB.IPRANGE.READERS",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -73,7 +73,7 @@
           "refused": false
         },
         "control_allowed": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/go/meta.txt",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/go/meta.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -82,7 +82,7 @@
           "refused": false
         },
         "non_ascii": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/go/DB_\u00c4.IPRANGE.READERS",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/go/DB_\u00c4.IPRANGE.READERS",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -91,7 +91,7 @@
           "refused": false
         },
         "ntfs_final_sigma": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/go/A\u03c21.iprange.readers",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/go/A\u03c21.iprange.readers",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -100,7 +100,7 @@
           "refused": false
         },
         "ntfs_sigma": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/go/A\u03c31.iprange.readers",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/go/A\u03c31.iprange.readers",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -109,7 +109,7 @@
           "refused": false
         },
         "relative_source_control_allowed": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/go/meta-rel.txt",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/go/meta-rel.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -123,16 +123,16 @@
       },
       "implementation": "go",
       "sources_before": {
-        "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/go/A\u03a31.iprange": {
-          "sha256_before": "3c4c18872927045ef91bd4f7883a7bbd6256235a551e47b8edf8af4c265ae149",
+        "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/go/A\u03a31.iprange": {
+          "sha256_before": "c6f00aa3e4117923347ee62aefa32edfdacc06e4f719b6f4d0b02343792bb024",
           "sidecar_absent_before": true
         },
-        "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/go/db.iprange": {
-          "sha256_before": "3c4c18872927045ef91bd4f7883a7bbd6256235a551e47b8edf8af4c265ae149",
+        "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/go/db.iprange": {
+          "sha256_before": "c6f00aa3e4117923347ee62aefa32edfdacc06e4f719b6f4d0b02343792bb024",
           "sidecar_absent_before": true
         },
-        "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/go/db_\u00e4.iprange": {
-          "sha256_before": "3c4c18872927045ef91bd4f7883a7bbd6256235a551e47b8edf8af4c265ae149",
+        "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/go/db_\u00e4.iprange": {
+          "sha256_before": "c6f00aa3e4117923347ee62aefa32edfdacc06e4f719b6f4d0b02343792bb024",
           "sidecar_absent_before": true
         }
       }
@@ -140,14 +140,14 @@
     "rust": {
       "all_ok": true,
       "binary": {
-        "mtime": 1791567714.4842536,
-        "path": "/tmp/opencode/iprange-sow35/battery-gate37/bin/rust/iprange",
+        "mtime": 1791569061.7388744,
+        "path": "/tmp/opencode/iprange-sow35/battery-gate38/bin/rust/iprange",
         "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",
         "size": 7157616
       },
       "cases": {
         "absolute_trailing_dot": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/rust/db.iprange.readers.",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/rust/db.iprange.readers.",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -156,7 +156,7 @@
           "refused": false
         },
         "absolute_trailing_space": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/rust/db.iprange.readers ",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/rust/db.iprange.readers ",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -165,7 +165,7 @@
           "refused": false
         },
         "absolute_upper": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/rust/DB.IPRANGE.READERS",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/rust/DB.IPRANGE.READERS",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -174,7 +174,7 @@
           "refused": false
         },
         "control_allowed": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/rust/meta.txt",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/rust/meta.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -183,7 +183,7 @@
           "refused": false
         },
         "non_ascii": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/rust/DB_\u00c4.IPRANGE.READERS",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/rust/DB_\u00c4.IPRANGE.READERS",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -192,7 +192,7 @@
           "refused": false
         },
         "ntfs_final_sigma": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/rust/A\u03c21.iprange.readers",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/rust/A\u03c21.iprange.readers",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -201,7 +201,7 @@
           "refused": false
         },
         "ntfs_sigma": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/rust/A\u03c31.iprange.readers",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/rust/A\u03c31.iprange.readers",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -210,7 +210,7 @@
           "refused": false
         },
         "relative_source_control_allowed": {
-          "destination": "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/rust/meta-rel.txt",
+          "destination": "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/rust/meta-rel.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -224,16 +224,16 @@
       },
       "implementation": "rust",
       "sources_before": {
-        "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/rust/A\u03a31.iprange": {
-          "sha256_before": "3c4c18872927045ef91bd4f7883a7bbd6256235a551e47b8edf8af4c265ae149",
+        "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/rust/A\u03a31.iprange": {
+          "sha256_before": "c6f00aa3e4117923347ee62aefa32edfdacc06e4f719b6f4d0b02343792bb024",
           "sidecar_absent_before": true
         },
-        "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/rust/db.iprange": {
-          "sha256_before": "3c4c18872927045ef91bd4f7883a7bbd6256235a551e47b8edf8af4c265ae149",
+        "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/rust/db.iprange": {
+          "sha256_before": "c6f00aa3e4117923347ee62aefa32edfdacc06e4f719b6f4d0b02343792bb024",
           "sidecar_absent_before": true
         },
-        "/tmp/opencode/iprange-sow35/battery-gate37/W-guard/rust/db_\u00e4.iprange": {
-          "sha256_before": "3c4c18872927045ef91bd4f7883a7bbd6256235a551e47b8edf8af4c265ae149",
+        "/tmp/opencode/iprange-sow35/battery-gate38/W-guard/rust/db_\u00e4.iprange": {
+          "sha256_before": "c6f00aa3e4117923347ee62aefa32edfdacc06e4f719b6f4d0b02343792bb024",
           "sidecar_absent_before": true
         }
       }
