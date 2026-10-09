@@ -429,7 +429,8 @@ head12 = head[:12]
 
 GATE_ASSERTION = re.compile(r"genuine evidence failed the(?: consumed-class"
                             r" configuration|) gate:\s*(\[.*\])")
-PREFIXES = ("FAIL: ", "baseline: ", "VERIFY ", "PROBLEM ")
+PREFIXES = ("FAIL: ", "baseline: ", "VERIFY ", "PROBLEM ",
+            "VERDICT: BATTERY ")
 
 
 def base_names(text):
@@ -548,7 +549,12 @@ for line in open(log_path, encoding="utf-8", errors="replace"):
         if not stripped.startswith(prefix):
             continue
         complaints += 1
-        if not attributable(stripped[len(prefix):]):
+        if (prefix == "VERDICT: BATTERY "
+                or not attributable(stripped[len(prefix):])):
+            # A verdict line is the battery's own self-certification
+            # (GAP, HARNESS BROKEN): always this run's defect, never
+            # a Windows-leg hold (round 17 parity finding 4).
+            local.append(stripped):
             local.append(stripped)
         break
 
