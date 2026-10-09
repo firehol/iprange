@@ -365,7 +365,7 @@ the pre-close search):
   self-test addition; the structural rule is probe-verified across
   rounds 11-19).
 - EXECUTED (2026-10-09, post-round-20, per the binding r19/r20 commitment; pass 2 post-round-21): the reviewer-sandbox symlink sweep. Pass 1 removed 18,800 named-path links but was INCOMPLETE — 319 links lived behind symlinked directories that `find -type l` cannot descend through, and the pass-1 verification used the same blind command (performance r21 caught it). Pass 2 walked the symlinked dirs' targets (realpath filter) and removed the remaining 320; the deep walker AND the reviewer's own find+realpath command both verify ZERO into-tree links remain. Total removed: 19,120; both enumerations staged durably in evidence/sow0035-m1-r21/sweep-links*.txt. Checks recorded: ownership (all under round-scoped reviewer probe farms), inactivity (all dormant since Oct 3; the tracked tree clean at every round), preservation (probe results live in the reports; farms reproducible from git archive). The tracked tree clean; all seven role reports intact.
-- pending — the stale /tmp/pauli-base-11003d8 worktree (another session's — 12 flags; not mine to remove without consent).
+- resolved-gone (r22): /tmp/pauli-base-11003d8 no longer exists (removed by its owning session or reboot; /tmp/opencode survives, so not a reboot artifact).
 - pending — the tree strays (v4/go/iprange, l, .pi/, the seven
   archive-* dirs at ~189 MB, the glm-cwd-* dirs, the empty
   MARKER-MISMATCH/sub — the 2026-10-09 fit-for-purpose inventory) —
