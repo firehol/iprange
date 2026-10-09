@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 30
+EXPECTED_CLASSES = 31
 
 
 def _forgery(label, whole_bundle=False):
@@ -619,18 +619,30 @@ def c2f(bundle):
 
 @_forgery("C2g-create-mode-table-rewrite", whole_bundle=True)
 def c2g(bundle):
-    # The class-pattern authority's feeder: rewrite the table binding
-    # non-conforming attacker paths (names that don't shape like any
-    # class artifact). One detector — the pattern check must redden.
+    # The class-pattern authority's feeder: a SELF-CONSISTENT rewrite
+    # to non-conforming attacker paths — temp_creates AND the table
+    # both rewritten, so the identity binding passes and the pattern
+    # check is the only detector that can fire (round 18: rewriting
+    # the table alone never reached the pattern check — the binding
+    # caught the inconsistency first and the check was unfed).
     for entry in bundle.create_mode.get("engines", []):
-        if isinstance(entry, dict) and entry.get("temp_creates"):
-            keys = sorted(entry["temp_creates"])
-            entry["watched_keys"] = {
+        if not isinstance(entry, dict):
+            continue
+        creates = entry.get("temp_creates")
+        if not isinstance(creates, dict) or not creates:
+            continue
+        if len(creates) == 4:
+            table = {
                 "main": ["/tmp/attacker-main"],
                 "readers": ["/tmp/attacker-readers"],
                 "control": ["/tmp/attacker-control"],
                 "temp": ["/tmp/attacker-temp"],
-            } if len(keys) == 4 else {"temp": ["/tmp/attacker-temp"]}
+            }
+        else:
+            table = {"temp": ["/tmp/attacker-temp"]}
+        entry["watched_keys"] = table
+        entry["temp_creates"] = {
+            key: ["0o600"] for keys in table.values() for key in keys}
 
 
 @_forgery("C2h-create-mode-counts-zeroed", whole_bundle=True)
@@ -642,6 +654,16 @@ def c2h(bundle):
         if isinstance(entry, dict) and isinstance(entry.get("watched"), dict):
             for label in entry["watched"]:
                 entry["watched"][label] = 0
+
+
+@_forgery("C2i-create-mode-nondict-watched", whole_bundle=True)
+def c2i(bundle):
+    # The non-dict watched guard's feeder: a truthy non-dict watched
+    # field (a list of class names) must redden with a problem, not
+    # crash the gate (round 18 portability finding 2).
+    for entry in bundle.create_mode.get("engines", []):
+        if isinstance(entry, dict):
+            entry["watched"] = ["control", "main", "readers", "temp"]
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)

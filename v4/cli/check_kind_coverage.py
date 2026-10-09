@@ -2713,6 +2713,22 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
             watched = {}
         else:
             watched = watched_value
+        # The same guard for the sibling fields (round 18 tester): a
+        # list temp_creates or int watched_keys values redden with a
+        # problem instead of crashing the gate.
+        creates_value = entry.get("temp_creates")
+        if not isinstance(creates_value, dict):
+            problems.append(
+                f"create-mode {path}: {entry.get('engine')} "
+                f"temp_creates field {creates_value!r} is not an "
+                f"object")
+            entry["temp_creates"] = {}
+        keys_value = entry.get("watched_keys")
+        if keys_value is not None and not isinstance(keys_value, dict):
+            problems.append(
+                f"create-mode {path}: {entry.get('engine')} "
+                f"watched_keys field {keys_value!r} is not an object")
+            entry["watched_keys"] = {}
         if "switched" in str(entry.get("pass")) and sorted(watched) != [
                 "control", "main", "readers", "temp"]:
             problems.append(
@@ -2770,11 +2786,13 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                         f"(one per bound key — a deleted key hides a "
                         f"regression)")
                 else:
-                    # The class-pattern authority (round 16): the bound
-                    # basenames must match the committed class patterns —
-                    # knowledge OUTSIDE the report, so a rewritten
-                    # watched_keys table binding an attacker-chosen path
-                    # fails here even when internally consistent.
+                    # The class-pattern authority: the bound basenames
+                    # must match the committed class patterns. This is
+                    # tamper-EVIDENCE against inconsistent rewrites, not
+                    # authentication — the patterns are this file's own
+                    # committed source, so a pattern-CONFORMING
+                    # self-consistent rewrite passes by design (the
+                    # producer chain constrains that class of forgery).
                     class_patterns = {
                         "temp": (r"\.export\.tmp$",),
                         "readers": (r"\.readers$",),
