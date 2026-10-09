@@ -159,9 +159,9 @@ class Bundle:
     The gate's verdict covers fourteen report classes, so the battery's
     comparison of a forged set against the genuine set -- and the command it
     hands the gate -- has to cover the same fourteen.  ``manifest`` is the report
-    set's content binding; it stays ``None`` for every class except the one
-    that attacks the binding itself, which points the gate at the committed
-    manifest while it rewrites the reports.
+    set's content binding; it stays ``None`` except for the classes that
+    attack the manifest itself (the binding attacker points at the committed
+    manifest; the type-forge classes point at their own mutated copies).
     """
 
     __slots__ = ("matrices", "crash", "fifo", "throughput", "parity",
@@ -763,7 +763,7 @@ def c2q(bundle):
         bundle.manifest = stream.name
 
 
-@_forgery("C2r-manifest-int-entry-role", whole_bundle=True)
+@_forgery("C2r-manifest-int-entry-name", whole_bundle=True)
 def c2r(bundle):
     # The manifest ENTRY guards' feeder (parity r23: the container
     # guard is pinned by C2q; the str role/name/content_sha256 arms
@@ -780,8 +780,12 @@ def c2r(bundle):
     document["revisions"] = [single]
     reports = document.get("reports")
     if isinstance(reports, list) and reports:
+        # A hostile NAME on an otherwise-valid entry: a hostile role
+        # would trip the unknown-roles check guard-independently (ffp
+        # r24 — the first C2r was verdict-silent on arm removal); the
+        # name flows only into the entry guard and attested_names.
         first = dict(reports[0])
-        first["role"] = 7
+        first["name"] = 7
         document["reports"] = [first] + list(reports[1:])
     with tempfile.NamedTemporaryFile(
             dir=owned_temp_root(), suffix=".json",
