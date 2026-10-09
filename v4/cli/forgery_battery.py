@@ -739,10 +739,18 @@ def c2p(bundle):
 def c2q(bundle):
     # The manifest container guard's feeder: a non-list reports field
     # must redden with the container-named problem before any consumer
-    # (round 23 security finding 2 — the three manifest arms shipped
-    # unfed at a6d4451a).
-    if isinstance(bundle.manifest, dict):
-        bundle.manifest["reports"] = 5
+    # (round 23 security finding 2 — the arms shipped unfed at
+    # a6d4451a). The bundle's manifest slot is a PATH the gate reads;
+    # this class rewrites the committed manifest's reports field to a
+    # hostile type and points the bundle at the mutated copy.
+    import tempfile
+    document = _read(MANIFEST_FILE)
+    document["reports"] = 5
+    with tempfile.NamedTemporaryFile(
+            dir=owned_temp_root(), suffix=".json",
+            delete=False, mode="w", encoding="utf-8") as stream:
+        json.dump(document, stream, sort_keys=True, indent=1)
+        bundle.manifest = stream.name
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
