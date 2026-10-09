@@ -217,6 +217,11 @@ def verifier(creates, engine, findings, patterns=TEMP_PATTERNS,
             watched_labels.setdefault("control", []).append(base)
     record["watched"] = {label: len(paths) for label, paths
                          in sorted(watched_labels.items())}
+    # Record the class-to-key mapping so the kind gate can bind key
+    # identity (a count-preserving substitution must fail).
+    record["watched_keys"] = {
+        label: sorted(paths) for label, paths
+        in sorted(watched_labels.items())}
     if patterns is SWITCHED_PATTERNS:
         missing = [label for label in ("main", "temp", "readers", "control")
                    if not watched_labels.get(label)]

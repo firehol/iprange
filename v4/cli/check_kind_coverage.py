@@ -2734,6 +2734,21 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                     f"entries; want exactly {len(expected_classes)} "
                     f"(one per watched class — a deleted key hides a "
                     f"regression)")
+            else:
+                # Key-identity binding (round 15): the watcher's
+                # class-to-key table is the authority; a count-preserving
+                # substitution (delete one key, add a dummy) must fail.
+                watched_keys = entry.get("watched_keys") or {}
+                if isinstance(watched_keys, dict) and watched_keys:
+                    for label in sorted(expected_classes):
+                        bound = watched_keys.get(label) or []
+                        if not any(k in creates for k in bound):
+                            problems.append(
+                                f"create-mode {path}: "
+                                f"{entry.get('engine')} switched "
+                                f"{label} key {bound} absent from "
+                                f"temp_creates; a count-preserving "
+                                f"substitution hides a regression")
 
 
 def fifo_surface_evidence(path, report, implementation_of, ledger, problems,
@@ -6421,9 +6436,9 @@ def _self_test():
                 watched = ({"control": 1, "main": 1, "readers": 1, "temp": 1}
                            if subject.startswith("switched")
                            else {"temp": 1})
-                # The switched entry's temp_creates keys must be the
-                # watched class names — the key-set pin enforces this
-                # against the committed report.
+                # The switched entry's temp_creates keys are file
+                # paths; the key-set pin cross-references counts and
+                # the watched_keys identity table.
                 if subject.startswith("switched"):
                     creates = {f"/tmp/watched-{name}": ["0o600"]
                                for name in watched}

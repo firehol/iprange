@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 25
+EXPECTED_CLASSES = 26
 
 
 def _forgery(label, whole_bundle=False):
@@ -551,16 +551,10 @@ def c2c(bundle):
 
 # The staged binaries' worker digests, read from the kit ledger once
 # (the forgery battery runs against the same staged set the gate
-# binds).  Falls back to the invented shape when the ledger is absent
-# (standalone self-test).
+# binds).  A missing ledger is a harness defect (RuntimeError).
 _WORKER_DIGESTS = {}
 _LEDGER = os.path.join(EVIDENCE, "..", "..", "..", ".local", "shared",
                        "binaries", "SHASUMS.txt")
-if not os.path.isfile(_LEDGER):
-    # Standalone self-test without the kit: fall back to the win/
-    # rows the battery stages beside the CLI products.
-    _LEDGER = os.path.join(EVIDENCE, "..", "..", "..", ".local",
-                           "shared", "binaries", "win", "SHASUMS-win.txt")
 try:
     with open(_LEDGER, encoding="utf-8") as _stream:
         for _line in _stream:
@@ -574,11 +568,22 @@ try:
 except OSError:
     pass
 if not _WORKER_DIGESTS:
-    # No ledger found: the foreign-digest arm cannot run — a harness
-    # defect, not a vacuous pass.
+    # No staged ledger: the foreign-digest arm cannot run.
     raise RuntimeError(
         "C2 worker-digest loader found no staged ledger at %r; the "
         "foreign-digest forgery arm cannot run" % _LEDGER)
+
+
+@_forgery("C2d-create-mode-non0600-value", whole_bundle=True)
+def c2d(bundle):
+    # The purchased-verdict numeric arm's standing net: a report whose
+    # verdict claims pass while recording a string 0o666 mode value.
+    # One detector — the mode-value scan must refuse; reverting it
+    # redds only this class.
+    for entry in bundle.create_mode.get("engines", []):
+        if isinstance(entry, dict) and entry.get("temp_creates"):
+            for name in list(entry["temp_creates"]):
+                entry["temp_creates"][name] = ["0o666"]
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
@@ -768,7 +773,6 @@ def _run_gate(work_dir, bundle, tag, ledger):
         with open(manifest_path, "w", encoding="utf-8") as stream:
             json.dump(document, stream, sort_keys=True, indent=1)
         tokens.append((manifest_path, "battery-manifest#rebuilt"))
-        paths["battery-manifest"] = [manifest_path]
         paths["battery-manifest"] = [manifest_path]
     command = _gate_command(paths, ledger)
     rc, stdout, stderr = _invoke_gate(command)
