@@ -2621,6 +2621,11 @@ def _surface_binary_identity(path, label, engine, record, implementation_of,
             return
 
 
+def _is_count(value):
+    """A JSON count: an int, never a bool (JSON true is not a count)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _create_mode_entry_type_problems(path, entry):
     """The structural type contract for one create-mode entry.
 
@@ -2656,7 +2661,7 @@ def _create_mode_entry_type_problems(path, entry):
         bad("watched", watched, "an object")
     else:
         for key, count in watched.items():
-            if not isinstance(count, int) or isinstance(count, bool):
+            if not _is_count(count):
                 bad(f"watched[{key!r}]", count, "an int")
     keys_table = entry.get("watched_keys")
     if keys_table is not None:
@@ -5310,12 +5315,12 @@ def _reply_classification_problems(where, rounds, problems):
         label = f"{where} round {entry.get('round')}"
         for name, value in (("successful_replies", successful),
                             ("error_replies", errors)):
-            if value is not None and (not isinstance(value, int)
+            if value is not None and (not _is_count(value)
                                       or value < 0):
                 problems.append(f"{label}: {name} {value!r} is not a measured "
                                 f"count")
-        if isinstance(successful, int) and isinstance(errors, int):
-            if isinstance(replies, int) and successful + errors != replies:
+        if _is_count(successful) and _is_count(errors):
+            if _is_count(replies) and successful + errors != replies:
                 problems.append(
                     f"{label}: {successful} successful and {errors} error "
                     f"replies do not add up to the {replies} counted replies; "
@@ -5331,7 +5336,7 @@ def _reply_classification_problems(where, rounds, problems):
                     or not 0.0 <= float(ratio) <= 1.0:
                 problems.append(f"{label}: success_ratio {ratio!r} is not a "
                                 f"fraction of the counted replies")
-            elif isinstance(successful, int) and isinstance(replies, int) \
+            elif _is_count(successful) and _is_count(replies) \
                     and replies > 0:
                 implied = successful / float(replies)
                 if abs(implied - float(ratio)) > 0.005:
@@ -5349,7 +5354,7 @@ def _method_agreement_problems(where, method, record, problems):
     rounds = [entry for entry in (record.get("rounds") or [])
               if isinstance(entry, dict)]
     declared_rounds = method.get("rounds")
-    if isinstance(declared_rounds, int) and declared_rounds > 0 \
+    if _is_count(declared_rounds) and declared_rounds > 0 \
             and len(rounds) != declared_rounds:
         problems.append(f"{where}: the method declares {declared_rounds} "
                         f"rounds and the record carries {len(rounds)}; the "
