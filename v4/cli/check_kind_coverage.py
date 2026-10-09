@@ -2625,11 +2625,11 @@ def _create_mode_entry_type_problems(path, entry):
     """The structural type contract for one create-mode entry.
 
     Every field must be its declared type (str engine/pass/verdict,
-    dict-of-lists temp_creates, dict-of-ints watched, dict-of-lists-of
-    -str watched_keys). Any violation reddens with the field named —
-    the round-19/20 crash shapes (list temp_creates, int watched_keys
-    values, non-str keys, nested lists, int engines) all land here
-    instead of crashing a downstream consumer.
+    dict-of-lists temp_creates, dict-of-ints watched — bool is not an
+    int, dict-of-lists-of-str watched_keys). Any violation reddens
+    with the field named. JSON object keys are always strings after
+    the round-trip, so key-type arms are omitted by design; the
+    value-type arms catch the round-19/21 crash shapes.
     """
     if not isinstance(entry, dict):
         return [f"create-mode {path}: engine entry {entry!r} is not "
@@ -2649,8 +2649,6 @@ def _create_mode_entry_type_problems(path, entry):
         bad("temp_creates", creates, "an object")
     else:
         for key, modes in creates.items():
-            if not isinstance(key, str):
-                bad("temp_creates key", key, "a string")
             if not isinstance(modes, list):
                 bad(f"temp_creates[{key!r}]", modes, "a list")
     watched = entry.get("watched")
@@ -2658,9 +2656,7 @@ def _create_mode_entry_type_problems(path, entry):
         bad("watched", watched, "an object")
     else:
         for key, count in watched.items():
-            if not isinstance(key, str):
-                bad("watched key", key, "a string")
-            if not isinstance(count, int):
+            if not isinstance(count, int) or isinstance(count, bool):
                 bad(f"watched[{key!r}]", count, "an int")
     keys_table = entry.get("watched_keys")
     if keys_table is not None:
@@ -2668,8 +2664,6 @@ def _create_mode_entry_type_problems(path, entry):
             bad("watched_keys", keys_table, "an object")
         else:
             for key, bound in keys_table.items():
-                if not isinstance(key, str):
-                    bad("watched_keys key", key, "a string")
                 if not isinstance(bound, list):
                     bad(f"watched_keys[{key!r}]", bound, "a list")
                 elif any(not isinstance(k, str) for k in bound):
@@ -2779,14 +2773,7 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                 f"{entry.get('pass')!r} claims pass while recording "
                 f"non-0600 creates {bad_modes}; a purchased verdict "
                 "fails here")
-        watched_value = entry.get("watched")
-        if not isinstance(watched_value, dict):
-            problems.append(
-                f"create-mode {path}: {entry.get('engine')} watched "
-                f"field {watched_value!r} is not an object")
-            watched = {}
-        else:
-            watched = watched_value
+        watched = entry.get("watched") or {}
         if "switched" in str(entry.get("pass")) and sorted(watched) != [
                 "control", "main", "readers", "temp"]:
             problems.append(
