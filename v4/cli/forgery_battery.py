@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 41
+EXPECTED_CLASSES = 42
 
 
 def _forgery(label, whole_bundle=False):
@@ -804,6 +804,34 @@ def c2s(bundle):
     if isinstance(document, dict) \
             and isinstance(document.get("method"), dict):
         document["method"]["rounds"] = True
+
+
+@_forgery("C2t-manifest-list-entry-name", whole_bundle=True)
+def c2t(bundle):
+    # The manifest NAME clause's rotation-defense feeder (security r24
+    # finding 3). VERDICT-SILENT ON REVERT like C2r: the bytes lattice
+    # backstops every manifest-path class, so no entry class can
+    # isolate (probe-verified); the name clause is crash-load-bearing
+    # only on the close-state tamper path. Accepted per the SOW record.
+    import tempfile
+    document = _read(MANIFEST_FILE)
+    single = document.get("git_head") or "0" * 40
+    if not (isinstance(single, str) and len(set(single)) > 1):
+        single = next((r for r in (document.get("revisions") or [])
+                       if isinstance(r, str) and len(set(r)) > 1),
+                      "1" * 12 + "2" * 28)
+    document["git_head"] = single
+    document["revisions"] = [single]
+    reports = document.get("reports")
+    if isinstance(reports, list) and reports:
+        first = dict(reports[0])
+        first["name"] = [1, 2]
+        document["reports"] = [first] + list(reports[1:])
+    with tempfile.NamedTemporaryFile(
+            dir=owned_temp_root(), suffix=".json",
+            delete=False, mode="w", encoding="utf-8") as stream:
+        json.dump(document, stream, sort_keys=True, indent=1)
+        bundle.manifest = stream.name
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
