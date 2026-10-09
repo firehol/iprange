@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 23
+EXPECTED_CLASSES = 25
 
 
 def _forgery(label, whole_bundle=False):
@@ -507,37 +507,44 @@ def w7(bundle):
     bundle.manifest = MANIFEST_FILE
 
 
-@_forgery("C2-create-mode-purchased-verdict", whole_bundle=True)
+@_forgery("C2-create-mode-foreign-worker-digests", whole_bundle=True)
 def c2(bundle):
-    # The round-10 digest binding's standing net: a report whose
-    # verdict claims pass while recording non-0600 modes (the
-    # purchased-verdict forge), and whose binaries table swaps in
-    # ledger-present worker digests (the foreign-digest forge — the
-    # exact shape a provenance anchor must refuse). The gate must
-    # reject both at every rotation.
-    for entry in bundle.create_mode.get("engines", []):
-        if isinstance(entry, dict) and entry.get("temp_creates"):
-            for name in list(entry["temp_creates"]):
-                # The vacuous-pass shape: an empty modes list with a
-                # pass verdict must fail (round 13 security finding).
-                entry["temp_creates"][name] = []
+    # The provenance anchor's standing net: the binaries table swaps
+    # in ledger-present worker digests. One detector — the anchor must
+    # refuse them; reverting the anchor redds this class and no other.
     binaries = bundle.create_mode.get("binaries") or {}
-    # The staged ledger's worker rows: ledger-present, never executed
-    # by the create-mode gate — the provenance anchor must refuse
-    # them where a mere hex check would pass.
     for engine, key in (("rust", "rust_worker_sha"),
                         ("go", "go_worker_sha")):
         record = binaries.get(engine)
         worker_sha = _WORKER_DIGESTS.get(key)
         if isinstance(record, dict) and worker_sha:
             record["sha256"] = worker_sha
-    # The single-class-drop shape: hiding a 0666 regression by
-    # deleting one watched class's temp_creates key entirely (round
-    # 13 security finding 2).
+
+
+@_forgery("C2b-create-mode-vacuous-pass", whole_bundle=True)
+def c2b(bundle):
+    # The empty-modes purchase: verdict pass with [] mode lists. One
+    # detector — the `not modes` guard must refuse; reverting it
+    # redds this class and no other.
     for entry in bundle.create_mode.get("engines", []):
         if isinstance(entry, dict) and entry.get("temp_creates"):
-            keys = list(entry["temp_creates"])
-            if keys:
+            for name in list(entry["temp_creates"]):
+                entry["temp_creates"][name] = []
+
+
+@_forgery("C2c-create-mode-class-drop", whole_bundle=True)
+def c2c(bundle):
+    # The single-class drop from a SWITCHED entry (four keys — the
+    # drop leaves three, hiding one watched class). One detector —
+    # the key-set pin must refuse; without it a 0666 regression is
+    # hidable by deleting the key.
+    for entry in bundle.create_mode.get("engines", []):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("pass", "")).startswith("switched") \
+                and entry.get("temp_creates"):
+            keys = sorted(entry["temp_creates"])
+            if len(keys) == 4:
                 del entry["temp_creates"][keys[0]]
             break
 
@@ -567,9 +574,8 @@ try:
 except OSError:
     pass
 if not _WORKER_DIGESTS:
-    # No ledger found: the foreign-digest arm cannot run.  This is a
-    # harness defect (the net silently loses a leg), so the c2 control
-    # must not pass vacuously — raise at import time.
+    # No ledger found: the foreign-digest arm cannot run — a harness
+    # defect, not a vacuous pass.
     raise RuntimeError(
         "C2 worker-digest loader found no staged ledger at %r; the "
         "foreign-digest forgery arm cannot run" % _LEDGER)
@@ -738,6 +744,7 @@ def _run_gate(work_dir, bundle, tag, ledger):
         tokens.append((path, f"crash-negative#{index}"))
     if bundle.manifest:
         paths["battery-manifest"] = [bundle.manifest]
+        tokens.append((bundle.manifest, "battery-manifest#committed"))
     else:
         # The manifest speaks the gate's role names; the sandbox speaks the
         # battery's short names.  One mapping, in one place.
@@ -760,6 +767,8 @@ def _run_gate(work_dir, bundle, tag, ledger):
         manifest_path = os.path.join(work_dir, f"{tag}-manifest.json")
         with open(manifest_path, "w", encoding="utf-8") as stream:
             json.dump(document, stream, sort_keys=True, indent=1)
+        tokens.append((manifest_path, "battery-manifest#rebuilt"))
+        paths["battery-manifest"] = [manifest_path]
         paths["battery-manifest"] = [manifest_path]
     command = _gate_command(paths, ledger)
     rc, stdout, stderr = _invoke_gate(command)

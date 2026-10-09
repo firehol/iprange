@@ -2712,6 +2712,24 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                 f"create-mode {path}: {entry.get('engine')} switched "
                 f"watched classes {sorted(watched)}; want all four of "
                 "control/main/readers/temp")
+        # The key-set pin (round 14): a switched entry must carry
+        # exactly the four watched keys in temp_creates — a deleted
+        # key hides a 0666 regression behind a healthy report.
+        if "switched" in str(entry.get("pass")):
+            expected_keys = {"control", "main", "readers", "temp"}
+            for label, source in (("watched", watched),
+                                  ("temp_creates",
+                                   entry.get("temp_creates") or {})):
+                present = set(source)
+                missing = expected_keys - present
+                extra = present - expected_keys
+                if missing or extra:
+                    problems.append(
+                        f"create-mode {path}: {entry.get('engine')} "
+                        f"switched {label} keys {sorted(present)}; "
+                        f"want exactly {sorted(expected_keys)} "
+                        f"(missing {sorted(missing)}, extra "
+                        f"{sorted(extra)})")
 
 
 def fifo_surface_evidence(path, report, implementation_of, ledger, problems,
