@@ -6417,10 +6417,16 @@ def _self_test():
                 watched = ({"control": 1, "main": 1, "readers": 1, "temp": 1}
                            if subject.startswith("switched")
                            else {"temp": 1})
+                # The switched entry's temp_creates keys must be the
+                # watched class names — the key-set pin enforces this
+                # against the committed report.
+                if subject.startswith("switched"):
+                    creates = {name: ["0o600"] for name in watched}
+                else:
+                    creates = {"temp": ["0o600"]}
                 entries.append({
                     "engine": engine, "pass": subject, "verdict": "pass",
-                    "temp_creates": {f"watched-{engine}-{len(entries)}":
-                                     ["0o600"]},
+                    "temp_creates": creates,
                     "watched": watched,
                 })
         return {"schema": "iprange-cli-create-mode-report-v1",
