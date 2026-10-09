@@ -3,15 +3,15 @@
  "command": [
   "v4/cli/throughput_harness.py",
   "--rust",
-  "/tmp/opencode/iprange-sow35/battery-gate23/bin/rust/iprange",
+  "/tmp/opencode/iprange-sow35/battery-gate24/bin/rust/iprange",
   "--go",
-  "/tmp/opencode/iprange-sow35/battery-gate23/bin/go/iprange",
+  "/tmp/opencode/iprange-sow35/battery-gate24/bin/go/iprange",
   "--work",
-  "/tmp/opencode/iprange-sow35/battery-gate23/W-thruput",
+  "/tmp/opencode/iprange-sow35/battery-gate24/W-thruput",
   "--json-report",
-  "/tmp/opencode/iprange-sow35/battery-gate23/reports/throughput.json"
+  "/tmp/opencode/iprange-sow35/battery-gate24/reports/throughput.json"
  ],
- "git_head": "c45b82db97b58ee7662679db7983076f2fe9f761",
+ "git_head": "29a73355e33b45d9845de418b13b9066d26717f1",
  "method": {
   "burst_frames": 30,
   "note": "attestation, not a threshold: absolute rate is host load dependent, so the gate is that all replies are served, the child exits cleanly, and the thread count is constant in the request count",
@@ -48,32 +48,32 @@
  "product": {
   "go": {
    "implementation": "go",
-   "median_replies_per_s": 17185.2,
-   "path": "/tmp/opencode/iprange-sow35/battery-gate23/bin/go/iprange",
+   "median_replies_per_s": 16144.5,
+   "path": "/tmp/opencode/iprange-sow35/battery-gate24/bin/go/iprange",
    "rounds": [
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 17185.2,
+     "replies_per_s": 16144.5,
      "requests": 10000,
      "round": 0,
-     "seconds": 0.5819
+     "seconds": 0.6194
     },
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 17725.2,
+     "replies_per_s": 13654.4,
      "requests": 10000,
      "round": 1,
-     "seconds": 0.5642
+     "seconds": 0.7324
     },
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 16874.1,
+     "replies_per_s": 16353.2,
      "requests": 10000,
      "round": 2,
-     "seconds": 0.5926
+     "seconds": 0.6115
     }
    ],
    "sha256": "901908c52d42e70c1d3d7e2e880dc65aaff60449d7cfa16dd8747bf81c9cff5f",
@@ -83,7 +83,7 @@
      "exit_status": 0,
      "replies": 6000,
      "requests": 6000,
-     "unique_child_tids": 11
+     "unique_child_tids": 7
     },
     "small": {
      "clone_syscalls": 17,
@@ -97,32 +97,32 @@
   },
   "rust": {
    "implementation": "rust",
-   "median_replies_per_s": 46193.4,
-   "path": "/tmp/opencode/iprange-sow35/battery-gate23/bin/rust/iprange",
+   "median_replies_per_s": 44470.0,
+   "path": "/tmp/opencode/iprange-sow35/battery-gate24/bin/rust/iprange",
    "rounds": [
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 46193.4,
+     "replies_per_s": 36824.3,
      "requests": 10000,
      "round": 0,
-     "seconds": 0.2165
+     "seconds": 0.2716
     },
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 50898.8,
+     "replies_per_s": 44470.0,
      "requests": 10000,
      "round": 1,
-     "seconds": 0.1965
+     "seconds": 0.2249
     },
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 42657.3,
+     "replies_per_s": 47481.3,
      "requests": 10000,
      "round": 2,
-     "seconds": 0.2344
+     "seconds": 0.2106
     }
    ],
    "sha256": "b92c3cc680068e69fc3ce949a5d0805670f25f16ade6063f42cfaaf937e9512f",

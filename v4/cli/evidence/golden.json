@@ -5,7 +5,7 @@
  "command": [
   "v4/cli/check_golden.py",
   "--json-report",
-  "/tmp/opencode/iprange-sow35/battery-gate23/reports/golden.json"
+  "/tmp/opencode/iprange-sow35/battery-gate24/reports/golden.json"
  ],
  "covered_methods": [
   "iprange.v1.algebra.compare",
@@ -62,7 +62,7 @@
   "iprange.v1.system.describe",
   "iprange.v1.validate"
  ],
- "git_head": "c45b82db97b58ee7662679db7983076f2fe9f761",
+ "git_head": "29a73355e33b45d9845de418b13b9066d26717f1",
  "golden_exchanges": 55,
  "golden_files": 10,
  "privacy": {
