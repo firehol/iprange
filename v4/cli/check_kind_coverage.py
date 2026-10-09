@@ -2700,9 +2700,10 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                         "below 0600 is a product defect")
         return
     binaries = report.get("binaries") or {}
-    if not isinstance(binaries, dict) \
-            or any(not isinstance(k, str) for k in binaries) \
-            or sorted(binaries) != ["go", "rust"]:
+    # Key-type arms are omitted per the JSON design note (object keys
+    # round-trip as strings); only the dict-ness and the exact key set
+    # are checked.
+    if not isinstance(binaries, dict) or sorted(binaries) != ["go", "rust"]:
         problems.append(f"create-mode {path}: no binaries table binding "
                         "the report to the digests that produced it")
         return
