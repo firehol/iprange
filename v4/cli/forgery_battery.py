@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 33
+EXPECTED_CLASSES = 34
 
 
 def _forgery(label, whole_bundle=False):
@@ -685,6 +685,16 @@ def c2k(bundle):
         if isinstance(entry, dict) and isinstance(entry.get("watched_keys"), dict):
             for label in entry["watched_keys"]:
                 entry["watched_keys"][label] = 7
+
+
+@_forgery("C2l-create-mode-int-watched-keys-field", whole_bundle=True)
+def c2l(bundle):
+    # The watched_keys FIELD shape's feeder: an int field (not values)
+    # must redden with the field-named problem (round 20 parity: the
+    # arm was live but unfed — a revert shipped green).
+    for entry in bundle.create_mode.get("engines", []):
+        if isinstance(entry, dict):
+            entry["watched_keys"] = 7
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
