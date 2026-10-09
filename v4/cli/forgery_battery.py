@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 40
+EXPECTED_CLASSES = 41
 
 
 def _forgery(label, whole_bundle=False):
@@ -788,6 +788,18 @@ def c2r(bundle):
             delete=False, mode="w", encoding="utf-8") as stream:
         json.dump(document, stream, sort_keys=True, indent=1)
         bundle.manifest = stream.name
+
+
+@_forgery("C2s-throughput-bool-method-fields", whole_bundle=True)
+def c2s(bundle):
+    # The throughput method-agreement bool guards' feeder (portability
+    # r24 F1: the named-reason guards restored at b1f8bd0c shipped
+    # unpinned — a revert was rotation-silent). One detector: the
+    # bool shapes must redden with the named reasons.
+    document = bundle.throughput
+    if isinstance(document, dict) \
+            and isinstance(document.get("method"), dict):
+        document["method"]["rounds"] = True
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
