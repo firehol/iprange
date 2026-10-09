@@ -2705,7 +2705,14 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                 f"{entry.get('pass')!r} claims pass while recording "
                 f"non-0600 creates {bad_modes}; a purchased verdict "
                 "fails here")
-        watched = entry.get("watched") or {}
+        watched_value = entry.get("watched")
+        if not isinstance(watched_value, dict):
+            problems.append(
+                f"create-mode {path}: {entry.get('engine')} watched "
+                f"field {watched_value!r} is not an object")
+            watched = {}
+        else:
+            watched = watched_value
         if "switched" in str(entry.get("pass")) and sorted(watched) != [
                 "control", "main", "readers", "temp"]:
             problems.append(

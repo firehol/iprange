@@ -554,7 +554,6 @@ for line in open(log_path, encoding="utf-8", errors="replace"):
             # A verdict line is the battery's own self-certification
             # (GAP, HARNESS BROKEN): always this run's defect, never
             # a Windows-leg hold (round 17 parity finding 4).
-            local.append(stripped):
             local.append(stripped)
         break
 
@@ -1211,7 +1210,8 @@ record "[23e] fd_pressure report has no failing cell" $? zero
 
 
 track_kind_selftest() {
-# 133 controls, 4.3 s measured.  The self-test also asserts that the genuine
+# The control count is printed at runtime (the roster grows with the
+# forgery classes). The self-test also asserts that the genuine
 # committed reports pass, so it is judged with the same Windows-hold
 # attribution as the post-rotation pass: a complaint that belongs to the native
 # Windows leg is DEFERRED here, never mistaken for this battery's own defect.

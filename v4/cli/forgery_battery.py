@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 27
+EXPECTED_CLASSES = 30
 
 
 def _forgery(label, whole_bundle=False):
@@ -605,6 +605,43 @@ def c2e(bundle):
                 del entry["temp_creates"][keys[0]]
                 entry["temp_creates"]["/tmp/benign-dummy"] = modes
             break
+
+
+@_forgery("C2f-create-mode-table-deleted", whole_bundle=True)
+def c2f(bundle):
+    # The fail-closed check's feeder: delete the watched_keys table
+    # entirely (the round-16 shape that silently skipped the binding).
+    # One detector — the fail-closed check must redden.
+    for entry in bundle.create_mode.get("engines", []):
+        if isinstance(entry, dict):
+            entry.pop("watched_keys", None)
+
+
+@_forgery("C2g-create-mode-table-rewrite", whole_bundle=True)
+def c2g(bundle):
+    # The class-pattern authority's feeder: rewrite the table binding
+    # non-conforming attacker paths (names that don't shape like any
+    # class artifact). One detector — the pattern check must redden.
+    for entry in bundle.create_mode.get("engines", []):
+        if isinstance(entry, dict) and entry.get("temp_creates"):
+            keys = sorted(entry["temp_creates"])
+            entry["watched_keys"] = {
+                "main": ["/tmp/attacker-main"],
+                "readers": ["/tmp/attacker-readers"],
+                "control": ["/tmp/attacker-control"],
+                "temp": ["/tmp/attacker-temp"],
+            } if len(keys) == 4 else {"temp": ["/tmp/attacker-temp"]}
+
+
+@_forgery("C2h-create-mode-counts-zeroed", whole_bundle=True)
+def c2h(bundle):
+    # The zeroed-counts check's feeder: set every watched count to 0
+    # (the round-16 shape the count pin provably missed). One
+    # detector — the zeroed check must redden.
+    for entry in bundle.create_mode.get("engines", []):
+        if isinstance(entry, dict) and isinstance(entry.get("watched"), dict):
+            for label in entry["watched"]:
+                entry["watched"][label] = 0
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
