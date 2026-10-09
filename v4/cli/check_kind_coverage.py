@@ -2712,52 +2712,78 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                 f"create-mode {path}: {entry.get('engine')} switched "
                 f"watched classes {sorted(watched)}; want all four of "
                 "control/main/readers/temp")
-        # The key-set pin (round 14): a switched entry's temp_creates
-        # must carry exactly as many entries as the watched field
-        # reports classes, and the watched field must report all four.
-        # The temp_creates keys are file paths (not class names), so
-        # the pin cross-references the counts — a deleted key drops
-        # the count and the class hides behind a healthy report.
-        if "switched" in str(entry.get("pass")):
-            expected_classes = {"control", "main", "readers", "temp"}
-            watched_classes = set(watched)
-            creates_count = len(entry.get("temp_creates") or {})
-            if watched_classes != expected_classes:
+        # The key-set pin (rounds 14-16): an entry's temp_creates must
+        # carry exactly the keys the watcher observed — the count must
+        # match the watched classes, every watched count must be
+        # non-zero, and the watched_keys table (recorded with the FULL
+        # observed paths) must bind key identity absolutely. The pin
+        # covers BOTH pass flavors: a default entry binds its temp
+        # key; a switched entry binds all four. A missing/incomplete
+        # table reddens (fail closed); a same-basename dummy in
+        # another directory fails the exact match.
+        pin_classes = ({"temp"}
+                       if "switched" not in str(entry.get("pass"))
+                       else {"control", "main", "readers", "temp"})
+        watched_classes = set(watched)
+        creates_keys = set(entry.get("temp_creates") or {})
+        zeroed = sorted(label for label, count in watched.items()
+                        if not isinstance(count, int) or count < 1)
+        if zeroed:
+            problems.append(
+                f"create-mode {path}: {entry.get('engine')} "
+                f"watched counts zeroed for {zeroed}; every watched "
+                f"class must report at least one create")
+        if watched_classes != pin_classes:
+            problems.append(
+                f"create-mode {path}: {entry.get('engine')} "
+                f"watched {sorted(watched_classes)}; "
+                f"want exactly {sorted(pin_classes)}")
+        else:
+            watched_keys = entry.get("watched_keys")
+            if (not isinstance(watched_keys, dict)
+                    or set(watched_keys) != pin_classes):
                 problems.append(
                     f"create-mode {path}: {entry.get('engine')} "
-                    f"switched watched {sorted(watched_classes)}; "
-                    f"want exactly {sorted(expected_classes)}")
-            elif creates_count != len(expected_classes):
-                problems.append(
-                    f"create-mode {path}: {entry.get('engine')} "
-                    f"switched temp_creates has {creates_count} "
-                    f"entries; want exactly {len(expected_classes)} "
-                    f"(one per watched class — a deleted key hides a "
-                    f"regression)")
+                    f"watched_keys table {watched_keys!r} missing or "
+                    f"incomplete; the identity binding requires it "
+                    f"(a forged report deletes the table to hide a "
+                    f"substitution)")
             else:
-                # Key-identity binding (round 15): the watcher's
-                # class-to-key table is the authority; a count-preserving
-                # substitution (delete one key, add a dummy) must fail.
-                watched_keys = entry.get("watched_keys") or {}
-                if isinstance(watched_keys, dict) and watched_keys:
-                    # The watcher records basenames; temp_creates keys
-                    # are absolute paths. Compare on the basename so
-                    # the genuine report binds and a substituted key
-                    # (different basename) fails.
-                    import os as _os
-                    creates = entry.get("temp_creates") or {}
-                    create_names = {_os.path.basename(k)
-                                    for k in creates}
-                    for label in sorted(expected_classes):
-                        bound = watched_keys.get(label) or []
-                        if not any(str(k) in create_names
-                                   for k in bound):
-                            problems.append(
-                                f"create-mode {path}: "
-                                f"{entry.get('engine')} switched "
-                                f"{label} key {bound} absent from "
-                                f"temp_creates; a count-preserving "
-                                f"substitution hides a regression")
+                # The class-pattern authority (round 16): the bound
+                # basenames must match the committed class patterns —
+                # knowledge OUTSIDE the report, so a rewritten
+                # watched_keys table binding an attacker-chosen path
+                # fails here even when internally consistent.
+                class_patterns = {
+                    "temp": (r"\.export\.tmp$",),
+                    "readers": (r"\.readers$",),
+                    "control": (r"\.iprange-v4-worker-[0-9a-f]+\.ctl$",),
+                    # The harness's own source-file naming: the main
+                    # create is always a source-*.v4 fixture.
+                    "main": (r"^source-.*\.v4$",),
+                }
+                for label in sorted(pin_classes):
+                    bound = set(watched_keys.get(label) or [])
+                    present = creates_keys & bound
+                    if len(present) != len(bound) or not bound:
+                        problems.append(
+                            f"create-mode {path}: "
+                            f"{entry.get('engine')} {label} keys "
+                            f"{sorted(bound)} not all present in "
+                            f"temp_creates; a substitution (count-"
+                            f"preserving or same-basename) hides a "
+                            f"regression")
+                    pattern = class_patterns.get(label)
+                    if pattern is not None:
+                        for key in bound:
+                            if not any(re.search(p, os.path.basename(key))
+                                       for p in pattern):
+                                problems.append(
+                                    f"create-mode {path}: "
+                                    f"{entry.get('engine')} {label} "
+                                    f"key {key} fails its class "
+                                    f"pattern {pattern}; the table "
+                                    f"binds an attacker-chosen path")
 
 
 def fifo_surface_evidence(path, report, implementation_of, ledger, problems,
@@ -6446,17 +6472,35 @@ def _self_test():
                            if subject.startswith("switched")
                            else {"temp": 1})
                 # The switched entry's temp_creates keys are file
-                # paths; the key-set pin cross-references counts and
-                # the watched_keys identity table.
+                # paths whose basenames match the class patterns; the
+                # watched_keys table binds key identity absolutely.
                 if subject.startswith("switched"):
-                    creates = {f"/tmp/watched-{name}": ["0o600"]
-                               for name in watched}
+                    creates = {
+                        "/tmp/source-fixture-switched.v4": ["0o600"],
+                        "/tmp/source-fixture-switched.v4.readers":
+                            ["0o600"],
+                        "/tmp/.iprange-v4-worker-"
+                        "0123456789abcdef.ctl": ["0o600"],
+                        "/tmp/.fixture.export.tmp": ["0o600"],
+                    }
+                    keys_table = {
+                        "main": ["/tmp/source-fixture-switched.v4"],
+                        "readers": [
+                            "/tmp/source-fixture-switched.v4.readers"],
+                        "control": [
+                            "/tmp/.iprange-v4-worker-"
+                            "0123456789abcdef.ctl"],
+                        "temp": ["/tmp/.fixture.export.tmp"],
+                    }
                 else:
-                    creates = {"/tmp/watched-temp": ["0o600"]}
+                    creates = {"/tmp/.fixture.export.tmp": ["0o600"]}
+                    keys_table = {
+                        "temp": ["/tmp/.fixture.export.tmp"]}
                 entries.append({
                     "engine": engine, "pass": subject, "verdict": "pass",
                     "temp_creates": creates,
                     "watched": watched,
+                    "watched_keys": keys_table,
                 })
         return {"schema": "iprange-cli-create-mode-report-v1",
                 "git_head": revision,

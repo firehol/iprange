@@ -592,3 +592,30 @@ func TestPublicLiveReaderEnrichmentCursorPinsReader(t *testing.T) {
 		t.Fatalf("close after cursor = %+v err=%v, want closed", result, err)
 	}
 }
+
+// TestPublicLiveReaderPinRefusedAfterClose pins the deterministic
+// arbitration outcome the removed race test used to cover at its tail:
+// once Close completes, Pin reports WrongState (never touches the
+// closed reader).
+func TestPublicLiveReaderPinRefusedAfterClose(t *testing.T) {
+	requireLiveCreation(t)
+	main, _ := createLivePublicPair(t, 2)
+	w, err := OpenLiveWriter(main, DefaultBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	r, err := OpenLiveReader(main, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := r.Close(); err != nil ||
+		(result.Outcome != CloseOutcomeClosed &&
+			result.Outcome != CloseOutcomeCloseIncomplete) {
+		t.Fatalf("close = %+v err=%v, want closed or incomplete",
+			result, err)
+	}
+	if _, err := r.Pin(); lifecycleCode(err) != ErrorWrongState {
+		t.Fatalf("Pin after close = %v, want WrongState", err)
+	}
+}

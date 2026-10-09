@@ -567,11 +567,13 @@ try:
                     _WORKER_DIGESTS["go_worker_sha"] = _parts[0]
 except OSError:
     pass
-if not _WORKER_DIGESTS:
-    # No staged ledger: the foreign-digest arm cannot run.
+if set(_WORKER_DIGESTS) != {"rust_worker_sha", "go_worker_sha"}:
+    # A missing or one-sided ledger silently defangs one engine's
+    # foreign-digest arm — a harness defect, not a vacuous pass.
     raise RuntimeError(
-        "C2 worker-digest loader found no staged ledger at %r; the "
-        "foreign-digest forgery arm cannot run" % _LEDGER)
+        "C2 worker-digest loader found an incomplete ledger at %r "
+        "(loaded %s); both engine worker digests are required" %
+        (_LEDGER, sorted(_WORKER_DIGESTS)))
 
 
 @_forgery("C2d-create-mode-non0600-value", whole_bundle=True)
