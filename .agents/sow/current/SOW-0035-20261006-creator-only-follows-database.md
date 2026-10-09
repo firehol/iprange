@@ -361,8 +361,10 @@ the pre-close search):
   inventory: ~16.5k tracked-tree links across five sandboxes, all
   dormant since Oct 02) and the stale /tmp/pauli-base-11003d8
   worktree (another session's — 11 flags).
-- pending — the tree strays (v4/go/iprange, l, .pi/) — named-path
-  removal at close.
+- pending — the tree strays (v4/go/iprange, l, .pi/, the seven
+  archive-* dirs at ~189 MB, the glm-cwd-* dirs, the empty
+  MARKER-MISMATCH/sub — the 2026-10-09 fit-for-purpose inventory) —
+  named-path removal at close.
 - pending — assess_with_surfaces stages a create-mode copy the gate
   never consumes (one-line cleanup).
 - pending — the crash-self-test docstring's stale "sidecar creating
