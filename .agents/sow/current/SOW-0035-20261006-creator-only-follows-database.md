@@ -295,6 +295,12 @@ Open decisions:
   - C2 extended with the vacuous-pass shape (`[]` modes with pass verdict) and the single-class-drop shape.
   - Gate-23 recorded; signal-death claim scoped; C2's wording corrected.
 
+- Round 14 (all seven roles at `abeeb9b2`): performance PASS (twelfth consecutive); six FAIL — convergent on the C2 standing net's absence (the bundled shape's three arms masked each other's reverts; the drop landed on an already-covered entry; the real hiding shape — one of four switched keys deleted — was accepted by the gate) and the manifest tokenization hole (G3's own-reason credit was porous). The round-14 fix batch (c1f929f2 + ddec32d8 + 52361191):
+  - C2 split into three one-detector classes: C2 (worker digests only — the provenance anchor's revert redds only this), C2b (empty [] modes — the `not modes` guard's revert redds only this), C2c (one of four switched keys deleted — the new key-set pin's revert redds only this). 25 classes.
+  - The key-set pin in create_mode_evidence: a switched entry's watched field must have all four classes AND its temp_creates count must match — a deleted key drops the count and the class can't hide a regression. The pin cross-references counts (the keys are file paths, not class names).
+  - The rebuilt manifest's path tokenized in _run_gate: G3's own-reason attribution can now distinguish a class's manifest complaint from the baseline's; a gate-invisible mutation no longer scores CAUGHT.
+  - The self-test fixture's switched temp_creates keys are path-shaped (matching the genuine report format).
+- Gate history (records completion): gate-24 (green, the signal-arm qualification with C2 catching on identity), gate-25 (4 mismatches — the key-set pin's first iteration checked key names instead of counts), gate-26 (running at 52361191).
 ## Validation
 
 - Review round 1 (all seven roles, kit head 54a3761a): 7× FAIL, every confirmed finding fixed in 2c789615 (see Execution Log for the finding→fix map). Full Rust workspace 64 suites green, Go tree rc=0, x86_64-pc-windows-gnu cross-check clean for both crates, schema oracle verified.
