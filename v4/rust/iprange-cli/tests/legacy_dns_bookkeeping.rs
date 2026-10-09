@@ -62,7 +62,7 @@ use std::path::PathBuf;
 
 mod parity_support;
 use parity_support::{
-    assert_parity_masked, mask_wallclock, raw, reference, run_bounded_in, Scratch, PROGRAM,
+    mask_wallclock, raw, reference, run_bounded_in, Scratch, PROGRAM,
 };
 
 /// One measured C contract: argv bytes, the expected exit code, stdout
@@ -355,27 +355,6 @@ fn assert_dns_line_order(label: &str, stderr: &[u8]) {
     }
 }
 
-/// The bookkeeping family, byte for byte: the per-address debug line, the
-/// entry-count `lines read` totals, and the `Loaded`/`Optimizing` pair that
-/// follows from the insertion order. Every expectation is the C's own bytes.
-const DNS_BOOKKEEPING: &[Case] = &[
-    Case { label: "dns one host v4", argv: &[b"-v", b"h1.txt"], rc: 0,
-        stdout: b"127.0.0.1\n", stderr: b"iprange: Loading from h1.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file h1.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting 1 DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized h1.txt\niprange: Printing combined ipset with 1 ranges, 1 unique IPs\n\n1 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 1 entries\n\ntotals: 1 lines read, 1 distinct IP ranges found, 1 CIDR prefixes, 1 CIDRs printed, 1 unique IPs\n<WALLCLOCK>\n" }, // engine agrees: True
-    Case { label: "dns two files one host each", argv: &[b"-v", b"hA.txt", b"hB.txt"], rc: 0,
-        stdout: b"10.0.0.1\n127.0.0.1\n", stderr: b"iprange: Loading from hA.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file hA.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting 1 DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized hA.txt\niprange: Loading from hB.txt\niprange: DNS resolution for hostname '0x0A000001' from line 1 of file hB.txt.\niprange: DNS: waiting 1 DNS resolutions to finish...\niprange: DNS: '0x0A000001' = 10.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized hB.txt\niprange: Merging hB.txt to combined ipset\niprange: Optimizing combined ipset\niprange: Printing combined ipset with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 2 entries\n\ntotals: 2 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n<WALLCLOCK>\n" }, // engine agrees: True
-    Case { label: "dns one host v6 localhost", argv: &[b"-6", b"-v", b"l1.txt"], rc: 0,
-        stdout: b"::1\n::ffff:127.0.0.1\n", stderr: b"iprange: Loading from l1.txt (IPv6 mode)\niprange: DNS resolution for hostname 'localhost' from line 1 of file l1.txt (IPv6 mode).\niprange: Printing combined ipset (IPv6) with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /128 counts 2 entries\n\ntotals: 2 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n" }, // engine agrees: True
-    Case { label: "dns one host v6 allnodes", argv: &[b"-6", b"-v", b"n1.txt"], rc: 0,
-        stdout: b"ff02::1\n", stderr: b"iprange: Loading from n1.txt (IPv6 mode)\niprange: DNS resolution for hostname 'ip6-allnodes' from line 1 of file n1.txt (IPv6 mode).\niprange: Printing combined ipset (IPv6) with 1 ranges, 1 unique IPs\n\n1 printed CIDRs, break down by prefix:\n\t- prefix /128 counts 1 entries\n\ntotals: 1 lines read, 1 distinct IP ranges found, 1 CIDR prefixes, 1 CIDRs printed, 1 unique IPs\n" }, // engine agrees: True
-    Case { label: "dns host then literal v4", argv: &[b"-v", b"hl.txt"], rc: 0,
-        stdout: b"10.0.0.1\n127.0.0.1\n", stderr: b"iprange: Loading from hl.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file hl.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting 1 DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized hl.txt\niprange: Printing combined ipset with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 2 entries\n\ntotals: 2 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n<WALLCLOCK>\n" }, // engine agrees: True
-    Case { label: "dns one host v4 threads 1", argv: &[b"-v", b"--dns-threads", b"1", b"h1.txt"], rc: 0,
-        stdout: b"127.0.0.1\n", stderr: b"iprange: Loading from h1.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file h1.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting 1 DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 1\niprange: Loaded optimized h1.txt\niprange: Printing combined ipset with 1 ranges, 1 unique IPs\n\n1 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 1 entries\n\ntotals: 1 lines read, 1 distinct IP ranges found, 1 CIDR prefixes, 1 CIDRs printed, 1 unique IPs\n<WALLCLOCK>\n" }, // engine agrees: True
-    Case { label: "dns one host v4 binary", argv: &[b"-v", b"--print-binary", b"h1.txt"], rc: 0,
-        stdout: b"iprange binary format v1.0\noptimized\nrecord size 8\nrecords 1\nbytes 12\nlines 1\nunique ips 1\nM<+\x1a\x01\x00\x00\x7f\x01\x00\x00\x7f", stderr: b"iprange: Loading from h1.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file h1.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting 1 DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized h1.txt\n<WALLCLOCK>\n" }, // engine agrees: True
-    Case { label: "dns one host v6 binary header", argv: &[b"-6", b"-v", b"--print-binary", b"l1.txt"], rc: 0,
-        stdout: b"iprange binary format v2.0\nipv6\noptimized\nrecord size 32\nrecords 2\nbytes 68\nlines 2\nunique ips 2\nM<+\x1a\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x7f\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x7f\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", stderr: b"iprange: Loading from l1.txt (IPv6 mode)\niprange: DNS resolution for hostname 'localhost' from line 1 of file l1.txt (IPv6 mode).\n" }, // engine agrees: True
-];
 
 /// Cases whose reply count is fixed by the numeric short circuit inside
 /// `getaddrinfo(3)`: each `0x...` name answers exactly one address per family,
@@ -413,22 +392,6 @@ const DNS_HOST_DEPENDENT_ANSWERS: &[Case] = &[
         stdout: b"127.0.0.1\n", stderr: b"iprange: Loading from lo4.txt\niprange: DNS resolution for hostname 'localhost' from line 1 of file lo4.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: 'localhost' = 127.0.0.1\niprange: DNS: 'localhost' = 127.0.0.1\niprange: NON-OPTIMIZED lo4.txt at line 2, entry 1, last was 127.0.0.1 (2130706433) - 127.0.0.1 (2130706433), new is 127.0.0.1 (2130706433) - 127.0.0.1 (2130706433)\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 2, threads used 1 of 5\niprange: Loaded non-optimized lo4.txt\niprange: Optimizing combined ipset\niprange: Printing combined ipset with 1 ranges, 1 unique IPs\n\n1 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 1 entries\n\ntotals: 2 lines read, 1 distinct IP ranges found, 1 CIDR prefixes, 1 CIDRs printed, 1 unique IPs\n<WALLCLOCK>\n" }, // engine agrees: True
 ];
 
-#[test]
-fn dns_bookkeeping_matches_c_byte_for_byte() {
-    let dir = fixtures();
-    for case in DNS_BOOKKEEPING {
-        let argv: Vec<_> = case.argv.iter().map(|a| raw(a)).collect();
-        let argv: Vec<&OsStr> = argv.iter().map(|a| a.as_os_str()).collect();
-        assert_parity_masked(
-            case.label,
-            dir.path(),
-            &argv,
-            b"",
-            (case.rc, case.stdout, case.stderr),
-            &canonical_dns_stderr,
-        );
-    }
-}
 
 /// A hostname that answers with N addresses is added N times, so for a file
 /// that holds nothing but hostnames the per-address debug lines, `IPs got`

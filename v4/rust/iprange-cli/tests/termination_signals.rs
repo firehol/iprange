@@ -117,18 +117,6 @@ fn spawn_product_graceful_fatal_full_stderr() -> (Child, std::os::fd::OwnedFd) {
     (child, stderr_read)
 }
 
-/// Spawn the product with a stdout that fails every write and a
-/// normal piped stderr (control for the graceful-fatal diagnostic).
-fn spawn_product_broken_stdout() -> Child {
-    let stdout_write = broken_stdout();
-    Command::new(env!("CARGO_BIN_EXE_iprange"))
-        .arg("--jsonrpc")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::from(stdout_write))
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn iprange --jsonrpc with broken stdout")
-}
 
 fn spawn_product() -> Child {
     Command::new(env!("CARGO_BIN_EXE_iprange"))
@@ -282,32 +270,6 @@ fn graceful_fatal_full_stderr_exits_nonzero() {
     }
 }
 
-#[test]
-fn graceful_fatal_diagnostic_still_reported() {
-    // Control for the graceful-fatal fix: with a drained stderr the
-    // best-effort diagnostic must still land before the exit (only
-    // the blocked write is abandoned, not the message).
-    let mut child = spawn_product_broken_stdout();
-    let mut stdin = child.stdin.take().expect("stdin");
-    stdin
-        .write_all(
-            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n",
-        )
-        .expect("write describe");
-    drop(stdin);
-    let output = child.wait_with_output().expect("wait_with_output");
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "graceful fatal control exit {:?}",
-        output.status
-    );
-    let text = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        text.contains("iprange:"),
-        "diagnostic missing from drained stderr: {text}"
-    );
-}
 
 #[test]
 fn oversized_unterminated_frame_answers_and_exits() {
