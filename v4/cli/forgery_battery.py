@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 38
+EXPECTED_CLASSES = 39
 
 
 def _forgery(label, whole_bundle=False):
@@ -735,6 +735,16 @@ def c2p(bundle):
             break
 
 
+@_forgery("C2q-manifest-int-reports", whole_bundle=True)
+def c2q(bundle):
+    # The manifest container guard's feeder: a non-list reports field
+    # must redden with the container-named problem before any consumer
+    # (round 23 security finding 2 — the three manifest arms shipped
+    # unfed at a6d4451a).
+    if isinstance(bundle.manifest, dict):
+        bundle.manifest["reports"] = 5
+
+
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
 def c1(bundle):
     # The round-8 identity layer enforces the exact (engine, pass) set;
@@ -1187,10 +1197,14 @@ def _self_test():
     # qualification, or only the manifest it points at, must be visible here.
     bundle = _load_bundle()
     reference = copy.deepcopy(bundle.state())
-    assert bundle.state() == reference, (
+    # JSON-textual, matching the live G2 comparison (fc762aa4): object
+    # equality aliases True/1 and 1/1.0 where the gate's serialized
+    # forms differ.
+    _json_state = lambda b: json.dumps(b.state(), sort_keys=True)
+    assert _json_state(bundle) == json.dumps(reference, sort_keys=True), (
         "the G2 comparison is inverted: a fresh copy already differs")
     bundle.matrices[0]["cases"][0]["status"] = "FORGED-BY-SELF-TEST"
-    assert bundle.state() != reference, (
+    assert _json_state(bundle) != json.dumps(reference, sort_keys=True), (
         "the G2 comparison never fires, so a no-op mutator would pass "
         "unnoticed")
     untouched = _load_bundle()

@@ -5133,9 +5133,11 @@ def battery_manifest_evidence(path, manifest, consumed_by_role, problems,
             continue
         role = entry.get("role")
         digest = entry.get("content_sha256")
-        if not isinstance(role, str) or not isinstance(digest, str):
+        name = entry.get("name")
+        if not isinstance(role, str) or not isinstance(digest, str) \
+                or not isinstance(name, str):
             problems.append(f"{where}: manifest entry "
-                            f"{entry!r} needs str role and "
+                            f"{entry!r} needs str role, name, and "
                             "content_sha256")
             continue
         listed.setdefault(role, []).append(entry)
@@ -5355,6 +5357,11 @@ def _method_agreement_problems(where, method, record, problems):
     rounds = [entry for entry in (record.get("rounds") or [])
               if isinstance(entry, dict)]
     declared_rounds = method.get("rounds")
+    if isinstance(declared_rounds, bool):
+        problems.append(f"{where}: the method declares "
+                        f"{declared_rounds!r} rounds; a bool is not a "
+                        f"round plan")
+        return
     if _is_count(declared_rounds) and declared_rounds > 0 \
             and len(rounds) != declared_rounds:
         problems.append(f"{where}: the method declares {declared_rounds} "
@@ -5363,7 +5370,11 @@ def _method_agreement_problems(where, method, record, problems):
                         f"was planned")
         return
     per_round = method.get("requests_per_round")
-    if isinstance(per_round, int) and per_round > 0:
+    if isinstance(per_round, bool):
+        problems.append(f"{where}: requests_per_round is {per_round!r}; "
+                        "a bool is not a request plan")
+        return
+    if _is_count(per_round) and per_round > 0:
         for entry in rounds:
             if entry.get("requests") != per_round:
                 problems.append(
@@ -5372,7 +5383,11 @@ def _method_agreement_problems(where, method, record, problems):
                     f"declares {per_round} per round; a rate over a shorter "
                     f"round is not the same measurement")
         burst = method.get("burst_frames")
-        if isinstance(burst, int) and burst > per_round:
+        if not _is_count(burst):
+            if burst is not None:
+                problems.append(f"{where}: burst_frames is {burst!r}; "
+                                "a bool is not a frame count")
+        elif burst > per_round:
             problems.append(
                 f"{where}: method burst_frames {burst} exceeds the "
                 f"{per_round} requests of one round, so the rounds and the "
