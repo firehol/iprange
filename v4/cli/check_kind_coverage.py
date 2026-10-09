@@ -2742,7 +2742,7 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                 if isinstance(watched_keys, dict) and watched_keys:
                     for label in sorted(expected_classes):
                         bound = watched_keys.get(label) or []
-                        if not any(k in creates for k in bound):
+                        if not any(k in (entry.get('temp_creates') or {}) for k in bound):
                             problems.append(
                                 f"create-mode {path}: "
                                 f"{entry.get('engine')} switched "
