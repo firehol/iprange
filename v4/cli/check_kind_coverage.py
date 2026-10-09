@@ -2701,7 +2701,9 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                         "below 0600 is a product defect")
         return
     binaries = report.get("binaries") or {}
-    if not isinstance(binaries, dict) or sorted(binaries) != ["go", "rust"]:
+    if not isinstance(binaries, dict) \
+            or any(not isinstance(k, str) for k in binaries) \
+            or sorted(binaries) != ["go", "rust"]:
         problems.append(f"create-mode {path}: no binaries table binding "
                         "the report to the digests that produced it")
         return
@@ -2716,8 +2718,25 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
         _surface_binary_identity(
             path, "create-mode", engine, record, implementation_of,
             ledger, problems, on_disk, require_provenance=True)
-    engines = {entry.get("engine") for entry in report.get("engines", [])
-               if isinstance(entry, dict)}
+    # The type pre-pass (round 21): every entry's fields are validated
+    # BEFORE any structural consumer — the engines set-build and the
+    # (engine, pass) set comparison below cannot crash on a type-hostile
+    # entry because hostile entries never reach them.
+    engines_raw = report.get("engines")
+    if not isinstance(engines_raw, list):
+        problems.append(f"create-mode {path}: engines field is "
+                        f"{type(engines_raw).__name__}; want a list")
+        return
+    entries = []
+    for entry in engines_raw:
+        type_errors = _create_mode_entry_type_problems(path, entry)
+        if type_errors:
+            problems.extend(type_errors)
+        else:
+            entries.append(entry)
+    if not entries:
+        return
+    engines = {entry.get("engine") for entry in entries}
     if engines != {"rust", "go"}:
         problems.append(f"create-mode {path}: engines {sorted(engines)}; "
                         "both engines must be attested")
@@ -2725,12 +2744,9 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
     # The (engine, pass) set is exact: the switched pass is the round-7
     # security surface, and a default-only report must not consume
     # cleanly (round-8 forges accepted exactly that shape).
-    entries = [entry for entry in report.get("engines", [])
-               if isinstance(entry, dict)]
-    if len(entries) != len(report.get("engines", [])):
-        problems.append(f"create-mode {path}: engines holds a non-object "
-                        "entry; a report is evidence, not a crash")
-        return
+    # `entries` comes from the type pre-pass: every element is a dict
+    # with str engine/pass (non-dict entries already reddened there),
+    # so the set build below cannot crash on hostile shapes.
     seen = {(entry.get("engine"), entry.get("pass"))
             for entry in entries}
     want = {(engine, subject)
@@ -2744,16 +2760,7 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                         f"{sorted(map(str, want))}")
         return
     for entry in entries:
-        # Structural type validation (round 20): one pass over the
-        # entry's shape closes the whole type-hostile family — every
-        # field must be its declared type before ANY consumer reads
-        # it. A violation reddens with the field named and skips the
-        # entry; no downstream shape can crash the gate. Fed by
-        # C2i/C2j/C2k (each trips the validation on its field).
-        type_errors = _create_mode_entry_type_problems(path, entry)
-        if type_errors:
-            problems.extend(type_errors)
-            continue
+        # Every entry in this list passed the type pre-pass above.
         if entry.get("verdict") != "pass" or not entry.get("temp_creates"):
             problems.append(
                 f"create-mode {path}: {entry.get('engine')} pass "
