@@ -2749,41 +2749,58 @@ def create_mode_evidence(path, report, problems, implementation_of=None,
                     f"(a forged report deletes the table to hide a "
                     f"substitution)")
             else:
-                # The class-pattern authority (round 16): the bound
-                # basenames must match the committed class patterns —
-                # knowledge OUTSIDE the report, so a rewritten
-                # watched_keys table binding an attacker-chosen path
-                # fails here even when internally consistent.
-                class_patterns = {
-                    "temp": (r"\.export\.tmp$",),
-                    "readers": (r"\.readers$",),
-                    "control": (r"\.iprange-v4-worker-[0-9a-f]+\.ctl$",),
-                    # The harness's own source-file naming: the main
-                    # create is always a source-*.v4 fixture.
-                    "main": (r"^source-.*\.v4$",),
-                }
-                for label in sorted(pin_classes):
-                    bound = set(watched_keys.get(label) or [])
-                    present = creates_keys & bound
-                    if len(present) != len(bound) or not bound:
-                        problems.append(
-                            f"create-mode {path}: "
-                            f"{entry.get('engine')} {label} keys "
-                            f"{sorted(bound)} not all present in "
-                            f"temp_creates; a substitution (count-"
-                            f"preserving or same-basename) hides a "
-                            f"regression")
-                    pattern = class_patterns.get(label)
-                    if pattern is not None:
-                        for key in bound:
-                            if not any(re.search(p, os.path.basename(key))
-                                       for p in pattern):
-                                problems.append(
-                                    f"create-mode {path}: "
-                                    f"{entry.get('engine')} {label} "
-                                    f"key {key} fails its class "
-                                    f"pattern {pattern}; the table "
-                                    f"binds an attacker-chosen path")
+                # The count check (its own problem so a pure deletion
+                # catches on the count reason while a count-preserving
+                # substitution falls through to the identity binding —
+                # distinct detectors, distinct reasons).
+                expected_count = sum(
+                    len(v) for v in watched_keys.values())
+                if len(creates_keys) != expected_count:
+                    problems.append(
+                        f"create-mode {path}: {entry.get('engine')} "
+                        f"temp_creates has {len(creates_keys)} "
+                        f"entries; want exactly {expected_count} "
+                        f"(one per bound key — a deleted key hides a "
+                        f"regression)")
+                else:
+                    # The class-pattern authority (round 16): the bound
+                    # basenames must match the committed class patterns —
+                    # knowledge OUTSIDE the report, so a rewritten
+                    # watched_keys table binding an attacker-chosen path
+                    # fails here even when internally consistent.
+                    class_patterns = {
+                        "temp": (r"\.export\.tmp$",),
+                        "readers": (r"\.readers$",),
+                        "control":
+                            (r"\.iprange-v4-worker-[0-9a-f]+\.ctl$",),
+                        # The harness's own source-file naming: the
+                        # main create is always a source-*.v4 fixture.
+                        "main": (r"^source-.*\.v4$",),
+                    }
+                    for label in sorted(pin_classes):
+                        bound = set(watched_keys.get(label) or [])
+                        present = creates_keys & bound
+                        if len(present) != len(bound) or not bound:
+                            problems.append(
+                                f"create-mode {path}: "
+                                f"{entry.get('engine')} {label} keys "
+                                f"{sorted(bound)} not all present in "
+                                f"temp_creates; a substitution (count-"
+                                f"preserving or same-basename) hides a "
+                                f"regression")
+                            continue
+                        pattern = class_patterns.get(label)
+                        if pattern is not None:
+                            for key in bound:
+                                if not any(re.search(
+                                        p, os.path.basename(key))
+                                        for p in pattern):
+                                    problems.append(
+                                        f"create-mode {path}: "
+                                        f"{entry.get('engine')} {label} "
+                                        f"key {key} fails its class "
+                                        f"pattern {pattern}; the table "
+                                        f"binds an attacker-chosen path")
 
 
 def fifo_surface_evidence(path, report, implementation_of, ledger, problems,
