@@ -453,10 +453,10 @@ Pending.
 - Performance carried P3-1 (per-test timing attestation) and P3-2 (two
   legacy tests.d cases over the 15 s policy): tracked for the legacy
   test-suite owner, outside this SOW's scope (disclosed each round).
-- SOW-0017 (authenticated public snapshots, Phase 2): referenced by the
-  design spec as pending; the file does not exist in pending/ — to be
-  created when Phase 2 is scheduled (spec reference to be corrected at
-  that time or the SOW created then).
+- SOW-0017 (authenticated public snapshots, Phase 2): the SOW EXISTS —
+  current/SOW-0017-20260717-v4-snapshot-signing-phase2.md, paused; it
+  resumes (not re-creates) when Phase 2 is scheduled. The earlier
+  "does not exist" note was stale (sol r2/r3).
 - Orphaned descendants after a pool kill (ffp round 7/8): a wedged task
   is killed by the per-task bound, but its already-spawned grandchildren
   are not signaled. Rejected as a tracked SOW: the battery's own

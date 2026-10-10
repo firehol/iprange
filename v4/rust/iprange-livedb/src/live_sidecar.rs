@@ -89,28 +89,18 @@ pub fn transition_creator_only(main: &Path) -> bool {
 /// zero-security commitment the security module records (a main the
 /// creator-only path secured carries it; any other main does not).
 fn main_satisfies_protected_contract(main: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        match std::fs::metadata(main) {
-            Ok(metadata) => {
-                metadata.is_file()
-                    && metadata.nlink() == 1
-                    && metadata.mode() & 0o7777
-                        == crate::publication::security::CREATOR_MODE
-            }
-            Err(_) => false,
+    // The COMPLETE authoritative proof on the retained main descriptor
+    // (the sol gate's round-3 P1): mode+nlink alone accepts a 0600
+    // file carrying an extended access ACL, which the proof every
+    // later open demands would reject — publishing Protected over it
+    // is the same lockout. The proof is the one the reader enforces:
+    // trivial ACL, regular, single link, mode exactly the creator
+    // mode including the special bits.
+    match std::fs::File::open(main) {
+        Ok(file) => {
+            crate::publication::security::creator_only_commitment(&file).is_ok()
         }
-    }
-    #[cfg(not(unix))]
-    {
-        match std::fs::File::open(main) {
-            Ok(file) => {
-                crate::publication::security::creator_only_commitment(&file)
-                    .is_ok()
-            }
-            Err(_) => false,
-        }
+        Err(_) => false,
     }
 }
 

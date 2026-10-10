@@ -51,9 +51,12 @@ Practical effect: to keep a shared database world-readable, do not
 create it in creator-only mode; to keep a private database private,
 create it in creator-only mode once — every later writer honors it.
 
-## What is never creator-only
+## No-source artifacts
 
-Recovery scratch a process creates for its own validation, and other
-no-source artifacts, always follow the process default; they have no
-recorded choice to follow. The creator-only policy applies to the
-database's own durable artifacts only.
+Some coordination artifacts have no recorded database choice to
+follow: recovery scratch a process creates for its own validation,
+and the worker control file. These follow the process switch directly
+— with `IPRANGE_CREATOR_ONLY=1` the worker control file is created
+secured (0600); without it, the process default applies. The
+"follows database" rule governs the database's durable artifacts;
+no-source artifacts are the switch's own surface.

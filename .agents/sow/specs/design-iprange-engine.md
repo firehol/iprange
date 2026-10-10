@@ -501,6 +501,30 @@ Adoption should proceed only from proven behavior. Existing text outputs and
 released operational workflows remain until the v4 path and later high-level
 operations prove semantic and performance parity.
 
+## Artifact modes and creator-only
+
+Every artifact the engines create carries the process default mode
+(`0666` before umask) unless creator-only is requested. Creator-only is
+an opt-in of the creating process (the `IPRANGE_CREATOR_ONLY=1`
+environment switch for the CLIs; the `creator_only:u8` argument on the
+C ABI's `create_live`): every artifact the engine creates keeps at
+least owner read and write — a `0600` floor under any umask.
+
+The switch is advisory for the database's durable artifacts. A
+database that recorded a creator-only choice at creation governs its
+own files: later processes preserve the recorded choice when writing,
+recovering, or republishing the same database, with or without the
+switch; the lifecycle transitions (initialize/reset) publish
+coordination matching the recorded choice, and when coordination is
+absent or unreadable they derive the compatible policy from the main
+file's own state (Protected only when the main already satisfies the
+complete protected proof — exact 0600 with a trivial ACL on POSIX, the
+protected descriptor on Windows). On POSIX, protected access is exact
+mode 0600 with no extended access ACL — not a floor. No-source
+artifacts (validation scratch, the worker control file) follow the
+process switch directly. Both engines implement the policy
+symmetrically; the exact ABI surface is specified in `c-abi-v4.md`.
+
 ## Compatibility boundaries
 
 - Readers and writers accept one exact current `v4` layout only. Until the first

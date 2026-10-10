@@ -4,27 +4,25 @@ package live
 
 import (
 	"os"
-	"syscall"
 
 	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
 // mainSatisfiesProtectedContract reports whether the main file's own
-// on-disk state already satisfies the protected contract: a regular
-// single-linked file whose permission bits are exactly the creator
-// mode (0600). Rust twin: live_sidecar's main_satisfies_protected_
-// contract (the sol gate's round-2 P1 fallback).
+// on-disk state already satisfies the protected contract, using the
+// COMPLETE authoritative proof on the retained descriptor (the sol
+// gate's round-3 P1): mode+nlink alone accepts a 0600 file carrying an
+// extended access ACL or special bits, which the proof every later
+// open demands would reject. The proof is the one the reader
+// enforces — trivial ACL, regular, single link, mode exactly the
+// creator mode including the special bits. Rust twin: live_sidecar's
+// main_satisfies_protected_contract.
 func mainSatisfiesProtectedContract(main string) bool {
-	info, err := os.Stat(main)
+	file, err := os.Open(main)
 	if err != nil {
 		return false
 	}
-	mode := info.Mode()
-	if !mode.IsRegular() || uint32(mode.Perm()) != security.CreatorMode {
-		return false
-	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		return stat.Nlink == 1
-	}
-	return false
+	defer file.Close()
+	_, err = security.CreatorOnlyCommitment(file)
+	return err == nil
 }

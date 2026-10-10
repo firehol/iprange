@@ -2,8 +2,10 @@ package recovery
 
 // Authorized recovery scratch owner (Rust recovery/scratch.rs): exact
 // ownership and bounded I/O for the lazily established scratch files
-// of one recovery operation. Each file is created creator-only inside
-// the retained scratch directory, carries the 128-byte ownership
+// of one recovery operation. Each file is created with the recovery
+// attempt's recorded creator-only choice (secured when creator-only,
+// the process default otherwise) inside the retained scratch
+// directory, carries the 128-byte ownership
 // header, and is accessed exclusively through read-write mapping
 // windows (8 MiB rounds) under the worker scratch probe. The resource
 // discipline mirrors the Rust owner exactly: retainedBytes accounts
@@ -187,8 +189,9 @@ func scratchStartFollowing(directoryPath string, source format.Meta, maxBytes ui
 }
 
 // create establishes one owned scratch file (Rust Scratch::create):
-// a free slot, the ordinal, the created creator-only artifact, the
-// worker checkpoint entry, and the initial mapped header.
+// a free slot, the ordinal, the created artifact (secured only when
+// the attempt is creator-only), the worker checkpoint entry, and the
+// initial mapped header.
 func (s *scratch) create() (scratchSlot, error) {
 	slot, err := s.freeSlot()
 	if err != nil {

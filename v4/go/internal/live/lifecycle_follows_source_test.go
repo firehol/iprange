@@ -141,3 +141,24 @@ func TestSwitchOnPreservesAnAlreadyProtectedMain(t *testing.T) {
 	}
 	openLiveReaderForFollows(t, main)
 }
+
+func TestSpecialBitsMainIsNotClassifiedProtected(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("mode shaping is POSIX")
+	}
+	// The sol gate's round-3 P1: mode 04600 (setuid) must classify
+	// Unprotected — Mode().Perm() drops the special bits, but the
+	// authoritative proof rejects them.
+	main := followsSourcePair(t, "special-bits")
+	createUnprotectedForTransition(t, main)
+	if err := os.Remove(main + ".readers"); err != nil {
+		t.Fatal("remove sidecar:", err)
+	}
+	if err := os.Chmod(main, 0o4600); err != nil {
+		t.Fatal("chmod:", err)
+	}
+	if _, err := InitializeLive(main, 3, neverCheck); err != nil {
+		t.Fatal("initialize:", err)
+	}
+	openLiveReaderForFollows(t, main)
+}

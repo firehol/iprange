@@ -225,3 +225,70 @@ fn switch_on_preserves_an_already_protected_main() {
     let mut writer = LiveWriter::open(&files.main, budget(), &active).unwrap();
     writer.close().unwrap();
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn acl_carrying_main_is_not_classified_protected() {
+    // The sol gate's round-3 P1: mode 0600 with an extended access
+    // ACL passes a mode+nlink classifier but fails the authoritative
+    // proof; the transition must classify it Unprotected.
+    let files = TestPair::new("acl-main");
+    create_unprotected(&files);
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new())
+        .unwrap();
+    writer.close().unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&files.main).unwrap().permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(&files.main, perms).unwrap();
+    }
+    // Grant an access ACL entry (the "other" user) via setfacl.
+    let status = std::process::Command::new("setfacl")
+        .args(["-m", "o:r", &files.main.to_string_lossy()])
+        .status()
+        .expect("setfacl runs");
+    if !status.success() {
+        eprintln!("setfacl unavailable; skipping");
+        return;
+    }
+    {
+        let mut name = files.main.file_name().unwrap().to_os_string();
+        name.push(".readers");
+        let _ = fs::remove_file(files.main.with_file_name(name));
+    }
+    std::env::remove_var("IPRANGE_CREATOR_ONLY");
+    let result = initialize_live(&files.main, 3, &CancellationToken::new()).unwrap();
+    assert_eq!(result.status, iprange_livedb::LiveTransitionStatus::Initialized);
+    let active = CancellationToken::new();
+    let mut reader = LiveReader::open(&files.main, &active).unwrap();
+    reader.close().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn special_bits_main_is_not_classified_protected() {
+    // Mode 04600 (setuid): Rust metadata.mode() & 0o7777 != 0o600
+    // must classify Unprotected — the proof would reject setuid.
+    let files = TestPair::new("special-bits");
+    create_unprotected(&files);
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new())
+        .unwrap();
+    writer.close().unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&files.main).unwrap().permissions();
+        perms.set_mode(0o4600);
+        fs::set_permissions(&files.main, perms).unwrap();
+    }
+    {
+        let mut name = files.main.file_name().unwrap().to_os_string();
+        name.push(".readers");
+        let _ = fs::remove_file(files.main.with_file_name(name));
+    }
+    let result = initialize_live(&files.main, 3, &CancellationToken::new()).unwrap();
+    assert_eq!(result.status, iprange_livedb::LiveTransitionStatus::Initialized);
+    let active = CancellationToken::new();
+    let mut reader = LiveReader::open(&files.main, &active).unwrap();
+    reader.close().unwrap();
+}

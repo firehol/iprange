@@ -3,12 +3,12 @@
 /* The creator-only opt-out contract (the ABI spec: zero is
    unprotected, any other value requests the proof). Two creates of
    the same direct live database -- creator_only 0 and 2 -- both must
-   succeed and report a live open mode; the artifact modes are
-   asserted by the Rust wrapper that runs this fixture. This is the
+   succeed; the artifact modes are asserted by the Rust wrapper that
+   runs this fixture (0666&~umask vs the 0600 floor). This is the
    only C-boundary detector for the opt-out: a regression replacing
-   `creator_only != 0` with `creator_only == 1` keeps every other
-   committed invocation (all passing 1) identical while flipping the
-   zero case to protected. */
+   `creator_only != 0` with `creator_only == 1` keeps zero
+   unprotected either way but flips the value-2 case to unprotected —
+   the mode assertion on this fixture's second artifact catches it. */
 
 static int create_with(const char *path, uint8_t creator_only,
                        iprange_v4_abi1_report **created)
