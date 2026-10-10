@@ -757,7 +757,7 @@ def c2q(bundle):
     document["revisions"] = [single]
     document["reports"] = 5
     with tempfile.NamedTemporaryFile(
-            dir=owned_temp_root(), suffix=".json",
+            dir=owned_temp_root(), prefix="fmani-", suffix=".json",
             delete=False, mode="w", encoding="utf-8") as stream:
         json.dump(document, stream, sort_keys=True, indent=1)
         bundle.manifest = stream.name
@@ -789,7 +789,7 @@ def c2r(bundle):
         first["name"] = 7
         document["reports"] = [first] + list(reports[1:])
     with tempfile.NamedTemporaryFile(
-            dir=owned_temp_root(), suffix=".json",
+            dir=owned_temp_root(), prefix="fmani-", suffix=".json",
             delete=False, mode="w", encoding="utf-8") as stream:
         json.dump(document, stream, sort_keys=True, indent=1)
         bundle.manifest = stream.name
@@ -830,7 +830,7 @@ def c2t(bundle):
         first["name"] = [1, 2]
         document["reports"] = [first] + list(reports[1:])
     with tempfile.NamedTemporaryFile(
-            dir=owned_temp_root(), suffix=".json",
+            dir=owned_temp_root(), prefix="fmani-", suffix=".json",
             delete=False, mode="w", encoding="utf-8") as stream:
         json.dump(document, stream, sort_keys=True, indent=1)
         bundle.manifest = stream.name
@@ -938,7 +938,7 @@ def c2w(bundle):
                 "ledger": ledger_document,
                 "reports": entries}
     with tempfile.NamedTemporaryFile(
-            dir=owned_temp_root(), suffix=".json",
+            dir=owned_temp_root(), prefix="fmani-", suffix=".json",
             delete=False, mode="w", encoding="utf-8") as stream:
         json.dump(document, stream, sort_keys=True, indent=1)
         bundle.manifest = stream.name
@@ -1212,7 +1212,12 @@ def _sweep_stale_temp_manifests():
     Manifests are NamedTemporaryFile-shaped (tmp*.json) in the battery-
     owned temp root - the root is scratch, so all matches go."""
     import glob
-    for stale in glob.glob(os.path.join(owned_temp_root(), "tmp*.json")):
+    # Scoped to the battery's own prefix (parity r27's blast-radius
+    # warning): the root is shared with concurrent runs, and a bare
+    # tmp*.json glob would delete their in-flight files (the r25
+    # shared-namespace lesson applied).
+    for stale in glob.glob(os.path.join(owned_temp_root(),
+                                        "fmani-*.json")):
         try:
             os.remove(stale)
         except OSError:
@@ -1322,7 +1327,33 @@ def _run_battery(ledger):
     return 0
 
 
+def _label_channel_self_test():
+    """P9: the committed/rebuilt token split cannot reopen silently.
+
+    Identical problem texts naming the committed vs a rebuilt manifest
+    must normalize to the SAME comparison key (the r25 masquerade
+    died on this); a split token makes them compare unequal and
+    credits baseline reasons as own reasons.
+    """
+    committed = os.path.join("evidence", "battery-manifest.json")
+    rebuilt = os.path.join("work", "f0-baseline-manifest.json")
+    text = "battery-manifest {}: no single revision covers the battery"
+    tokens = [(committed, "battery-manifest"), (rebuilt, "battery-manifest")]
+    keys = set()
+    for path, token in tokens:
+        problem = text.format(path)
+        for candidate_path, candidate_token in tokens:
+            if candidate_path in problem or candidate_path == path:
+                normalized = problem.replace(path, "<" + token + ">")
+                keys.add(normalized)
+                break
+    assert len(keys) == 1, (
+        "the label channel reopened: identical manifest texts normalize "
+        "to %d different keys" % len(keys))
+
+
 def _self_test():
+    _label_channel_self_test()
     """Prove each guard can fire: a guard that cannot fire is not a guard.
 
     P1 drives the real gate CLI with each flag it declares required removed
