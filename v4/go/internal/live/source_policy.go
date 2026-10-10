@@ -2,8 +2,6 @@ package live
 
 import (
 	"os"
-	"runtime"
-	"syscall"
 
 	"github.com/firehol/iprange/v4/go/internal/calleropen"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
@@ -60,35 +58,6 @@ func TransitionCreatorOnly(main string) bool {
 		}
 	}
 	return mainSatisfiesProtectedContract(main)
-}
-
-// mainSatisfiesProtectedContract reports whether the main file's own
-// on-disk state already satisfies the protected contract. POSIX: a
-// regular single-linked file whose permission bits are exactly the
-// creator mode. Windows: the DACL zero-security commitment the
-// security module records.
-func mainSatisfiesProtectedContract(main string) bool {
-	if runtime.GOOS == "windows" {
-		file, err := os.Open(main)
-		if err != nil {
-			return false
-		}
-		defer file.Close()
-		_, err = security.CreatorOnlyCommitment(file)
-		return err == nil
-	}
-	info, err := os.Stat(main)
-	if err != nil {
-		return false
-	}
-	mode := info.Mode()
-	if !mode.IsRegular() || uint32(mode.Perm()) != security.CreatorMode {
-		return false
-	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		return stat.Nlink == 1
-	}
-	return false
 }
 
 func SourceCreatorOnly(main string) bool {
