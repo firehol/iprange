@@ -1,8 +1,8 @@
 {
   "all_ok": true,
   "build_provenance": {
-    "base_commit": "78de36152a98b5179cc48e857d850c6bc5f0274b",
-    "base_commit_subject": "capi native tests: name the fixture directory in the include path",
+    "base_commit": "2282037bd6727eed52ffff0a41b4ad3020e15207",
+    "base_commit_subject": "creator-only: the sol round-2 fix batch \u00e2\u20ac\u201d compatible transition fallback; the ledger authority threaded; the docs' contract corrected",
     "build_commands": [
       "go-vet [scored attempt 1, rc=0]: (cd <checkout>/v4/go && nice go vet ./...)",
       "go-build-cli [scored attempt 1, rc=0]: (cd <checkout>/v4/go && nice env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -o C:/msys64/tmp/qualsvc-w192627-W10/bin/go/iprange.exe ./cmd/iprange)",
@@ -27,7 +27,7 @@
       "selftest-guard [scored attempt 1, rc=0]: (cd <checkout> && nice /mingw64/bin/python.exe v4/cli/windows_guard_harness.py --self-test)",
       "selftest-housekeeping [scored attempt 1, rc=0]: (cd <checkout> && nice /mingw64/bin/python.exe v4/cli/windows_housekeeping_harness.py --self-test)"
     ],
-    "build_identity": "IPRANGE_V4_BUILD_ID 1c085b6c8ca1a064895fcdd2cbf59f9a3f77f9a6e1578884bf1cee9ddc652deb recomputed from this clean checkout by command_sanitize --emit-build-ids over the manifest and 357 sources and found verbatim in both built Rust products (cli_contains_expected=True, worker_contains_expected=True); the windows entry equals the darwin, freebsd and linux entries, which is the host-invariant logical-name algorithm of v4/rust/iprange-livedb/build.rs. This revision changes v4/rust and v4/go sources relative to the previously qualified revision, so this identity is expected to differ from the one recorded in the previously installed reports.",
+    "build_identity": "IPRANGE_V4_BUILD_ID 67f6cc6a0b82ffddc9d5a5517c8281a0b24e7a0dcd33393878fa986a89374c5d recomputed from this clean checkout by command_sanitize --emit-build-ids over the manifest and 357 sources and found verbatim in both built Rust products (cli_contains_expected=True, worker_contains_expected=True); the windows entry equals the darwin, freebsd and linux entries, which is the host-invariant logical-name algorithm of v4/rust/iprange-livedb/build.rs. This revision changes v4/rust and v4/go sources relative to the previously qualified revision, so this identity is expected to differ from the one recorded in the previously installed reports.",
     "c_oracle_unavailable": "The released C CLI has no native Windows build, so on this host the comparison against the reference is unavailable. It is stated per case: the verbose Go run printed 246 'C-ORACLE-UNAVAILABLE' markers, and in each of those cases the engine's own pinned bytes were compared first and decided the case. No case was dropped: the engine assertions in TestNulTextRecordsMatchC, TestDNSBookkeepingMatchesCByteForByte, TestDNSBookkeepingInterleavedBatch and the four verbose diagnostic families ran here. The cases whose pinned bytes depend on how the host answers a name report themselves as scoped, with the answer this host measured, and those lines are listed in go_targeted_scoped.",
     "carried_observation": "The release build graph (35 units compiled, target tree moved out of the checkout before the build so nothing was reused) reports 0 warning line(s) and the summary line(s) (none). The abandon_spawn warning(s) recorded verbatim: (none). Compared with the previously qualified native run's build log (qualsvc-w1925c-W/logs/cargo-build-bins.GREEN.log): that run reported 2 warning line(s) and this one 0; identical as a set: no. abandon_spawn is now #[cfg(unix)]-gated at v4/rust/iprange-livedb/src/worker/client.rs, whose doc comment records that its only callers are in the unix owned-stdio spawn path, so the Windows build graph has no dead-code report for it and none was suppressed here. This recipe does not deny warnings, and this leg neither introduced nor silenced any of them.",
     "changed_files": [
@@ -101,7 +101,7 @@
       },
       {
         "path": ".agents/sow/current/SOW-0035-20261006-creator-only-follows-database.md",
-        "sha256": "1dc867acc23bc410ce8b49a9c2bc1ddf5f958f57c397343835bd3ab3ba521d52"
+        "sha256": "ac1680a690516abf6da617369a495cf5fa388eefa225ecf494e643c53259bb8f"
       },
       {
         "path": ".agents/sow/done/.gitkeep",
@@ -2625,51 +2625,51 @@
       },
       {
         "path": "v4/cli/evidence/README.md",
-        "sha256": "66fc83a3beffaa05546bc8e204328f713c51ec7d483978700afd458d26339815"
+        "sha256": "b84de9f3e14e78a96f8e754a1c68e0b192c0044561cb1dad4bbb2e1b39991707"
       },
       {
         "path": "v4/cli/evidence/battery-manifest.json",
-        "sha256": "5e534e67a375b6a33b40e62d1369a46ec80e76a746ec37ed58999733bf35eb9f"
+        "sha256": "7c55f5aa0d6af9aaf9fbde9b9f830043da6c0190d476646792426ea60589c291"
       },
       {
         "path": "v4/cli/evidence/build-ids.json",
-        "sha256": "fe816b29944a6a9ebf7ade1606dab879be87cad4e3c98c98432efe03a8c9f58c"
+        "sha256": "c5495eaee4681beacc7e422400d641133e46c91b0e79c95bd564e3329a723cfc"
       },
       {
         "path": "v4/cli/evidence/coverage-go.json",
-        "sha256": "29a9b41f86a4c5a2e576054b65546603f0a741550addecbf2af7fb260e8efa10"
+        "sha256": "0cd4988d57a2b6748dbb93118283b3ffb50e2ed29451d3144a14f2401b9ba2d2"
       },
       {
         "path": "v4/cli/evidence/crash-go_to_rust.json",
-        "sha256": "b8b462269ee7306b68c4a10b8bf1c22315af9702b407b24342fe4eda892b561c"
+        "sha256": "3305960e4e277466010fae53d51106304b1016b31918f05bb33119421e8f769f"
       },
       {
         "path": "v4/cli/evidence/crash-negative-consumer-false.json",
-        "sha256": "7b3c62916a510918338da1701ea7cd0fb605ca217c63d3866181bc889c1c89ed"
+        "sha256": "2f6531d329d116559cafe7d158475bb9bf8f597f4975b53dd07169a10c2ea370"
       },
       {
         "path": "v4/cli/evidence/crash-negative-producer-false.json",
-        "sha256": "a2e644c780befb35b53407ea1063f5f256ac6e9f856207d3272151a8242278ad"
+        "sha256": "5641ac64dfc547c72dfb8de3f56265dc34103c372247054ba39269c3780e8411"
       },
       {
         "path": "v4/cli/evidence/crash-negative.json",
-        "sha256": "7b3c62916a510918338da1701ea7cd0fb605ca217c63d3866181bc889c1c89ed"
+        "sha256": "2f6531d329d116559cafe7d158475bb9bf8f597f4975b53dd07169a10c2ea370"
       },
       {
         "path": "v4/cli/evidence/crash-rust_to_go.json",
-        "sha256": "7ff4ab5ef7d2cca5bc5d6bfc4584d1803b995228ed3cf60792895fd2984abf4a"
+        "sha256": "b33a1c0b523143612de1eb4e2fbdcba9e1244751ccd7d4165b7b2caa1448303f"
       },
       {
         "path": "v4/cli/evidence/crash.json",
-        "sha256": "7ff4ab5ef7d2cca5bc5d6bfc4584d1803b995228ed3cf60792895fd2984abf4a"
+        "sha256": "b33a1c0b523143612de1eb4e2fbdcba9e1244751ccd7d4165b7b2caa1448303f"
       },
       {
         "path": "v4/cli/evidence/create-mode.json",
-        "sha256": "deabdd937b88fff650f0df8e00455e49b06e99667471d5996afffc2bb0a6d15e"
+        "sha256": "51579785c14b7b2941380bb95e80511ad2f38fdc3060337ec836f3bc51f4340a"
       },
       {
         "path": "v4/cli/evidence/fifo-surface.json",
-        "sha256": "4a8afca600d28273df96b1198e469bf2a52a102de1069f6a561003be1c4bbc58"
+        "sha256": "c0789524a706584fd9922b2d7c9a7d3912ac6e24f26b8a5279d4ad9922554d37"
       },
       {
         "path": "v4/cli/evidence/fold-enum/README.md",
@@ -2689,11 +2689,11 @@
       },
       {
         "path": "v4/cli/evidence/golden.json",
-        "sha256": "22a60c1ac50b2b511914af06cada0ca2698d337db9134b33abc07bab968f547a"
+        "sha256": "b34c54eaabe8d970168bb9167ee85f89b2a93aeeaadb6e6d8d64188537234eb5"
       },
       {
         "path": "v4/cli/evidence/guard-posix.json",
-        "sha256": "2724ec83abdd1bbc015e17844fdf2d8a2573efb3155d0a586015e5f5f8ba2e98"
+        "sha256": "f24246bdd6e97bd45d7464d26ef0564eb3cbbf46fcefae3517dee605d08d020a"
       },
       {
         "path": "v4/cli/evidence/known-defects.json",
@@ -2701,47 +2701,47 @@
       },
       {
         "path": "v4/cli/evidence/matrix-go.json",
-        "sha256": "36aef93ca75322857948cc236ccbacd4695f5c6a3d9cfdb2745a36e3d663858f"
+        "sha256": "403d7d01a63af29e9020ac350342c0a8590dfc78fd5b6c13b59b62295f9958b7"
       },
       {
         "path": "v4/cli/evidence/matrix-go_to_rust.json",
-        "sha256": "ffdbe7acdf8eec4ee7d055eae0f50faefd910d0afa3ad99b0f6eaa07724dafcb"
+        "sha256": "d569bece254a4564013ef5cc5e3efb286b07dcefc6ade4acbc11f4cc75a47751"
       },
       {
         "path": "v4/cli/evidence/matrix-rust.json",
-        "sha256": "a85f864abc0bf93d960426c87a214d674e455518de23594d324bc4f9a7ceb13a"
+        "sha256": "d6f3dc8943bc9495df278aa71472ef40d84ffc9265d596d26d699d038e2a146e"
       },
       {
         "path": "v4/cli/evidence/matrix-rust_to_go.json",
-        "sha256": "acc55536ea310204e78897ee49f1c96cb789acbb767a18ba0e66c13dd04a9595"
+        "sha256": "6d93e8dc6d131373ab43a6abf558129209028fb3a9cc7993da77149f90a131e9"
       },
       {
         "path": "v4/cli/evidence/race-battery.json",
-        "sha256": "0689f36029fccc3b5eaffe70000b75cf4ec08231017ebd7cdf773481fe300d89"
+        "sha256": "9a354b39c71a3c062c98b185bad3235d7038f47ba74c0948d7bd401441ffda7f"
       },
       {
         "path": "v4/cli/evidence/refusal-class-parity.json",
-        "sha256": "328df573afda9804c1975d9993df59bdca5c3b35609e30fcc00d4d5307eb5945"
+        "sha256": "e3c0efded57275b463bfb817847be6e8e905933a4c6c84811e241e75a24e4103"
       },
       {
         "path": "v4/cli/evidence/resource.json",
-        "sha256": "ba98484596492da4d246f756e7c87a89100ab12ca28ebf7cb3d2df74f8aa4169"
+        "sha256": "5473e454479d3cc7f2ab9730c3bef98ed1fd2ca4600d22dd7f197f92005b1261"
       },
       {
         "path": "v4/cli/evidence/sensitivity.json",
-        "sha256": "4f05ee507c0536f6ca8ff19998f289787c1ea02dd9f9a1ccd145bf0877d407fd"
+        "sha256": "03b14eefe61971def8082800e34807b85571fb22808a9c9c9ea18170adec2b74"
       },
       {
         "path": "v4/cli/evidence/throughput.json",
-        "sha256": "085f204e5daa0bd2170be6b7d9c3a02e1d5d2755c22bee23071e21c923662e39"
+        "sha256": "d4cd778d1dc081d315a7216101ae89c161d5ad9973a9c0971ba47927b1a70a86"
       },
       {
         "path": "v4/cli/evidence/windows-guard.json",
-        "sha256": "b5715348acc7923d0fda2a665a57ed2e157e34a498a4c3cd19c5df48fded0df2"
+        "sha256": "c4b085e845184d021356424aee5fd51d2d5a1953ab8c04d09e6b4e21a204ad3e"
       },
       {
         "path": "v4/cli/evidence/windows-housekeeping.json",
-        "sha256": "0658c7a2ba9ae2eacb009ed4924d21d2d85ad9236fd1f58d7602f4d6f1425305"
+        "sha256": "130470c6020dec94c01bf5e3536c616ffdf94f99c0206dfcba0e0d8071661686"
       },
       {
         "path": "v4/cli/fake_server.py",
@@ -2753,7 +2753,7 @@
       },
       {
         "path": "v4/cli/forgery_battery.py",
-        "sha256": "b2dce85bf0d7e030727f0edbe041d0a8cc40c0082900c2b6d9a468f87faf9e52"
+        "sha256": "28afae78cf4536a605ef4c0737f069138748d94fbf0955888eef846b183e7db6"
       },
       {
         "path": "v4/cli/gc_envelope_windows.py",
@@ -4533,15 +4533,15 @@
       },
       {
         "path": "v4/go/internal/live/lifecycle_follows_source_test.go",
-        "sha256": "22ee26d3d7cb7c9065ca2d01bace6670d9410e73022b05c009a5daef21b03260"
+        "sha256": "6f5a4e7fbbf379b3ba41cb391eb922225e0647cbb10a4de9987a9ce783be7f2c"
       },
       {
         "path": "v4/go/internal/live/lifecycle_initialize.go",
-        "sha256": "66f79738cc43ee460d819834f5a6e129c2f246f5939aee1acacaecaef0ed6531"
+        "sha256": "77f17ff6fd9c809958876404450ecc05a13c42e57c7dbeadf0576335a2b7640d"
       },
       {
         "path": "v4/go/internal/live/lifecycle_reset.go",
-        "sha256": "a9a69fd5e97beb794904893e4bca878544b2f64ff696ad33ca718daaad55f46a"
+        "sha256": "3c1a73e9e401198e0c0c59f5e52b9b1723850e9355fa703f9259ad5fa500fdbe"
       },
       {
         "path": "v4/go/internal/live/lifecycle_residue.go",
@@ -4817,15 +4817,23 @@
       },
       {
         "path": "v4/go/internal/live/source_policy.go",
-        "sha256": "ffce9977569c29a732ef2610bedb70e321de5b0eb0350a9d6544f9ebe6795d07"
+        "sha256": "b73ea1236de558217256e54bb71a175092354c1fcdc2a5daa50614178288db14"
       },
       {
         "path": "v4/go/internal/live/source_policy_fifo_test.go",
         "sha256": "dd692c3431441d6202ca9425eed332220466681c54f486de7bb383365c79a09a"
       },
       {
+        "path": "v4/go/internal/live/source_policy_posix.go",
+        "sha256": "39f0bfb4036120c126606b3c0315869f2d7bcf39a8e6109da66ec6eaa3b3423a"
+      },
+      {
         "path": "v4/go/internal/live/source_policy_test.go",
         "sha256": "8e93ff1b8b98f43c8369522d10821b4ff936bc917a5d7301616736db28c35c6f"
+      },
+      {
+        "path": "v4/go/internal/live/source_policy_windows.go",
+        "sha256": "1025399cbb3184abab709e7df36f66d1363c93fa807f6b7792bf3b88ffe785ab"
       },
       {
         "path": "v4/go/internal/live/sync_file_darwin.go",
@@ -8389,7 +8397,7 @@
       },
       {
         "path": "v4/rust/iprange-livedb/src/live_lifecycle/transition.rs",
-        "sha256": "2a686dc73568c898ca11dd2cf4aa261af0138f32510122ccec70828c7984bed1"
+        "sha256": "7c35676dcc2e319deaf62aa2da8aaa0b08cae50f178fa0aa33068981ae2957fb"
       },
       {
         "path": "v4/rust/iprange-livedb/src/live_lock.rs",
@@ -8405,7 +8413,7 @@
       },
       {
         "path": "v4/rust/iprange-livedb/src/live_sidecar.rs",
-        "sha256": "4ebf8542d65a0e99d8cd432cfaf37505fcebdc2e17d8b6ebc07b4363a9a56349"
+        "sha256": "142ac153c1e809cfecb51fd47fbf6572e5c083adcd292f8e3374197505f2a63d"
       },
       {
         "path": "v4/rust/iprange-livedb/src/live_sidecar/header.rs",
@@ -9653,7 +9661,7 @@
       },
       {
         "path": "v4/rust/iprange-livedb/tests/transitions_follow_source.rs",
-        "sha256": "dcc332aebf2b04794fa3e7fb79f913e9bda92c57cccc708313e1beea2c3e038f"
+        "sha256": "10692df1582f7d509929b03daea2e8647728a424e7c11de59ff1afdf4c57054a"
       },
       {
         "path": "v4/rust/iprange-livedb/tests/v4_fixture_argv.rs",
@@ -9692,6 +9700,10 @@
         "sha256": "b8930ee025d2819005023dd8b09890d2d5025d2bb2133691cc8cb09f5a3ea320"
       },
       {
+        "path": "wiki/file-modes-and-ownership.md",
+        "sha256": "50a21a784d629956407f127f2bc0860827eec03c261280f4ed0d81f4fd15bb67"
+      },
+      {
         "path": "wiki/input-formats.md",
         "sha256": "1d86924a9169a112c518c90332408a343756ea2025c947080858891d3f386a0a"
       },
@@ -9720,10 +9732,10 @@
         "sha256": "071bc7e3b4f9620207fb6331b9a2207ad8f0145906c8987434a43456aad02c6c"
       }
     ],
-    "changed_files_note": "2422 files differ between this revision and the previously Windows-qualified revision 4b42cc0b (the span the transferred snapshot manifest covers); each is listed with the SHA-256 of the qualification-workstation copy, and the checkout is byte-identical to commit 411ba02cf3b0, proven by the equal tree object (tree hashing covers every tracked file, so the manifest measures content, the tree proves completeness). They carry the SOW-0035 creator-only work (the process switch, the zero-commitment records across GC, scratch, retire and publication, the recorded access policy), the Go DNS reply-stack reversal with its re-scoped resolver pins, the rotated Linux evidence, and the Windows test-compile fix. The engine build identity and product digests legitimately differ from the 4b42cc0b-era staged pair for exactly these source changes.",
-    "checkout": "authorized Windows validation host; the checkout is detached at the recorded revision and git status --porcelain is empty, so the tree is exactly commit 411ba02cf3b048335ef05a5067e6095e96d2c487 with no local edit. It was updated in place by a git fetch of refs/qual/w1935-snapshot from an incremental git bundle transferred from the qualification workstation over ssh (prerequisite 4b42cc0b, the previously verified snapshot this checkout was already detached at) and git checkout --detach to the recorded revision. Tree identity is proven by measurement rather than by sampling files: the checked-out tree object is 6fa48e57a6b395c34c0004e727d111c563db500f, which equals the tree of the same revision on the qualification workstation, and a git tree object hashes every tracked file, so an equal tree object is byte-identity of the whole source tree.",
-    "content_snapshot_note": "git_head is 411ba02cf3b048335ef05a5067e6095e96d2c487: the PUBLISHED master commit of the repository (78de36152a98b5179cc48e857d850c6bc5f0274b is its parent, capi native tests: name the fixture directory in the include path). There is no throwaway commit-tree snapshot here: the SOW-0035 creator-only work was committed and pushed, the Linux gate-tier battery qualified it, and this leg builds from the commit itself, transferred as an incremental git bundle on top of the previously verified snapshot. The leg is reproducible from the public commit alone; changed_files lists every file the commit adds or changes versus its parent, pinned by SHA-256, including v4/cli/evidence/** (the two Windows reports this leg re-author are rotated into that directory by a later commit; the stale copies in the checkout are inputs the leg verifies byte-identical and then replaces by transfer, never in place).",
-    "flake_history": "Scored invocation: 0 of 32 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 18 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory.",
+    "changed_files_note": "2425 files differ between this revision and the previously Windows-qualified revision 4b42cc0b (the span the transferred snapshot manifest covers); each is listed with the SHA-256 of the qualification-workstation copy, and the checkout is byte-identical to commit 6b8960d84c14, proven by the equal tree object (tree hashing covers every tracked file, so the manifest measures content, the tree proves completeness). They carry the SOW-0035 creator-only work (the process switch, the zero-commitment records across GC, scratch, retire and publication, the recorded access policy), the Go DNS reply-stack reversal with its re-scoped resolver pins, the rotated Linux evidence, and the Windows test-compile fix. The engine build identity and product digests legitimately differ from the 4b42cc0b-era staged pair for exactly these source changes.",
+    "checkout": "authorized Windows validation host; the checkout is detached at the recorded revision and git status --porcelain is empty, so the tree is exactly commit 6b8960d84c149fce40e0f392e4a4d48b41ae898f with no local edit. It was updated in place by a git fetch of refs/qual/w1935-snapshot from an incremental git bundle transferred from the qualification workstation over ssh (prerequisite 4b42cc0b, the previously verified snapshot this checkout was already detached at) and git checkout --detach to the recorded revision. Tree identity is proven by measurement rather than by sampling files: the checked-out tree object is 8424ea076c0b1d98bf77b8cdf15f7563a4d93042, which equals the tree of the same revision on the qualification workstation, and a git tree object hashes every tracked file, so an equal tree object is byte-identity of the whole source tree.",
+    "content_snapshot_note": "git_head is 6b8960d84c149fce40e0f392e4a4d48b41ae898f: the PUBLISHED master commit of the repository (2282037bd6727eed52ffff0a41b4ad3020e15207 is its parent, creator-only: the sol round-2 fix batch \u00e2\u20ac\u201d compatible transition fallback; the ledger authority threaded; the docs' contract corrected). There is no throwaway commit-tree snapshot here: the SOW-0035 creator-only work was committed and pushed, the Linux gate-tier battery qualified it, and this leg builds from the commit itself, transferred as an incremental git bundle on top of the previously verified snapshot. The leg is reproducible from the public commit alone; changed_files lists every file the commit adds or changes versus its parent, pinned by SHA-256, including v4/cli/evidence/** (the two Windows reports this leg re-author are rotated into that directory by a later commit; the stale copies in the checkout are inputs the leg verifies byte-identical and then replaces by transfer, never in place).",
+    "flake_history": "Scored invocation: 0 of 32 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 19 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory.",
     "flake_reasons": [],
     "flake_reasons_note": "Each retry the driver classified as a host process-creation failure is recorded by the driver itself, per attempt, in flake-reasons.tsv; the recognised signatures are 0xc0000142 / STATUS_DLL_INIT_FAILED / its decimal spelling appearing in the step's own log, and an exit 127 whose log is empty (the tool was never started). Neither signature turns a red step green: a step that keeps failing exhausts the 4 attempts and is reported red with its log.",
     "go_targeted_scoped": [
@@ -9736,8 +9748,8 @@
       "SCOPED:     c_dns_bookkeeping_test.go:659: dns same host twice v4: scoped, not run: the pinned bytes require the glibc numeric short-circuit, which this platform's resolver does not answer and the Rust authority therefore does not answer either; the failure shape here is pinned by TestDNSNumericFormsAreNotAnsweredHere",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v4 (0.00s)",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_two_files_one_host_each (0.00s)",
-      "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_localhost (0.01s)",
-      "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_allnodes (2.69s)",
+      "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_localhost (0.02s)",
+      "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_allnodes (2.68s)",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v4_binary (0.00s)",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_binary_header (0.00s)",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_same_host_twice_v4 (0.00s)",
@@ -9757,7 +9769,7 @@
       "logs_present": [
         "cargo-test-iprange-cli.a1.log"
       ],
-      "note": "Scored invocation: 0 of 32 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 18 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory."
+      "note": "Scored invocation: 0 of 32 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 19 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory."
     },
     "native_go_test": "GREEN. nice go test ./... -count=1 in v4/go on the native Windows host returned rc=0: 32 packages -- 24 ok, 8 with no test files, 0 failures (go-test-final.a1.log), scored with no concurrent compile running. The maintenance removal round-trip TestMaintenanceListRowsRoundTripIntoRemoveForEveryRemovableKind was run separately with -v and passed 4 of 4 PASS rows (the test plus its scratch, reservation and publication_temp subtests) with 0 failing rows (go-test-maintenance-roundtrip.a1.log). The five packages whose Windows arms the wave-19.25 maintenance work touched were each run separately with -v -count=1 and returned rc=0: go-test-internal_publication.a1.log, go-test-internal_live.a1.log, go-test-internal_cli_handlers.a1.log, go-test-internal_calleropen.a1.log, go-test-internal_worker.a1.log. The attempt history is in native_go_test_attempts.",
     "native_go_test_attempts": {
@@ -9778,7 +9790,7 @@
         "go-test-maintenance-roundtrip.GREEN.log",
         "go-test-maintenance-roundtrip.a1.log"
       ],
-      "note": "Scored invocation: 0 of 32 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 18 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory."
+      "note": "Scored invocation: 0 of 32 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 19 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory."
     },
     "native_steps": {
       "build-ids": {
@@ -9927,7 +9939,7 @@
         "scored_attempt": 1
       }
     },
-    "revision": "411ba02cf3b048335ef05a5067e6095e96d2c487",
+    "revision": "6b8960d84c149fce40e0f392e4a4d48b41ae898f",
     "rust_build_recipe_note": "The Rust products were built by the recorded canonical invocation (--release --all-features --bins --examples) from the checkout itself into the checkout's own v4/rust/target, which was moved out of the tree to the work root before this run so nothing from an earlier build could be reused; the worker was also built explicitly with --release -p iprange-livedb --bin iprange-v4-worker, and the release worker was copied beside the debug test executable so the live_source_tests pins could answer. The Go products were built CGO_ENABLED=0 GOOS=windows GOARCH=amd64 -trimpath -buildvcs=false, which is why their digests do not depend on the build tree location.",
     "rust_dns_hex_scoped_note": "legacy::dns::tests::hex_numeric_hostnames_answer_locally_where_the_authority_answers is #[cfg(unix)]: glibc answers the inet_at-style hex numeric forms locally and Windows has no such form, so the compatibility is pinned only where it exists. The step still ran natively and its own summary line is 'running 0 tests', recorded so the case reads as scoped rather than omitted. The platform-independent batching contract it used to be tangled with is pinned by multi_file_batches_drain_independently, which runs on every target on the dotted-numeric loopback.",
     "shared_self_tests": {
@@ -9997,12 +10009,12 @@
     "C:/msys64/tmp/qualsvc-w192627-W10/prov-guard.json"
   ],
   "fixture": {
-    "mtime": 1791670734.9025774,
+    "mtime": 1791673405.499971,
     "path": "C:/msys64/tmp/qualsvc-w192627-W10/win/fixture-w1924b.iprange",
-    "sha256": "62401edfcb0056399d672372ef3d27a24a7cd87dec15ffaa5baf1f73c83bb61a",
+    "sha256": "5c88b1ca366419ea5b5c08e937326c9f9fd8b1db133b96f3a0310c0d3aad5174",
     "size": 16384
   },
-  "git_head": "411ba02cf3b048335ef05a5067e6095e96d2c487",
+  "git_head": "6b8960d84c149fce40e0f392e4a4d48b41ae898f",
   "platform": "windows",
   "privacy": {
     "checked_inputs": [
@@ -10020,10 +10032,10 @@
     "go": {
       "all_ok": true,
       "binary": {
-        "mtime": 1791670734.6435778,
+        "mtime": 1791673405.2399812,
         "path": "C:/msys64/tmp/qualsvc-w192627-W10/win/go/iprange.exe",
-        "sha256": "ffbed3dc211c1d98a918bfd4c9ea07a1055f0088fc11241c1a1d5fb7c0b16d52",
-        "size": 14123520
+        "sha256": "76ff37d58ef791ee193553920ae4134c9b55bb261c33fa235d75851305dd4b6f",
+        "size": 14128640
       },
       "cases": {
         "absolute_trailing_dot": {
@@ -10456,15 +10468,15 @@
       "implementation": "go",
       "sources_before": {
         "C:\\msys64\\tmp\\qualsvc-w192627-W10\\guardwork\\go\\A\u03a31.iprange": {
-          "sha256_before": "62401edfcb0056399d672372ef3d27a24a7cd87dec15ffaa5baf1f73c83bb61a",
+          "sha256_before": "5c88b1ca366419ea5b5c08e937326c9f9fd8b1db133b96f3a0310c0d3aad5174",
           "sidecar_absent_before": true
         },
         "C:\\msys64\\tmp\\qualsvc-w192627-W10\\guardwork\\go\\db.iprange": {
-          "sha256_before": "62401edfcb0056399d672372ef3d27a24a7cd87dec15ffaa5baf1f73c83bb61a",
+          "sha256_before": "5c88b1ca366419ea5b5c08e937326c9f9fd8b1db133b96f3a0310c0d3aad5174",
           "sidecar_absent_before": true
         },
         "C:\\msys64\\tmp\\qualsvc-w192627-W10\\guardwork\\go\\db_\u00e4.iprange": {
-          "sha256_before": "62401edfcb0056399d672372ef3d27a24a7cd87dec15ffaa5baf1f73c83bb61a",
+          "sha256_before": "5c88b1ca366419ea5b5c08e937326c9f9fd8b1db133b96f3a0310c0d3aad5174",
           "sidecar_absent_before": true
         }
       }
@@ -10472,10 +10484,10 @@
     "rust": {
       "all_ok": true,
       "binary": {
-        "mtime": 1791670734.7675786,
+        "mtime": 1791673405.3439784,
         "path": "C:/msys64/tmp/qualsvc-w192627-W10/win/rust/iprange.exe",
-        "sha256": "9ffbb39e30ee9791ba9ddfaaa85b209cdddebc4d48e2e0eb03b69671066c5c10",
-        "size": 6369280
+        "sha256": "3b1944dae0bd01b8ed1047542af8024553f9b9b70326d979600413c278fc669c",
+        "size": 6378496
       },
       "cases": {
         "absolute_trailing_dot": {
@@ -10908,23 +10920,23 @@
       "implementation": "rust",
       "sources_before": {
         "C:\\msys64\\tmp\\qualsvc-w192627-W10\\guardwork\\rust\\A\u03a31.iprange": {
-          "sha256_before": "62401edfcb0056399d672372ef3d27a24a7cd87dec15ffaa5baf1f73c83bb61a",
+          "sha256_before": "5c88b1ca366419ea5b5c08e937326c9f9fd8b1db133b96f3a0310c0d3aad5174",
           "sidecar_absent_before": true
         },
         "C:\\msys64\\tmp\\qualsvc-w192627-W10\\guardwork\\rust\\db.iprange": {
-          "sha256_before": "62401edfcb0056399d672372ef3d27a24a7cd87dec15ffaa5baf1f73c83bb61a",
+          "sha256_before": "5c88b1ca366419ea5b5c08e937326c9f9fd8b1db133b96f3a0310c0d3aad5174",
           "sidecar_absent_before": true
         },
         "C:\\msys64\\tmp\\qualsvc-w192627-W10\\guardwork\\rust\\db_\u00e4.iprange": {
-          "sha256_before": "62401edfcb0056399d672372ef3d27a24a7cd87dec15ffaa5baf1f73c83bb61a",
+          "sha256_before": "5c88b1ca366419ea5b5c08e937326c9f9fd8b1db133b96f3a0310c0d3aad5174",
           "sidecar_absent_before": true
         }
       }
     }
   },
   "provenance": {
-    "base_commit": "78de36152a98b5179cc48e857d850c6bc5f0274b",
-    "base_commit_subject": "capi native tests: name the fixture directory in the include path",
+    "base_commit": "2282037bd6727eed52ffff0a41b4ad3020e15207",
+    "base_commit_subject": "creator-only: the sol round-2 fix batch \u00e2\u20ac\u201d compatible transition fallback; the ledger authority threaded; the docs' contract corrected",
     "build_commands": [
       "go-vet [scored attempt 1, rc=0]: (cd <checkout>/v4/go && nice go vet ./...)",
       "go-build-cli [scored attempt 1, rc=0]: (cd <checkout>/v4/go && nice env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -o C:/msys64/tmp/qualsvc-w192627-W10/bin/go/iprange.exe ./cmd/iprange)",
@@ -10949,7 +10961,7 @@
       "selftest-guard [scored attempt 1, rc=0]: (cd <checkout> && nice /mingw64/bin/python.exe v4/cli/windows_guard_harness.py --self-test)",
       "selftest-housekeeping [scored attempt 1, rc=0]: (cd <checkout> && nice /mingw64/bin/python.exe v4/cli/windows_housekeeping_harness.py --self-test)"
     ],
-    "build_identity": "IPRANGE_V4_BUILD_ID 1c085b6c8ca1a064895fcdd2cbf59f9a3f77f9a6e1578884bf1cee9ddc652deb recomputed from this clean checkout by command_sanitize --emit-build-ids over the manifest and 357 sources and found verbatim in both built Rust products (cli_contains_expected=True, worker_contains_expected=True); the windows entry equals the darwin, freebsd and linux entries, which is the host-invariant logical-name algorithm of v4/rust/iprange-livedb/build.rs. This revision changes v4/rust and v4/go sources relative to the previously qualified revision, so this identity is expected to differ from the one recorded in the previously installed reports.",
+    "build_identity": "IPRANGE_V4_BUILD_ID 67f6cc6a0b82ffddc9d5a5517c8281a0b24e7a0dcd33393878fa986a89374c5d recomputed from this clean checkout by command_sanitize --emit-build-ids over the manifest and 357 sources and found verbatim in both built Rust products (cli_contains_expected=True, worker_contains_expected=True); the windows entry equals the darwin, freebsd and linux entries, which is the host-invariant logical-name algorithm of v4/rust/iprange-livedb/build.rs. This revision changes v4/rust and v4/go sources relative to the previously qualified revision, so this identity is expected to differ from the one recorded in the previously installed reports.",
     "c_oracle_unavailable": "The released C CLI has no native Windows build, so on this host the comparison against the reference is unavailable. It is stated per case: the verbose Go run printed 246 'C-ORACLE-UNAVAILABLE' markers, and in each of those cases the engine's own pinned bytes were compared first and decided the case. No case was dropped: the engine assertions in TestNulTextRecordsMatchC, TestDNSBookkeepingMatchesCByteForByte, TestDNSBookkeepingInterleavedBatch and the four verbose diagnostic families ran here. The cases whose pinned bytes depend on how the host answers a name report themselves as scoped, with the answer this host measured, and those lines are listed in go_targeted_scoped.",
     "carried_observation": "The release build graph (35 units compiled, target tree moved out of the checkout before the build so nothing was reused) reports 0 warning line(s) and the summary line(s) (none). The abandon_spawn warning(s) recorded verbatim: (none). Compared with the previously qualified native run's build log (qualsvc-w1925c-W/logs/cargo-build-bins.GREEN.log): that run reported 2 warning line(s) and this one 0; identical as a set: no. abandon_spawn is now #[cfg(unix)]-gated at v4/rust/iprange-livedb/src/worker/client.rs, whose doc comment records that its only callers are in the unix owned-stdio spawn path, so the Windows build graph has no dead-code report for it and none was suppressed here. This recipe does not deny warnings, and this leg neither introduced nor silenced any of them.",
     "changed_files": [
@@ -11023,7 +11035,7 @@
       },
       {
         "path": ".agents/sow/current/SOW-0035-20261006-creator-only-follows-database.md",
-        "sha256": "1dc867acc23bc410ce8b49a9c2bc1ddf5f958f57c397343835bd3ab3ba521d52"
+        "sha256": "ac1680a690516abf6da617369a495cf5fa388eefa225ecf494e643c53259bb8f"
       },
       {
         "path": ".agents/sow/done/.gitkeep",
@@ -13547,51 +13559,51 @@
       },
       {
         "path": "v4/cli/evidence/README.md",
-        "sha256": "66fc83a3beffaa05546bc8e204328f713c51ec7d483978700afd458d26339815"
+        "sha256": "b84de9f3e14e78a96f8e754a1c68e0b192c0044561cb1dad4bbb2e1b39991707"
       },
       {
         "path": "v4/cli/evidence/battery-manifest.json",
-        "sha256": "5e534e67a375b6a33b40e62d1369a46ec80e76a746ec37ed58999733bf35eb9f"
+        "sha256": "7c55f5aa0d6af9aaf9fbde9b9f830043da6c0190d476646792426ea60589c291"
       },
       {
         "path": "v4/cli/evidence/build-ids.json",
-        "sha256": "fe816b29944a6a9ebf7ade1606dab879be87cad4e3c98c98432efe03a8c9f58c"
+        "sha256": "c5495eaee4681beacc7e422400d641133e46c91b0e79c95bd564e3329a723cfc"
       },
       {
         "path": "v4/cli/evidence/coverage-go.json",
-        "sha256": "29a9b41f86a4c5a2e576054b65546603f0a741550addecbf2af7fb260e8efa10"
+        "sha256": "0cd4988d57a2b6748dbb93118283b3ffb50e2ed29451d3144a14f2401b9ba2d2"
       },
       {
         "path": "v4/cli/evidence/crash-go_to_rust.json",
-        "sha256": "b8b462269ee7306b68c4a10b8bf1c22315af9702b407b24342fe4eda892b561c"
+        "sha256": "3305960e4e277466010fae53d51106304b1016b31918f05bb33119421e8f769f"
       },
       {
         "path": "v4/cli/evidence/crash-negative-consumer-false.json",
-        "sha256": "7b3c62916a510918338da1701ea7cd0fb605ca217c63d3866181bc889c1c89ed"
+        "sha256": "2f6531d329d116559cafe7d158475bb9bf8f597f4975b53dd07169a10c2ea370"
       },
       {
         "path": "v4/cli/evidence/crash-negative-producer-false.json",
-        "sha256": "a2e644c780befb35b53407ea1063f5f256ac6e9f856207d3272151a8242278ad"
+        "sha256": "5641ac64dfc547c72dfb8de3f56265dc34103c372247054ba39269c3780e8411"
       },
       {
         "path": "v4/cli/evidence/crash-negative.json",
-        "sha256": "7b3c62916a510918338da1701ea7cd0fb605ca217c63d3866181bc889c1c89ed"
+        "sha256": "2f6531d329d116559cafe7d158475bb9bf8f597f4975b53dd07169a10c2ea370"
       },
       {
         "path": "v4/cli/evidence/crash-rust_to_go.json",
-        "sha256": "7ff4ab5ef7d2cca5bc5d6bfc4584d1803b995228ed3cf60792895fd2984abf4a"
+        "sha256": "b33a1c0b523143612de1eb4e2fbdcba9e1244751ccd7d4165b7b2caa1448303f"
       },
       {
         "path": "v4/cli/evidence/crash.json",
-        "sha256": "7ff4ab5ef7d2cca5bc5d6bfc4584d1803b995228ed3cf60792895fd2984abf4a"
+        "sha256": "b33a1c0b523143612de1eb4e2fbdcba9e1244751ccd7d4165b7b2caa1448303f"
       },
       {
         "path": "v4/cli/evidence/create-mode.json",
-        "sha256": "deabdd937b88fff650f0df8e00455e49b06e99667471d5996afffc2bb0a6d15e"
+        "sha256": "51579785c14b7b2941380bb95e80511ad2f38fdc3060337ec836f3bc51f4340a"
       },
       {
         "path": "v4/cli/evidence/fifo-surface.json",
-        "sha256": "4a8afca600d28273df96b1198e469bf2a52a102de1069f6a561003be1c4bbc58"
+        "sha256": "c0789524a706584fd9922b2d7c9a7d3912ac6e24f26b8a5279d4ad9922554d37"
       },
       {
         "path": "v4/cli/evidence/fold-enum/README.md",
@@ -13611,11 +13623,11 @@
       },
       {
         "path": "v4/cli/evidence/golden.json",
-        "sha256": "22a60c1ac50b2b511914af06cada0ca2698d337db9134b33abc07bab968f547a"
+        "sha256": "b34c54eaabe8d970168bb9167ee85f89b2a93aeeaadb6e6d8d64188537234eb5"
       },
       {
         "path": "v4/cli/evidence/guard-posix.json",
-        "sha256": "2724ec83abdd1bbc015e17844fdf2d8a2573efb3155d0a586015e5f5f8ba2e98"
+        "sha256": "f24246bdd6e97bd45d7464d26ef0564eb3cbbf46fcefae3517dee605d08d020a"
       },
       {
         "path": "v4/cli/evidence/known-defects.json",
@@ -13623,47 +13635,47 @@
       },
       {
         "path": "v4/cli/evidence/matrix-go.json",
-        "sha256": "36aef93ca75322857948cc236ccbacd4695f5c6a3d9cfdb2745a36e3d663858f"
+        "sha256": "403d7d01a63af29e9020ac350342c0a8590dfc78fd5b6c13b59b62295f9958b7"
       },
       {
         "path": "v4/cli/evidence/matrix-go_to_rust.json",
-        "sha256": "ffdbe7acdf8eec4ee7d055eae0f50faefd910d0afa3ad99b0f6eaa07724dafcb"
+        "sha256": "d569bece254a4564013ef5cc5e3efb286b07dcefc6ade4acbc11f4cc75a47751"
       },
       {
         "path": "v4/cli/evidence/matrix-rust.json",
-        "sha256": "a85f864abc0bf93d960426c87a214d674e455518de23594d324bc4f9a7ceb13a"
+        "sha256": "d6f3dc8943bc9495df278aa71472ef40d84ffc9265d596d26d699d038e2a146e"
       },
       {
         "path": "v4/cli/evidence/matrix-rust_to_go.json",
-        "sha256": "acc55536ea310204e78897ee49f1c96cb789acbb767a18ba0e66c13dd04a9595"
+        "sha256": "6d93e8dc6d131373ab43a6abf558129209028fb3a9cc7993da77149f90a131e9"
       },
       {
         "path": "v4/cli/evidence/race-battery.json",
-        "sha256": "0689f36029fccc3b5eaffe70000b75cf4ec08231017ebd7cdf773481fe300d89"
+        "sha256": "9a354b39c71a3c062c98b185bad3235d7038f47ba74c0948d7bd401441ffda7f"
       },
       {
         "path": "v4/cli/evidence/refusal-class-parity.json",
-        "sha256": "328df573afda9804c1975d9993df59bdca5c3b35609e30fcc00d4d5307eb5945"
+        "sha256": "e3c0efded57275b463bfb817847be6e8e905933a4c6c84811e241e75a24e4103"
       },
       {
         "path": "v4/cli/evidence/resource.json",
-        "sha256": "ba98484596492da4d246f756e7c87a89100ab12ca28ebf7cb3d2df74f8aa4169"
+        "sha256": "5473e454479d3cc7f2ab9730c3bef98ed1fd2ca4600d22dd7f197f92005b1261"
       },
       {
         "path": "v4/cli/evidence/sensitivity.json",
-        "sha256": "4f05ee507c0536f6ca8ff19998f289787c1ea02dd9f9a1ccd145bf0877d407fd"
+        "sha256": "03b14eefe61971def8082800e34807b85571fb22808a9c9c9ea18170adec2b74"
       },
       {
         "path": "v4/cli/evidence/throughput.json",
-        "sha256": "085f204e5daa0bd2170be6b7d9c3a02e1d5d2755c22bee23071e21c923662e39"
+        "sha256": "d4cd778d1dc081d315a7216101ae89c161d5ad9973a9c0971ba47927b1a70a86"
       },
       {
         "path": "v4/cli/evidence/windows-guard.json",
-        "sha256": "b5715348acc7923d0fda2a665a57ed2e157e34a498a4c3cd19c5df48fded0df2"
+        "sha256": "c4b085e845184d021356424aee5fd51d2d5a1953ab8c04d09e6b4e21a204ad3e"
       },
       {
         "path": "v4/cli/evidence/windows-housekeeping.json",
-        "sha256": "0658c7a2ba9ae2eacb009ed4924d21d2d85ad9236fd1f58d7602f4d6f1425305"
+        "sha256": "130470c6020dec94c01bf5e3536c616ffdf94f99c0206dfcba0e0d8071661686"
       },
       {
         "path": "v4/cli/fake_server.py",
@@ -13675,7 +13687,7 @@
       },
       {
         "path": "v4/cli/forgery_battery.py",
-        "sha256": "b2dce85bf0d7e030727f0edbe041d0a8cc40c0082900c2b6d9a468f87faf9e52"
+        "sha256": "28afae78cf4536a605ef4c0737f069138748d94fbf0955888eef846b183e7db6"
       },
       {
         "path": "v4/cli/gc_envelope_windows.py",
@@ -15455,15 +15467,15 @@
       },
       {
         "path": "v4/go/internal/live/lifecycle_follows_source_test.go",
-        "sha256": "22ee26d3d7cb7c9065ca2d01bace6670d9410e73022b05c009a5daef21b03260"
+        "sha256": "6f5a4e7fbbf379b3ba41cb391eb922225e0647cbb10a4de9987a9ce783be7f2c"
       },
       {
         "path": "v4/go/internal/live/lifecycle_initialize.go",
-        "sha256": "66f79738cc43ee460d819834f5a6e129c2f246f5939aee1acacaecaef0ed6531"
+        "sha256": "77f17ff6fd9c809958876404450ecc05a13c42e57c7dbeadf0576335a2b7640d"
       },
       {
         "path": "v4/go/internal/live/lifecycle_reset.go",
-        "sha256": "a9a69fd5e97beb794904893e4bca878544b2f64ff696ad33ca718daaad55f46a"
+        "sha256": "3c1a73e9e401198e0c0c59f5e52b9b1723850e9355fa703f9259ad5fa500fdbe"
       },
       {
         "path": "v4/go/internal/live/lifecycle_residue.go",
@@ -15739,15 +15751,23 @@
       },
       {
         "path": "v4/go/internal/live/source_policy.go",
-        "sha256": "ffce9977569c29a732ef2610bedb70e321de5b0eb0350a9d6544f9ebe6795d07"
+        "sha256": "b73ea1236de558217256e54bb71a175092354c1fcdc2a5daa50614178288db14"
       },
       {
         "path": "v4/go/internal/live/source_policy_fifo_test.go",
         "sha256": "dd692c3431441d6202ca9425eed332220466681c54f486de7bb383365c79a09a"
       },
       {
+        "path": "v4/go/internal/live/source_policy_posix.go",
+        "sha256": "39f0bfb4036120c126606b3c0315869f2d7bcf39a8e6109da66ec6eaa3b3423a"
+      },
+      {
         "path": "v4/go/internal/live/source_policy_test.go",
         "sha256": "8e93ff1b8b98f43c8369522d10821b4ff936bc917a5d7301616736db28c35c6f"
+      },
+      {
+        "path": "v4/go/internal/live/source_policy_windows.go",
+        "sha256": "1025399cbb3184abab709e7df36f66d1363c93fa807f6b7792bf3b88ffe785ab"
       },
       {
         "path": "v4/go/internal/live/sync_file_darwin.go",
@@ -19311,7 +19331,7 @@
       },
       {
         "path": "v4/rust/iprange-livedb/src/live_lifecycle/transition.rs",
-        "sha256": "2a686dc73568c898ca11dd2cf4aa261af0138f32510122ccec70828c7984bed1"
+        "sha256": "7c35676dcc2e319deaf62aa2da8aaa0b08cae50f178fa0aa33068981ae2957fb"
       },
       {
         "path": "v4/rust/iprange-livedb/src/live_lock.rs",
@@ -19327,7 +19347,7 @@
       },
       {
         "path": "v4/rust/iprange-livedb/src/live_sidecar.rs",
-        "sha256": "4ebf8542d65a0e99d8cd432cfaf37505fcebdc2e17d8b6ebc07b4363a9a56349"
+        "sha256": "142ac153c1e809cfecb51fd47fbf6572e5c083adcd292f8e3374197505f2a63d"
       },
       {
         "path": "v4/rust/iprange-livedb/src/live_sidecar/header.rs",
@@ -20575,7 +20595,7 @@
       },
       {
         "path": "v4/rust/iprange-livedb/tests/transitions_follow_source.rs",
-        "sha256": "dcc332aebf2b04794fa3e7fb79f913e9bda92c57cccc708313e1beea2c3e038f"
+        "sha256": "10692df1582f7d509929b03daea2e8647728a424e7c11de59ff1afdf4c57054a"
       },
       {
         "path": "v4/rust/iprange-livedb/tests/v4_fixture_argv.rs",
@@ -20614,6 +20634,10 @@
         "sha256": "b8930ee025d2819005023dd8b09890d2d5025d2bb2133691cc8cb09f5a3ea320"
       },
       {
+        "path": "wiki/file-modes-and-ownership.md",
+        "sha256": "50a21a784d629956407f127f2bc0860827eec03c261280f4ed0d81f4fd15bb67"
+      },
+      {
         "path": "wiki/input-formats.md",
         "sha256": "1d86924a9169a112c518c90332408a343756ea2025c947080858891d3f386a0a"
       },
@@ -20642,10 +20666,10 @@
         "sha256": "071bc7e3b4f9620207fb6331b9a2207ad8f0145906c8987434a43456aad02c6c"
       }
     ],
-    "changed_files_note": "2422 files differ between this revision and the previously Windows-qualified revision 4b42cc0b (the span the transferred snapshot manifest covers); each is listed with the SHA-256 of the qualification-workstation copy, and the checkout is byte-identical to commit 411ba02cf3b0, proven by the equal tree object (tree hashing covers every tracked file, so the manifest measures content, the tree proves completeness). They carry the SOW-0035 creator-only work (the process switch, the zero-commitment records across GC, scratch, retire and publication, the recorded access policy), the Go DNS reply-stack reversal with its re-scoped resolver pins, the rotated Linux evidence, and the Windows test-compile fix. The engine build identity and product digests legitimately differ from the 4b42cc0b-era staged pair for exactly these source changes.",
-    "checkout": "authorized Windows validation host; the checkout is detached at the recorded revision and git status --porcelain is empty, so the tree is exactly commit 411ba02cf3b048335ef05a5067e6095e96d2c487 with no local edit. It was updated in place by a git fetch of refs/qual/w1935-snapshot from an incremental git bundle transferred from the qualification workstation over ssh (prerequisite 4b42cc0b, the previously verified snapshot this checkout was already detached at) and git checkout --detach to the recorded revision. Tree identity is proven by measurement rather than by sampling files: the checked-out tree object is 6fa48e57a6b395c34c0004e727d111c563db500f, which equals the tree of the same revision on the qualification workstation, and a git tree object hashes every tracked file, so an equal tree object is byte-identity of the whole source tree.",
-    "content_snapshot_note": "git_head is 411ba02cf3b048335ef05a5067e6095e96d2c487: the PUBLISHED master commit of the repository (78de36152a98b5179cc48e857d850c6bc5f0274b is its parent, capi native tests: name the fixture directory in the include path). There is no throwaway commit-tree snapshot here: the SOW-0035 creator-only work was committed and pushed, the Linux gate-tier battery qualified it, and this leg builds from the commit itself, transferred as an incremental git bundle on top of the previously verified snapshot. The leg is reproducible from the public commit alone; changed_files lists every file the commit adds or changes versus its parent, pinned by SHA-256, including v4/cli/evidence/** (the two Windows reports this leg re-author are rotated into that directory by a later commit; the stale copies in the checkout are inputs the leg verifies byte-identical and then replaces by transfer, never in place).",
-    "flake_history": "Scored invocation: 0 of 32 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 18 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory.",
+    "changed_files_note": "2425 files differ between this revision and the previously Windows-qualified revision 4b42cc0b (the span the transferred snapshot manifest covers); each is listed with the SHA-256 of the qualification-workstation copy, and the checkout is byte-identical to commit 6b8960d84c14, proven by the equal tree object (tree hashing covers every tracked file, so the manifest measures content, the tree proves completeness). They carry the SOW-0035 creator-only work (the process switch, the zero-commitment records across GC, scratch, retire and publication, the recorded access policy), the Go DNS reply-stack reversal with its re-scoped resolver pins, the rotated Linux evidence, and the Windows test-compile fix. The engine build identity and product digests legitimately differ from the 4b42cc0b-era staged pair for exactly these source changes.",
+    "checkout": "authorized Windows validation host; the checkout is detached at the recorded revision and git status --porcelain is empty, so the tree is exactly commit 6b8960d84c149fce40e0f392e4a4d48b41ae898f with no local edit. It was updated in place by a git fetch of refs/qual/w1935-snapshot from an incremental git bundle transferred from the qualification workstation over ssh (prerequisite 4b42cc0b, the previously verified snapshot this checkout was already detached at) and git checkout --detach to the recorded revision. Tree identity is proven by measurement rather than by sampling files: the checked-out tree object is 8424ea076c0b1d98bf77b8cdf15f7563a4d93042, which equals the tree of the same revision on the qualification workstation, and a git tree object hashes every tracked file, so an equal tree object is byte-identity of the whole source tree.",
+    "content_snapshot_note": "git_head is 6b8960d84c149fce40e0f392e4a4d48b41ae898f: the PUBLISHED master commit of the repository (2282037bd6727eed52ffff0a41b4ad3020e15207 is its parent, creator-only: the sol round-2 fix batch \u00e2\u20ac\u201d compatible transition fallback; the ledger authority threaded; the docs' contract corrected). There is no throwaway commit-tree snapshot here: the SOW-0035 creator-only work was committed and pushed, the Linux gate-tier battery qualified it, and this leg builds from the commit itself, transferred as an incremental git bundle on top of the previously verified snapshot. The leg is reproducible from the public commit alone; changed_files lists every file the commit adds or changes versus its parent, pinned by SHA-256, including v4/cli/evidence/** (the two Windows reports this leg re-author are rotated into that directory by a later commit; the stale copies in the checkout are inputs the leg verifies byte-identical and then replaces by transfer, never in place).",
+    "flake_history": "Scored invocation: 0 of 32 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 19 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory.",
     "flake_reasons": [],
     "flake_reasons_note": "Each retry the driver classified as a host process-creation failure is recorded by the driver itself, per attempt, in flake-reasons.tsv; the recognised signatures are 0xc0000142 / STATUS_DLL_INIT_FAILED / its decimal spelling appearing in the step's own log, and an exit 127 whose log is empty (the tool was never started). Neither signature turns a red step green: a step that keeps failing exhausts the 4 attempts and is reported red with its log.",
     "go_targeted_scoped": [
@@ -20658,8 +20682,8 @@
       "SCOPED:     c_dns_bookkeeping_test.go:659: dns same host twice v4: scoped, not run: the pinned bytes require the glibc numeric short-circuit, which this platform's resolver does not answer and the Rust authority therefore does not answer either; the failure shape here is pinned by TestDNSNumericFormsAreNotAnsweredHere",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v4 (0.00s)",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_two_files_one_host_each (0.00s)",
-      "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_localhost (0.01s)",
-      "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_allnodes (2.69s)",
+      "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_localhost (0.02s)",
+      "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_allnodes (2.68s)",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v4_binary (0.00s)",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_binary_header (0.00s)",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_same_host_twice_v4 (0.00s)",
@@ -20679,7 +20703,7 @@
       "logs_present": [
         "cargo-test-iprange-cli.a1.log"
       ],
-      "note": "Scored invocation: 0 of 32 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 18 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory."
+      "note": "Scored invocation: 0 of 32 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 19 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory."
     },
     "native_go_test": "GREEN. nice go test ./... -count=1 in v4/go on the native Windows host returned rc=0: 32 packages -- 24 ok, 8 with no test files, 0 failures (go-test-final.a1.log), scored with no concurrent compile running. The maintenance removal round-trip TestMaintenanceListRowsRoundTripIntoRemoveForEveryRemovableKind was run separately with -v and passed 4 of 4 PASS rows (the test plus its scratch, reservation and publication_temp subtests) with 0 failing rows (go-test-maintenance-roundtrip.a1.log). The five packages whose Windows arms the wave-19.25 maintenance work touched were each run separately with -v -count=1 and returned rc=0: go-test-internal_publication.a1.log, go-test-internal_live.a1.log, go-test-internal_cli_handlers.a1.log, go-test-internal_calleropen.a1.log, go-test-internal_worker.a1.log. The attempt history is in native_go_test_attempts.",
     "native_go_test_attempts": {
@@ -20700,7 +20724,7 @@
         "go-test-maintenance-roundtrip.GREEN.log",
         "go-test-maintenance-roundtrip.a1.log"
       ],
-      "note": "Scored invocation: 0 of 32 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 18 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory."
+      "note": "Scored invocation: 0 of 32 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 19 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory."
     },
     "native_steps": {
       "build-ids": {
@@ -20849,7 +20873,7 @@
         "scored_attempt": 1
       }
     },
-    "revision": "411ba02cf3b048335ef05a5067e6095e96d2c487",
+    "revision": "6b8960d84c149fce40e0f392e4a4d48b41ae898f",
     "rust_build_recipe_note": "The Rust products were built by the recorded canonical invocation (--release --all-features --bins --examples) from the checkout itself into the checkout's own v4/rust/target, which was moved out of the tree to the work root before this run so nothing from an earlier build could be reused; the worker was also built explicitly with --release -p iprange-livedb --bin iprange-v4-worker, and the release worker was copied beside the debug test executable so the live_source_tests pins could answer. The Go products were built CGO_ENABLED=0 GOOS=windows GOARCH=amd64 -trimpath -buildvcs=false, which is why their digests do not depend on the build tree location.",
     "rust_dns_hex_scoped_note": "legacy::dns::tests::hex_numeric_hostnames_answer_locally_where_the_authority_answers is #[cfg(unix)]: glibc answers the inet_at-style hex numeric forms locally and Windows has no such form, so the compatibility is pinned only where it exists. The step still ran natively and its own summary line is 'running 0 tests', recorded so the case reads as scoped rather than omitted. The platform-independent batching contract it used to be tangled with is pinned by multi_file_batches_drain_independently, which runs on every target on the dotted-numeric loopback.",
     "shared_self_tests": {
