@@ -61,7 +61,7 @@ func TestResetOfUnprotectedDatabaseStaysOpenable(t *testing.T) {
 	main := followsSourcePair(t, "reset")
 	createUnprotectedForTransition(t, main)
 
-	if _, err := ResetLiveCoordination(main, 3, LiveResetRollbackSafe, neverCheck); err != nil {
+	if _, err := ResetLiveCoordination(main, 3, resetPolicy(), neverCheck); err != nil {
 		t.Fatal("reset:", err)
 	}
 	// The very next open after the maintenance operation.
@@ -99,7 +99,7 @@ func TestUnprotectedModesSurviveTheTransitions(t *testing.T) {
 	main := followsSourcePair(t, "modes")
 	createUnprotectedForTransition(t, main)
 
-	if _, err := ResetLiveCoordination(main, 3, LiveResetRollbackSafe, neverCheck); err != nil {
+	if _, err := ResetLiveCoordination(main, 3, resetPolicy(), neverCheck); err != nil {
 		t.Fatal("reset:", err)
 	}
 	if mode := fileMode(t, main); mode != 0o644 {
