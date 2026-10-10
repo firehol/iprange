@@ -13,31 +13,31 @@
   "command": [
     "v4/cli/check_create_mode_shape.py",
     "--go",
-    "/tmp/opencode/iprange-sow35/battery-gate47/bin/go/iprange",
+    "/tmp/opencode/iprange-sow35/battery-gate48/bin/go/iprange",
     "--rust",
-    "/tmp/opencode/iprange-sow35/battery-gate47/bin/rust/iprange",
+    "/tmp/opencode/iprange-sow35/battery-gate48/bin/rust/iprange",
     "--work",
-    "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode",
+    "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode",
     "--json-report",
-    "/tmp/opencode/iprange-sow35/battery-gate47/reports/create-mode.json"
+    "/tmp/opencode/iprange-sow35/battery-gate48/reports/create-mode.json"
   ],
   "engines": [
     {
       "engine": "rust",
       "pass": "default pass (creator-only export temp)",
       "temp_creates": {
-        "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode/.f77b1555652d14210fc6234eaf56b054.export.tmp": [
+        "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode/.5b4aa61ed68b8d28422a8fdcba590145.export.tmp": [
           "0o600"
         ]
       },
-      "trace": "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode/trace-rust.log",
+      "trace": "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode/trace-rust.log",
       "verdict": "pass",
       "watched": {
         "temp": 1
       },
       "watched_keys": {
         "temp": [
-          "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode/.f77b1555652d14210fc6234eaf56b054.export.tmp"
+          "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode/.5b4aa61ed68b8d28422a8fdcba590145.export.tmp"
         ]
       }
     },
@@ -45,10 +45,10 @@
       "engine": "rust",
       "pass": "switched pass (creator-only main/readers/control/temp)",
       "temp_creates": {
-        "/tmp/.iprange-v4-worker-a648ff7ef40bbf58ee7c0092fbe8baca.ctl": [
+        "/tmp/.iprange-v4-worker-84fe72479b3033f1ac687566fbf38e41.ctl": [
           "0o600"
         ],
-        "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode/.6fa91b94ed1d18689b493d24da53939a.export.tmp": [
+        "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode/.fc24a99a843b925acb4c4290361f352d.export.tmp": [
           "0o600"
         ],
         "source-rust-switched.v4": [
@@ -58,7 +58,7 @@
           "0o600"
         ]
       },
-      "trace": "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode/trace-rust-switched.log",
+      "trace": "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode/trace-rust-switched.log",
       "verdict": "pass",
       "watched": {
         "control": 1,
@@ -68,7 +68,7 @@
       },
       "watched_keys": {
         "control": [
-          "/tmp/.iprange-v4-worker-a648ff7ef40bbf58ee7c0092fbe8baca.ctl"
+          "/tmp/.iprange-v4-worker-84fe72479b3033f1ac687566fbf38e41.ctl"
         ],
         "main": [
           "source-rust-switched.v4"
@@ -77,7 +77,7 @@
           "source-rust-switched.v4.readers"
         ],
         "temp": [
-          "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode/.6fa91b94ed1d18689b493d24da53939a.export.tmp"
+          "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode/.fc24a99a843b925acb4c4290361f352d.export.tmp"
         ]
       }
     },
@@ -85,18 +85,18 @@
       "engine": "go",
       "pass": "default pass (creator-only export temp)",
       "temp_creates": {
-        "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode/.ec2a21476f0e53b547b0a01043f31542.export.tmp": [
+        "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode/.2be2fa7a3098e54927a79baaeb0350d5.export.tmp": [
           "0o600"
         ]
       },
-      "trace": "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode/trace-go.log",
+      "trace": "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode/trace-go.log",
       "verdict": "pass",
       "watched": {
         "temp": 1
       },
       "watched_keys": {
         "temp": [
-          "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode/.ec2a21476f0e53b547b0a01043f31542.export.tmp"
+          "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode/.2be2fa7a3098e54927a79baaeb0350d5.export.tmp"
         ]
       }
     },
@@ -104,10 +104,10 @@
       "engine": "go",
       "pass": "switched pass (creator-only main/readers/control/temp)",
       "temp_creates": {
-        "/tmp/.iprange-v4-worker-febf4c82778b706037026f5d4cb748b7.ctl": [
+        "/tmp/.iprange-v4-worker-c0af939eada0fcb002eba98b1454501f.ctl": [
           "0o600"
         ],
-        "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode/.c543f0a367c9f56806ec7984e3465e95.export.tmp": [
+        "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode/.1315ac42c67cdc51e0833a5a00911e2d.export.tmp": [
           "0o600"
         ],
         "source-go-switched.v4": [
@@ -117,7 +117,7 @@
           "0o600"
         ]
       },
-      "trace": "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode/trace-go-switched.log",
+      "trace": "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode/trace-go-switched.log",
       "verdict": "pass",
       "watched": {
         "control": 1,
@@ -127,7 +127,7 @@
       },
       "watched_keys": {
         "control": [
-          "/tmp/.iprange-v4-worker-febf4c82778b706037026f5d4cb748b7.ctl"
+          "/tmp/.iprange-v4-worker-c0af939eada0fcb002eba98b1454501f.ctl"
         ],
         "main": [
           "source-go-switched.v4"
@@ -136,12 +136,12 @@
           "source-go-switched.v4.readers"
         ],
         "temp": [
-          "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode/.c543f0a367c9f56806ec7984e3465e95.export.tmp"
+          "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode/.1315ac42c67cdc51e0833a5a00911e2d.export.tmp"
         ]
       }
     }
   ],
-  "git_head": "c2a6deb2ee4da79c2f57942414931a0ca94a9d0c",
+  "git_head": "8b07a2436e98dad95d013e5e2c98769e76930922",
   "privacy": {
     "checked_inputs": [
       "--go",
@@ -157,15 +157,15 @@
     "command": [
       "v4/cli/check_create_mode_shape.py",
       "--go",
-      "/tmp/opencode/iprange-sow35/battery-gate47/bin/go/iprange",
+      "/tmp/opencode/iprange-sow35/battery-gate48/bin/go/iprange",
       "--rust",
-      "/tmp/opencode/iprange-sow35/battery-gate47/bin/rust/iprange",
+      "/tmp/opencode/iprange-sow35/battery-gate48/bin/rust/iprange",
       "--work",
-      "/tmp/opencode/iprange-sow35/battery-gate47/W-cmode",
+      "/tmp/opencode/iprange-sow35/battery-gate48/W-cmode",
       "--json-report",
-      "/tmp/opencode/iprange-sow35/battery-gate47/reports/create-mode.json"
+      "/tmp/opencode/iprange-sow35/battery-gate48/reports/create-mode.json"
     ],
-    "git_head": "c2a6deb2ee4da79c2f57942414931a0ca94a9d0c"
+    "git_head": "8b07a2436e98dad95d013e5e2c98769e76930922"
   },
   "schema": "iprange-cli-create-mode-report-v1",
   "verdict": "pass"
