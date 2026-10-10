@@ -14,7 +14,19 @@ import (
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/mapping"
 )
+
+// resetPolicy picks the strongest reset policy the platform supports:
+// rollback-safe needs renameat2 exchange (Linux); Windows uses
+// discard-previous. The creator-only resolution under test is the
+// same either way.
+func resetPolicy() LiveResetPolicy {
+	if mapping.ExchangeAvailable() {
+		return LiveResetRollbackSafe
+	}
+	return LiveResetDiscardPrevious
+}
 
 func followsSourcePair(t *testing.T, label string) string {
 	t.Helper()
