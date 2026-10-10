@@ -866,8 +866,10 @@ def c2w(bundle):
     # identically to clean under the arms' revert). This class builds
     # the manifest exactly as the staging will produce it (same
     # documents, same json.dump serialization, same tag-prefixed
-    # names, single-revision normalization) so the ONLY red is the
-    # entry guard on the hostile name.
+    # names, single-revision normalization) so the clause family (the
+    # entry guard + its continue-consequence) is the primary red; the
+    # normalization's guard-gate consequence is the gate-level second
+    # net (the SOW records both).
     import tempfile
     from check_kind_coverage import _canonical_digest
     tag = "C2w-manifest-byteclean-hostile-name"
