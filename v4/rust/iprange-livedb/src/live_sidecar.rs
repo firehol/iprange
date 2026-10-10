@@ -36,6 +36,84 @@ use header::{read_header_mapping, sidecar_length, write_header_mapping};
 /// immutable source has none — and any corrupt header follow the
 /// process switch, exactly like an unclassified source. This is an
 /// advisory policy read for output creation, never an access check.
+/// The transition-compatible creator-only classification for a main
+/// file whose coordination is being (re)published (initialize/reset).
+/// A readable sidecar's recorded policy governs as before; a MISSING
+/// or corrupt sidecar has no recorded choice, and the replacement must
+/// be compatible with the retained main: Protected only when the main
+/// itself already satisfies the protected contract (the transition
+/// must not silently change existing access, and recording Protected
+/// over an unprotected main locks the next live open out — the sol
+/// gate's round-2 P1).
+pub fn transition_creator_only(main: &Path) -> bool {
+    match path::sidecar_path(main) {
+        Ok(sidecar) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                if let Ok(file) = std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(&sidecar)
+                {
+                    if let (Ok(metadata), Ok((_, header))) =
+                        (file.metadata(), read_header(&file))
+                    {
+                        if metadata.is_file() {
+                            return header.policy != Policy::Unprotected;
+                        }
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                if let Ok(file) = std::fs::File::open(&sidecar) {
+                    if let (Ok(metadata), Ok((_, header))) =
+                        (file.metadata(), read_header(&file))
+                    {
+                        if metadata.is_file() {
+                            return header.policy != Policy::Unprotected;
+                        }
+                    }
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    main_satisfies_protected_contract(main)
+}
+
+/// Whether the main file's own on-disk state already satisfies the
+/// protected contract. POSIX: a regular single-linked file whose
+/// permission bits are exactly the creator mode. Windows: the DACL
+/// zero-security commitment the security module records (a main the
+/// creator-only path secured carries it; any other main does not).
+fn main_satisfies_protected_contract(main: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match std::fs::metadata(main) {
+            Ok(metadata) => {
+                metadata.is_file()
+                    && metadata.nlink() == 1
+                    && metadata.mode() & 0o7777
+                        == crate::publication::security::CREATOR_MODE
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        match std::fs::File::open(main) {
+            Ok(file) => {
+                crate::publication::security::creator_only_commitment(&file)
+                    .is_ok()
+            }
+            Err(_) => false,
+        }
+    }
+}
+
 pub fn source_creator_only(main: &Path) -> bool {
     let sidecar = match path::sidecar_path(main) {
         Ok(sidecar) => sidecar,

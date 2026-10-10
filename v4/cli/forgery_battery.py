@@ -565,11 +565,24 @@ _LEDGER = os.path.join(EVIDENCE, "..", "..", "..", ".local", "shared",
                        "binaries", "SHASUMS.txt")
 
 
+# The ledger the caller selected (--sha256-ledger), set by main()
+# before the battery runs so every mutator shares the gate's
+# authority (the sol gate's round-2 P2: the lazy loader still read
+# the hidden kit ledger even when the caller selected another).
+_SELECTED_LEDGER = None
+
+
+def set_selected_ledger(ledger_path):
+    global _SELECTED_LEDGER, _WORKER_DIGESTS
+    _SELECTED_LEDGER = ledger_path
+    _WORKER_DIGESTS = {}
+
+
 def _load_worker_digests(ledger_path=None):
     global _WORKER_DIGESTS
     if _WORKER_DIGESTS:
         return _WORKER_DIGESTS
-    source = ledger_path or _LEDGER
+    source = ledger_path or _SELECTED_LEDGER or _LEDGER
     loaded = {}
     try:
         with open(source, encoding="utf-8") as stream:
@@ -935,8 +948,9 @@ def c2w(bundle):
             if role == "matrix" and not entries:
                 entry["name"] = 7  # the hostile shape under test
             entries.append(entry)
-    ledger_path = os.path.join(EVIDENCE, "..", "..", "..", ".local",
-                               "shared", "binaries", "SHASUMS.txt")
+    ledger_path = _SELECTED_LEDGER or os.path.join(
+        EVIDENCE, "..", "..", "..", ".local", "shared", "binaries",
+        "SHASUMS.txt")
     from check_kind_coverage import _sha256_ledger, _sha256_file
     entries_map = _sha256_ledger(ledger_path)
     ledger_document = {
@@ -1523,6 +1537,8 @@ def _self_test():
 def main(argv=None):
     args = _parse_args(argv)
     ledger = args.sha256_ledger
+    if ledger:
+        set_selected_ledger(ledger)
     if ledger:
         # Resolve once, here: the battery and the gate each run under their
         # own caller's cwd, and a silently dropped ledger would weaken the

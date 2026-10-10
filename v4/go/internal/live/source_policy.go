@@ -2,6 +2,8 @@ package live
 
 import (
 	"os"
+	"runtime"
+	"syscall"
 
 	"github.com/firehol/iprange/v4/go/internal/calleropen"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
@@ -19,6 +21,76 @@ import (
 // rule) follow the process switch, exactly like an unclassified
 // source. This is an advisory policy read for output creation, never
 // an access check.
+// TransitionCreatorOnly is the transition-compatible classification
+// for a main file whose coordination is being (re)published
+// (initialize/reset). A readable sidecar's recorded policy governs as
+// in SourceCreatorOnly; a MISSING or corrupt sidecar has no recorded
+// choice, and the replacement must be compatible with the retained
+// main: Protected only when the main itself already satisfies the
+// protected contract (the transition must not silently change
+// existing access, and recording Protected over an unprotected main
+// locks the next live open out — the sol gate's round-2 P1).
+func TransitionCreatorOnly(main string) bool {
+	path, err := CanonicalSidecarPath(main)
+	if err == nil {
+		if file, err := calleropen.Open(path, os.O_RDONLY|calleropen.NonBlocking, 0); err == nil {
+			recorded, ok := func() (bool, bool) {
+				defer file.Close()
+				mapped, err := mapping.MapFile(file, sidecarPageSize, false)
+				if err != nil {
+					return false, false
+				}
+				defer mapped.Close()
+				page, err := mapped.View(0, sidecarPageSize)
+				if err != nil {
+					return false, false
+				}
+				if !headerShapeValid(page) || !headerChecksumValid(page) || !headerIdentitiesValid(page) {
+					return false, false
+				}
+				policy, err := decodePolicy(page)
+				if err != nil {
+					return false, false
+				}
+				return policy != policyUnprotected, true
+			}()
+			if ok {
+				return recorded
+			}
+		}
+	}
+	return mainSatisfiesProtectedContract(main)
+}
+
+// mainSatisfiesProtectedContract reports whether the main file's own
+// on-disk state already satisfies the protected contract. POSIX: a
+// regular single-linked file whose permission bits are exactly the
+// creator mode. Windows: the DACL zero-security commitment the
+// security module records.
+func mainSatisfiesProtectedContract(main string) bool {
+	if runtime.GOOS == "windows" {
+		file, err := os.Open(main)
+		if err != nil {
+			return false
+		}
+		defer file.Close()
+		_, err = security.CreatorOnlyCommitment(file)
+		return err == nil
+	}
+	info, err := os.Stat(main)
+	if err != nil {
+		return false
+	}
+	mode := info.Mode()
+	if !mode.IsRegular() || uint32(mode.Perm()) != security.CreatorMode {
+		return false
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		return stat.Nlink == 1
+	}
+	return false
+}
+
 func SourceCreatorOnly(main string) bool {
 	path, err := CanonicalSidecarPath(main)
 	if err != nil {

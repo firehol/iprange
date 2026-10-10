@@ -165,3 +165,63 @@ fn unprotected_modes_survive_the_transitions() {
         "the initialize must not flip an unprotected main either"
     );
 }
+
+#[test]
+fn switch_on_cannot_lock_out_an_unprotected_main() {
+    // The sol gate's round-2 P1: with IPRANGE_CREATOR_ONLY=1 and a
+    // missing sidecar, the transition must NOT record Protected over
+    // an unprotected main (the next open would demand a proof the
+    // 0644 file cannot satisfy). The compatible fallback classifies
+    // from the main's own state.
+    let files = TestPair::new("switch-on-unprotected");
+    create_unprotected(&files);
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new())
+        .unwrap();
+    writer.close().unwrap();
+    {
+        let mut name = files.main.file_name().unwrap().to_os_string();
+        name.push(".readers");
+        let _ = fs::remove_file(files.main.with_file_name(name));
+    }
+    std::env::set_var("IPRANGE_CREATOR_ONLY", "1");
+    let result = initialize_live(&files.main, 3, &CancellationToken::new()).unwrap();
+    std::env::remove_var("IPRANGE_CREATOR_ONLY");
+    assert_eq!(result.status, iprange_livedb::LiveTransitionStatus::Initialized);
+
+    let active = CancellationToken::new();
+    let mut reader = LiveReader::open(&files.main, &active).unwrap();
+    reader.close().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn switch_on_preserves_an_already_protected_main() {
+    // A main that already satisfies the protected contract (0600,
+    // single link) records Protected even with the switch off —
+    // and stays openable.
+    let files = TestPair::new("switch-on-protected");
+    create_unprotected(&files);
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new())
+        .unwrap();
+    writer.close().unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&files.main).unwrap().permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(&files.main, perms).unwrap();
+    }
+    {
+        let mut name = files.main.file_name().unwrap().to_os_string();
+        name.push(".readers");
+        let _ = fs::remove_file(files.main.with_file_name(name));
+    }
+    std::env::remove_var("IPRANGE_CREATOR_ONLY");
+    let result = initialize_live(&files.main, 3, &CancellationToken::new()).unwrap();
+    assert_eq!(result.status, iprange_livedb::LiveTransitionStatus::Initialized);
+
+    let active = CancellationToken::new();
+    let mut reader = LiveReader::open(&files.main, &active).unwrap();
+    reader.close().unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &active).unwrap();
+    writer.close().unwrap();
+}

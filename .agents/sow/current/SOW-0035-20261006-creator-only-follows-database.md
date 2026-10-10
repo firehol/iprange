@@ -372,6 +372,35 @@ Open decisions:
 
 Windows evidence leg (cleared): `windows-guard.json` and `windows-housekeeping.json` are authored at `0ae70b0a` by the native Windows leg, digest-verified on receipt, installed into `v4/cli/evidence/`, and attested by the gate-tier battery with the Windows-built products staged in the shared kit `win/` ledger. The gates that judge them ([10f], [10r], [16r], [23d]) are green; [16f] stays a designed deferral because authoring those reports is the native leg's own act.
 
+### The sol milestone gate and the fix chain (2026-10-11)
+
+- SOL ROUND 1 (gpt-6.1-sol at `386353ef`, effort xhigh): NEEDS CHANGES — two P1 product defects the loop had converged away from seeing: (1) the initialize/reset transitions hardcoded the creator-only request (a reset of an UNPROTECTED database recorded Protected; the next live open demanded the proof the 0644 file could not satisfy — a valid database locked out by its own maintenance; the lifecycle fixtures only ever created protected databases); (2) the C ABI opt-out had no detector (every committed C invocation passed 1; a !=0 → ==1 regression was invisible). Four P2s (the shared-prefix sweep deleting concurrent manifests; the module-init ledger RuntimeError breaking the standalone contract; the blocking readline the deadline could not interrupt; the Windows C-boundary tests never run) and two P3s (the transcript filter; the stale evidence README).
+- THE FIX CHAIN (`2f27ff1f`..`411ba02c` + the rotation): all four transition call sites resolve from the recorded source choice; six detectors (both engines) prove the unprotected transitions; the C fixture + Rust wrapper assert the artifact modes for 0 and 2; the manifests are per-invocation-private; the ledger is lazy; the read is selector-bounded; the Windows battery runs the C tests (the gendef/dlltool import-library generation bridging the MSVC DLL to the cygwin linker; the __CYGWIN__ path widening; the fixture-directory -I); the specs and wiki document the contract.
+- The Windows leg ran green at the fix HEAD (29 steps, the reports stamping `411ba02c`, the ledger verified 6/6) after ten attempts, each fixing exactly one first-run-on-Windows gap (the platform-aware reset policy, the committed-tree manifest, the full disk — 56 GB of prior-session debris pruned, the debug worker placement, the import library, the gendef stdout redirection, the header path, the path-kind guard).
+- The closing gate battery (gate-52): ALLDONE, 465 s, zero mismatches; the forgery verdict PASS — every class rejected on its own distinct reason, genuine evidence accepted.
+
+### Close-out validation (2026-10-10)
+
+- ACCEPTANCE CRITERIA EVIDENCE: the final gate battery (gate-51, at the rotation commit 386353ef with the Windows evidence staged) — ALLDONE rc=0, 340 s, zero mismatches. The kind gates' 133 controls executed green on their first true execution ([10r] self-test rc=0); the forgery battery's verdict is PASS ("every class rejected on its own distinct reason, genuine evidence accepted" — 45 classes); the windows verifiers green ([23d]/[23f]). The Windows native leg re-ran green at the closing HEAD (27 battery steps; the reports stamp the closing revision; the win/ ledger verified 6/6 on receipt).
+- TESTS: 51 gate-tier batteries across the loop (every log staged under .local/shared/evidence/sow0035-m1-*); the full Rust workspace and Go tree green at every qualification point; the cross-target matrix (linux/windows/freebsd/darwin, GOOS vet+build + cargo check) green through round 28.
+- REAL-USE EVIDENCE: the battery IS the realistic workflow (the CLI matrices exercise publish/export/recover/workflow paths both engines; the crash harness runs real producer/consumer processes; the create-mode gate observes real strace'd creates under both umask windows).
+- REVIEWER FINDINGS AND HANDLING: 28 review rounds, all seven roles, every round's findings dispositioned in the Execution Log (the per-round entries and the CARRIED DISPOSITIONS list). The final confirmation round (27) converged on one finding (the P9 tautology) — fixed with the source-coupled pin, probe-verified in both directions by security mid-review.
+- SAME-FAILURE SEARCHES: every fix batch's commit message records the same-failure sweep; the loop's recurring disease (the unfed check / phantom record) has its own traced history (instances #1-#10, each caught and corrected in the landing commit).
+- SENSITIVE DATA GATE: the Windows reports pass the native privacy gate (no profile spelling, nodename redacted — the leg's own step); the SOW and evidence carry no secrets (the audit gate [23c] green at every rotation).
+- THE SOL MILESTONE GATE: dispatched at the closing HEAD with the complete state (the verdict recorded below when it returns).
+- ARTIFACT MAINTENANCE:
+  - AGENTS.md: no update needed — the workflow, guardrails, and project structure are unchanged by this SOW (the v4 multi-language note already covers the engines; no new commands beyond the battery the AGENTS.md already names).
+  - Runtime project skills: no update needed — .agents/skills/project-v4-rust/SKILL.md's release-verification workflow is untouched (no release was cut); project-final-review was loaded for this close.
+  - Specs: UPDATE NEEDED — the creator-only policy is new public behavior of the engines and the C ABI gained creator_only:u8; the c-abi-v4 spec and the design spec gain the creator-only section (this commit).
+  - End-user/operator docs: UPDATE NEEDED — the wiki's mode/ownership documentation gains the creator-only subsection (this commit); the v4 CLI is not the released C tool, so the released-tool docs are unaffected.
+  - End-user/operator skills: no update needed — none exist for the v4 engines; the C tool's skills are unaffected (zero C-tool changes).
+  - SOW lifecycle: this close-out (status completed, the move to done/, the single commit).
+- SPEC UPDATE: .agents/sow/specs/c-abi-v4.md and design-iprange-engine.md gain the creator-only contract (the switch, the follows-database rule, the ABI field) in this commit.
+- SKILL UPDATE: no project-skill change required (the recorded reason: the v4-rust skill's workflow is release-verification, and no release was cut in this SOW; the loop's review-process lessons live in REVIEWS.md which this SOW does not own).
+- DOCS UPDATE: wiki/ gains the creator-only subsection (the mode/ownership model for the v4 engines) in this commit.
+- LESSONS: see Lessons Extracted (appended: the review loop's convergence mechanics — every check needs a feeder; a disposition line is written only after its edit exists; records claims are claims, execution is truth; shared temp roots need per-run identity; the battery's own guards (no-op, crash-reddens, G2/G3) caught the author's mistakes more reliably than the author did).
+- FOLLOWUP MAPPING: the Follow-up section's every item is implemented, rejected with evidence, or tracked (the live items: the windows_hold negative control — REJECTED as covered by the classifier probes across rounds 11-19 plus the standing crash-reddens net; the census-family bool sites — REJECTED as verdict-neutral aliasing with the residue recorded; the tree strays — EXECUTED at close (this session; .pi/ remains as live harness state, removal post-session); the assess_with_surfaces and crash-docstring one-liners and the fifo/parity type guards — REJECTED as not worth a SOW of their own: latent no-ops and crash-tail guards in harness code paths no current control exercises (fail-closed everywhere; the round-15+ probes verified the shapes cannot false-green); recorded here rather than mapped into a SOW that never carried them (sol round-2 P2)). SOW-0036 (the relative-path JSON-RPC finding) and SOW-0030 (the Go performance residuals) remain pending as separate SOWs.
+
 ## Outcome
 
 Pending.
@@ -405,6 +434,15 @@ the pre-close search):
 ## Lessons Extracted
 
 Pending.
+
+### Loop lessons (close-out appendix)
+
+- Every check needs a feeder: a detector no forgery class or control exercises is undetectable drift — the loop found ten instances of this one disease.
+- A disposition line is written only after its edit exists: asserting a landing without committing it produced the phantom-record class (instances #1-#10, each caught by the panel).
+- Records claims are claims; execution is truth: the panel's probes falsified more recorded statements than any single code defect did.
+- Shared temp roots need per-run identity: the bare-glob sweep and the name-pattern cleanup both touched neighbors (the r25 incidents); the fmani- prefix and the enumerated named paths are the corrections.
+- The battery's own guards (the no-op guard, crash-reddens, G2/G3 attribution) caught the author's mistakes more reliably than the author did — invest in harness self-checks before investing in more classes.
+- Never commit while a battery runs (three self-inflicted three-revision manifests); class-level verification pre-push, full-battery qualification post-push, both stated as exactly what they are.
 
 ## Followup
 

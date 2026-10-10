@@ -106,3 +106,38 @@ func TestUnprotectedModesSurviveTheTransitions(t *testing.T) {
 		t.Fatalf("main mode after reset = %#o, want 0644", mode)
 	}
 }
+
+func TestSwitchOnCannotLockOutAnUnprotectedMain(t *testing.T) {
+	// The sol gate's round-2 P1: with IPRANGE_CREATOR_ONLY=1 and a
+	// missing sidecar, the transition must NOT record Protected over
+	// an unprotected main. The compatible fallback classifies from
+	// the main's own state.
+	main := followsSourcePair(t, "switch-on")
+	createUnprotectedForTransition(t, main)
+	if err := os.Remove(main + ".readers"); err != nil {
+		t.Fatal("remove sidecar:", err)
+	}
+	t.Setenv("IPRANGE_CREATOR_ONLY", "1")
+	if _, err := InitializeLive(main, 3, neverCheck); err != nil {
+		t.Fatal("initialize:", err)
+	}
+	openLiveReaderForFollows(t, main)
+}
+
+func TestSwitchOnPreservesAnAlreadyProtectedMain(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("mode shaping is POSIX")
+	}
+	main := followsSourcePair(t, "switch-on-prot")
+	createUnprotectedForTransition(t, main)
+	if err := os.Remove(main + ".readers"); err != nil {
+		t.Fatal("remove sidecar:", err)
+	}
+	if err := os.Chmod(main, 0o600); err != nil {
+		t.Fatal("chmod:", err)
+	}
+	if _, err := InitializeLive(main, 3, neverCheck); err != nil {
+		t.Fatal("initialize:", err)
+	}
+	openLiveReaderForFollows(t, main)
+}
