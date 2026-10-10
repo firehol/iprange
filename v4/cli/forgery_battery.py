@@ -905,9 +905,11 @@ def c2w(bundle):
         for document in documents or []:
             if isinstance(document, dict):
                 document["git_head"] = single
-                provenance = document.get("build_provenance")
-                if isinstance(provenance, dict):
-                    provenance["revision"] = single
+                for provenance_key in ("build_provenance", "provenance"):
+                    provenance = document.get(provenance_key)
+                    if isinstance(provenance, dict) \
+                            and isinstance(provenance.get("revision"), str):
+                        provenance["revision"] = single
     entries = []
     for role, short, documents, indexed in slots:
         for index, document in enumerate(documents or []):
@@ -921,8 +923,19 @@ def c2w(bundle):
             if role == "matrix" and not entries:
                 entry["name"] = 7  # the hostile shape under test
             entries.append(entry)
+    ledger_path = os.path.join(EVIDENCE, "..", "..", "..", ".local",
+                               "shared", "binaries", "SHASUMS.txt")
+    from check_kind_coverage import _sha256_ledger, _sha256_file
+    entries_map = _sha256_ledger(ledger_path)
+    ledger_document = {
+        "sha256": _sha256_file(os.path.realpath(ledger_path)),
+        "entries": {digest: sorted(paths)
+                    for digest, paths in sorted(entries_map.items())},
+        "entry_count": len(entries_map),
+    }
     document = {"schema": "iprange-cli-battery-manifest-v1",
                 "git_head": single, "revisions": [single],
+                "ledger": ledger_document,
                 "reports": entries}
     with tempfile.NamedTemporaryFile(
             dir=owned_temp_root(), suffix=".json",
@@ -1193,9 +1206,23 @@ import atexit as _atexit
 _atexit.register(_forget_temp_manifests)
 
 
+def _sweep_stale_temp_manifests():
+    """Cross-process residue cleanup (operations r26): a killed run's
+    manifests survive atexit; the in-process registry cannot see them.
+    Manifests are NamedTemporaryFile-shaped (tmp*.json) in the battery-
+    owned temp root - the root is scratch, so all matches go."""
+    import glob
+    for stale in glob.glob(os.path.join(owned_temp_root(), "tmp*.json")):
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
+
+
 def _run_battery(ledger):
     """Run the positive control and every class; return the exit code."""
     _forget_temp_manifests()
+    _sweep_stale_temp_manifests()
     with tempfile.TemporaryDirectory(dir=owned_temp_root()) as work:
         # G1 + positive control: the unmutated genuine evidence must reach a
         # gate verdict before any forgery is worth judging.
