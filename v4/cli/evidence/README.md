@@ -1,12 +1,11 @@
 Every measurement report in this directory records its own provenance,
 and reading that provenance is the only way to know what a committed
-artifact measures.  The set is now a completed rotation: all nineteen
-measurement reports, `build-ids.json`, and `battery-manifest.json` carry
-`git_head` `4b42cc0b6622cb42cd501e6e2ff01a9e5887906e` — the revision
-under test — because the wave-19.27 full-tier closure battery ran
-with the work tree checked out at exactly that commit and the two
-Windows reports were authored natively on the authorized validation host
-from a fresh detached checkout of the same published commit (transferred
+artifact measures.  The set is now a completed rotation: the twenty
+measurement reports (eighteen authored by the closing gate battery at
+`git_head` `63155da49ba91152f0437493e5ddee9355e57366` — the revision
+under test — plus the two Windows reports authored natively on the
+authorized validation host at the same revision from a fresh detached
+checkout), `build-ids.json`, and `battery-manifest.json` carry that published commit (transferred
 as a complete-history git bundle; tree `00248d3dd70b1deba4cf448c3602dba265bbe9a2`
 equal to the qualification workstation's, `git status --porcelain` empty
 before and after; the one file the leg's snapshot manifest pins

@@ -512,11 +512,17 @@ def c2(bundle):
     # The provenance anchor's standing net: the binaries table swaps
     # in ledger-present worker digests. One detector — the anchor must
     # refuse them; reverting the anchor redds this class and no other.
+    digests = _load_worker_digests()
+    if set(digests) != {"rust_worker_sha", "go_worker_sha"}:
+        raise RuntimeError(
+            "C2 needs both engine worker digests; the ledger authority "
+            "resolved %r (loaded %s) — pass --sha256-ledger" %
+            (_LEDGER, sorted(digests)))
     binaries = bundle.create_mode.get("binaries") or {}
     for engine, key in (("rust", "rust_worker_sha"),
                         ("go", "go_worker_sha")):
         record = binaries.get(engine)
-        worker_sha = _WORKER_DIGESTS.get(key)
+        worker_sha = digests.get(key)
         if isinstance(record, dict) and worker_sha:
             record["sha256"] = worker_sha
 
@@ -549,31 +555,36 @@ def c2c(bundle):
             break
 
 
-# The staged binaries' worker digests, read from the kit ledger once
-# (the forgery battery runs against the same staged set the gate
-# binds).  A missing ledger is a harness defect (RuntimeError).
+# The staged binaries' worker digests, resolved LAZILY from the
+# selected ledger (the sol-gate fix: the module-init load raised
+# before argument parsing, so --help and a clean checkout's self-test
+# failed before they could report the missing kit). The C2 class fails
+# loud at RUN time when no complete authority exists.
 _WORKER_DIGESTS = {}
 _LEDGER = os.path.join(EVIDENCE, "..", "..", "..", ".local", "shared",
                        "binaries", "SHASUMS.txt")
-try:
-    with open(_LEDGER, encoding="utf-8") as _stream:
-        for _line in _stream:
-            _parts = _line.split()
-            if len(_parts) == 2 and "iprange-v4-worker" in _parts[1]:
-                _path = _parts[1]
-                if "/rust/" in _path or _path.startswith("rust/"):
-                    _WORKER_DIGESTS["rust_worker_sha"] = _parts[0]
-                elif "/go/" in _path or _path.startswith("go/"):
-                    _WORKER_DIGESTS["go_worker_sha"] = _parts[0]
-except OSError:
-    pass
-if set(_WORKER_DIGESTS) != {"rust_worker_sha", "go_worker_sha"}:
-    # A missing or one-sided ledger silently defangs one engine's
-    # foreign-digest arm — a harness defect, not a vacuous pass.
-    raise RuntimeError(
-        "C2 worker-digest loader found an incomplete ledger at %r "
-        "(loaded %s); both engine worker digests are required" %
-        (_LEDGER, sorted(_WORKER_DIGESTS)))
+
+
+def _load_worker_digests(ledger_path=None):
+    global _WORKER_DIGESTS
+    if _WORKER_DIGESTS:
+        return _WORKER_DIGESTS
+    source = ledger_path or _LEDGER
+    loaded = {}
+    try:
+        with open(source, encoding="utf-8") as stream:
+            for line in stream:
+                parts = line.split()
+                if len(parts) == 2 and "iprange-v4-worker" in parts[1]:
+                    one = parts[1]
+                    if "/rust/" in one or one.startswith("rust/"):
+                        loaded["rust_worker_sha"] = parts[0]
+                    elif "/go/" in one or one.startswith("go/"):
+                        loaded["go_worker_sha"] = parts[0]
+    except OSError:
+        pass
+    _WORKER_DIGESTS = loaded
+    return loaded
 
 
 @_forgery("C2d-create-mode-non0600-value", whole_bundle=True)
@@ -757,7 +768,7 @@ def c2q(bundle):
     document["revisions"] = [single]
     document["reports"] = 5
     with tempfile.NamedTemporaryFile(
-            dir=owned_temp_root(), prefix="fmani-", suffix=".json",
+            dir=_manifest_home(), prefix="fmani-", suffix=".json",
             delete=False, mode="w", encoding="utf-8") as stream:
         json.dump(document, stream, sort_keys=True, indent=1)
         bundle.manifest = stream.name
@@ -789,7 +800,7 @@ def c2r(bundle):
         first["name"] = 7
         document["reports"] = [first] + list(reports[1:])
     with tempfile.NamedTemporaryFile(
-            dir=owned_temp_root(), prefix="fmani-", suffix=".json",
+            dir=_manifest_home(), prefix="fmani-", suffix=".json",
             delete=False, mode="w", encoding="utf-8") as stream:
         json.dump(document, stream, sort_keys=True, indent=1)
         bundle.manifest = stream.name
@@ -830,7 +841,7 @@ def c2t(bundle):
         first["name"] = [1, 2]
         document["reports"] = [first] + list(reports[1:])
     with tempfile.NamedTemporaryFile(
-            dir=owned_temp_root(), prefix="fmani-", suffix=".json",
+            dir=_manifest_home(), prefix="fmani-", suffix=".json",
             delete=False, mode="w", encoding="utf-8") as stream:
         json.dump(document, stream, sort_keys=True, indent=1)
         bundle.manifest = stream.name
@@ -939,7 +950,7 @@ def c2w(bundle):
                 "ledger": ledger_document,
                 "reports": entries}
     with tempfile.NamedTemporaryFile(
-            dir=owned_temp_root(), prefix="fmani-", suffix=".json",
+            dir=_manifest_home(), prefix="fmani-", suffix=".json",
             delete=False, mode="w", encoding="utf-8") as stream:
         json.dump(document, stream, sort_keys=True, indent=1)
         bundle.manifest = stream.name
@@ -1195,47 +1206,46 @@ def _duplicate_groups(new_reasons):
 MANIFEST_TOKEN = "battery-manifest"
 
 
-# The temp manifests the manifest-forging classes write (owned_temp_root
-# outlives a class run; the battery unlinks them at close — the r25 leak).
+# The temp manifests the manifest-forging classes write. Each battery
+# invocation owns a PRIVATE directory under the (shared) temp root:
+# concurrent invocations cannot touch each other's files, and the
+# directory is removed at run end and process exit (the sol-gate fix
+# for the r25/r27 sweep hazard — a shared-prefix sweep deleted
+# neighbors' in-flight manifests).
+_INVOCATION_DIR = None
 _TEMP_MANIFESTS = []
 
 
+def _manifest_home():
+    """Where this invocation's forged manifests live."""
+    global _INVOCATION_DIR
+    if _INVOCATION_DIR is None:
+        _INVOCATION_DIR = tempfile.mkdtemp(
+            prefix="fmani-home-", dir=owned_temp_root())
+    return _INVOCATION_DIR
+
+
 def _forget_temp_manifests():
+    global _INVOCATION_DIR
     for manifest_path in _TEMP_MANIFESTS:
         try:
             os.remove(manifest_path)
         except OSError:
             pass
     del _TEMP_MANIFESTS[:]
+    if _INVOCATION_DIR is not None:
+        import shutil
+        shutil.rmtree(_INVOCATION_DIR, ignore_errors=True)
+        _INVOCATION_DIR = None
 
 
 import atexit as _atexit
 _atexit.register(_forget_temp_manifests)
 
 
-def _sweep_stale_temp_manifests():
-    """Cross-process residue cleanup (operations r26): a killed run's
-    manifests survive atexit; the in-process registry cannot see them.
-    The battery's own manifests carry the fmani- prefix; the glob is
-    scoped to it because the temp root is SHARED with concurrent
-    runs whose files must not be touched."""
-    import glob
-    # Scoped to the battery's own prefix (parity r27's blast-radius
-    # warning): the root is shared with concurrent runs, and a bare
-    # tmp*.json glob would delete their in-flight files (the r25
-    # shared-namespace lesson applied).
-    for stale in glob.glob(os.path.join(owned_temp_root(),
-                                        "fmani-*.json")):
-        try:
-            os.remove(stale)
-        except OSError:
-            pass
-
-
 def _run_battery(ledger):
     """Run the positive control and every class; return the exit code."""
     _forget_temp_manifests()
-    _sweep_stale_temp_manifests()
     with tempfile.TemporaryDirectory(dir=owned_temp_root()) as work:
         # G1 + positive control: the unmutated genuine evidence must reach a
         # gate verdict before any forgery is worth judging.

@@ -136,20 +136,44 @@ class TracedProduct:
         self.proc.stdin.write(
             (json.dumps(request, separators=(",", ":")) + "\n").encode())
         self.proc.stdin.flush()
+        # Bounded selector read (the sol-gate fix): a blocking
+        # readline() cannot be interrupted by the deadline — a silent
+        # or partial-frame child hung the gate indefinitely. The
+        # selector wakes on data, EOF, or the 200ms tick so the
+        # deadline always fires (the fifo surface's pattern).
+        import selectors
         deadline = time.monotonic() + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise SystemExit(f"{method} timed out after {timeout}s")
-            line = self.proc.stdout.readline()
-            if not line:
-                raise SystemExit(f"{method}: service closed stdout")
-            response = json.loads(line)
-            if response.get("id") == ident:
-                return response
-            # Notifications and unrelated ids are not expected on this
-            # quiet service; anything else is a protocol defect.
-            raise SystemExit(f"{method}: unexpected frame {response!r}")
+        selector = selectors.DefaultSelector()
+        fd = self.proc.stdout.fileno()
+        selector.register(fd, selectors.EVENT_READ)
+        buffer = b""
+        try:
+            while True:
+                index = buffer.find(b"\n")
+                if index >= 0:
+                    raw, buffer = buffer[:index + 1], buffer[index + 1:]
+                    response = json.loads(raw)
+                    if response.get("id") == ident:
+                        return response
+                    # Notifications and unrelated ids are not expected
+                    # on this quiet service; anything else is a defect.
+                    raise SystemExit(
+                        f"{method}: unexpected frame {response!r}")
+                if self.proc.poll() is not None:
+                    raise SystemExit(
+                        f"{method}: service exited without answering")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise SystemExit(
+                        f"{method} timed out after {timeout}s")
+                if selector.select(min(remaining, 0.2)):
+                    chunk = os.read(fd, 65536)
+                    if not chunk:
+                        raise SystemExit(
+                            f"{method}: service closed stdout")
+                    buffer += chunk
+        finally:
+            selector.close()
 
     def close(self):
         try:

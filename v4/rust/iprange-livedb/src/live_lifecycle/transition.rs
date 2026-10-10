@@ -64,12 +64,17 @@ pub fn initialize_live(
     )?;
     cancellation.check()?;
 
+    // The replacement sidecar follows the recorded source choice (the
+    // initialize/reset transitions rewrite coordination for an existing
+    // database; a hardcoded creator-only request would record Protected
+    // over an unprotected source and lock later live opens out — the
+    // milestone's own rule applied to its own transitions).
     let sidecar = match Sidecar::reserve(
         &main.path,
         attempt.database_id,
         attempt.sidecar_id,
         reader_capacity,
-        true,
+        crate::live_sidecar::source_creator_only(&main.path),
     ) {
         Ok(sidecar) => sidecar,
         Err(cause) => return Ok(attempt.reservation_failure(cause)),
@@ -128,7 +133,7 @@ pub fn reset_live_coordination(
         attempt.database_id,
         attempt.sidecar_id,
         reader_capacity,
-        true,
+        crate::live_sidecar::source_creator_only(&main.path),
     ) {
         Ok(sidecar) => sidecar,
         Err(cause) => return Ok(attempt.reservation_failure(cause)),

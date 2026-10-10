@@ -51,6 +51,68 @@ impl Drop for TestFiles {
     }
 }
 
+#[cfg(unix)]
+fn umask_set(mask: u32) -> u32 {
+    // Safety: umask(2) is thread-local on Linux and this test owns its
+    // thread; the previous mask returns in one call.
+    unsafe { umask_syscall(mask) }
+}
+
+#[cfg(unix)]
+fn umask_restore(mask: u32) {
+    unsafe { umask_syscall(mask) };
+}
+
+#[cfg(unix)]
+unsafe fn umask_syscall(mask: u32) -> u32 {
+    extern "C" {
+        fn umask(mask: u32) -> u32;
+    }
+    unsafe { umask(mask) }
+}
+
+#[cfg(unix)]
+fn creator_only_mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[cfg(unix)]
+#[test]
+fn native_c_creator_only_opt_out_is_observable() {
+    // The only C-boundary detector for the opt-out (the ABI spec:
+    // zero is unprotected, any other value requests the proof): the
+    // C fixture creates the same direct live database with 0 and 2;
+    // the artifact modes are the observable contract (0666&~umask vs
+    // the 0600 floor).
+    use std::os::unix::fs::PermissionsExt;
+    let files = TestFiles::new();
+    let opt_out = files.directory.join("opt-out.ipr");
+    let opt_in = files.directory.join("opt-in.ipr");
+    let executable = compile_c_fixture(&files, "abi_creator_only.c", &[]);
+    let output = run_fixture(&executable, [&opt_out, &opt_in]);
+    assert!(
+        output.status.success(),
+        "native creator-only fixture failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let previous = umask_set(0o022);
+    let out_mode = creator_only_mode_of(&opt_out);
+    let in_mode = creator_only_mode_of(&opt_in);
+    umask_restore(previous);
+    assert_eq!(
+        out_mode,
+        0o644,
+        "creator_only=0 must leave the unprotected process default (umask applied)"
+    );
+    assert_eq!(
+        in_mode,
+        0o600,
+        "creator_only=2 must request the proof (the 0600 floor)"
+    );
+}
+
 #[test]
 fn native_c_caller_exercises_the_real_shared_library() {
     let files = TestFiles::new();

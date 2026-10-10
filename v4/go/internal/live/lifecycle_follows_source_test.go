@@ -1,0 +1,96 @@
+// The initialize/reset transitions follow the recorded source choice
+// (the milestone's own rule applied to its own transitions): resetting
+// an UNPROTECTED database records Unprotected, and the next live open
+// succeeds without a creator-only proof. The hardcoded-true defect
+// (the sol milestone gate's P1) recorded Protected over an unprotected
+// source and locked later live opens out. Rust twin:
+// tests/transitions_follow_source.rs.
+package live
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
+)
+
+func followsSourcePair(t *testing.T, label string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "iprange-v4-follows-source-"+label+"-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "source.v4")
+}
+
+func createUnprotectedForTransition(t *testing.T, main string) {
+	t.Helper()
+	_, err := CreateLive(main, format.AddressFamilyIPv4,
+		format.ValueKindDirect, format.StructureKindNone,
+		[16]byte{}, 3, neverCheck, false)
+	if err != nil {
+		t.Fatal("create unprotected:", err)
+	}
+}
+
+func openLiveReaderForFollows(t *testing.T, main string) {
+	t.Helper()
+	reader, err := OpenLiveReader(main, nil)
+	if err != nil {
+		t.Fatalf("live open after the transition: %v", err)
+	}
+	reader.Close()
+}
+
+func TestResetOfUnprotectedDatabaseStaysOpenable(t *testing.T) {
+	main := followsSourcePair(t, "reset")
+	createUnprotectedForTransition(t, main)
+
+	if _, err := ResetLiveCoordination(main, 3, LiveResetRollbackSafe, neverCheck); err != nil {
+		t.Fatal("reset:", err)
+	}
+	// The very next open after the maintenance operation.
+	openLiveReaderForFollows(t, main)
+}
+
+func TestInitializeOfUnprotectedImmutableSourceStaysOpenable(t *testing.T) {
+	main := followsSourcePair(t, "init")
+	createUnprotectedForTransition(t, main)
+	// The immutable shape: the sidecar absent (the transition's own
+	// fixture pattern).
+	if err := os.Remove(main + ".readers"); err != nil {
+		t.Fatal("remove sidecar:", err)
+	}
+
+	if _, err := InitializeLive(main, 3, neverCheck); err != nil {
+		t.Fatal("initialize:", err)
+	}
+	openLiveReaderForFollows(t, main)
+}
+
+func fileMode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode().Perm()
+}
+
+func TestUnprotectedModesSurviveTheTransitions(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("mode assertions are POSIX")
+	}
+	main := followsSourcePair(t, "modes")
+	createUnprotectedForTransition(t, main)
+
+	if _, err := ResetLiveCoordination(main, 3, LiveResetRollbackSafe, neverCheck); err != nil {
+		t.Fatal("reset:", err)
+	}
+	if mode := fileMode(t, main); mode != 0o644 {
+		t.Fatalf("main mode after reset = %#o, want 0644", mode)
+	}
+}

@@ -1,0 +1,167 @@
+//! The initialize/reset transitions follow the recorded source choice
+//! (the milestone's own rule applied to its own transitions): resetting
+//! an UNPROTECTED database records Unprotected, and the next live open
+//! succeeds without a creator-only proof. The hardcoded-true defect
+//! (the sol milestone gate's P1) recorded Protected over an
+//! unprotected source and locked later live opens out.
+#![cfg(any(target_os = "linux", target_vendor = "apple", target_os = "windows"))]
+
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use iprange_livedb::{
+    create_live, initialize_live, reset_live_coordination, AddressFamily,
+    CancellationToken, LiveReader, LiveResetPolicy, LiveWriter,
+    TransactionBudget, ValueKind, ValueTag,
+};
+
+fn budget() -> TransactionBudget {
+    TransactionBudget {
+        max_heap_bytes: 2 * 1024 * 1024,
+        max_private_pages: 1_000,
+        max_file_growth_pages: 1_000,
+        max_open_files: 2,
+    }
+}
+
+struct TestPair {
+    main: PathBuf,
+}
+
+impl TestPair {
+    fn new(label: &str) -> Self {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        Self {
+            main: std::env::temp_dir().join(format!(
+                "iprange-v4-follows-source-{label}-{}-{unique}",
+                std::process::id()
+            )),
+        }
+    }
+}
+
+impl Drop for TestPair {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.main);
+        let mut name = self.main.file_name().unwrap().to_os_string();
+        name.push(".readers");
+        let _ = fs::remove_file(self.main.with_file_name(name));
+    }
+}
+
+fn create_unprotected(files: &TestPair) {
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        iprange_livedb::StructureKind::None,
+        ValueTag::new(b"asn").unwrap(),
+        3,
+        &CancellationToken::new(),
+        false,
+    )
+    .unwrap();
+}
+
+#[cfg(unix)]
+fn mode_of(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[test]
+fn reset_of_unprotected_database_stays_openable() {
+    // The reset transition rewrites coordination for an existing
+    // UNPROTECTED live database; the replacement sidecar must record
+    // Unprotected, and a later live open (which demands the proof only
+    // for Protected sources) must succeed.
+    let files = TestPair::new("reset-unprotected");
+    create_unprotected(&files);
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new())
+        .unwrap();
+    writer.close().unwrap();
+
+    let active = CancellationToken::new();
+    let mut reader = LiveReader::open(&files.main, &active).unwrap();
+    reader.close().unwrap();
+    reset_live_coordination(
+        &files.main,
+        3,
+        LiveResetPolicy::RollbackSafe,
+        &CancellationToken::new(),
+    )
+        .unwrap();
+
+    // The very next open after the maintenance operation.
+    let mut reader = LiveReader::open(&files.main, &active).unwrap();
+    reader.close().unwrap();
+    let mut writer =
+        LiveWriter::open(&files.main, budget(), &active).unwrap();
+    writer.close().unwrap();
+}
+
+#[test]
+fn initialize_of_unprotected_immutable_source_stays_openable() {
+    let files = TestPair::new("initialize-unprotected");
+    create_unprotected(&files);
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new())
+        .unwrap();
+    writer.close().unwrap();
+    // The immutable shape (the sidecar absent — the transition's own
+    // fixture pattern), then the initialize transition: the result
+    // must open live without a creator-only proof.
+    {
+        let mut name = files.main.file_name().unwrap().to_os_string();
+        name.push(".readers");
+        let _ = fs::remove_file(files.main.with_file_name(name));
+    }
+    initialize_live(&files.main, 3, &CancellationToken::new()).unwrap();
+
+    let active = CancellationToken::new();
+    let mut reader = LiveReader::open(&files.main, &active).unwrap();
+    reader.close().unwrap();
+    let mut writer =
+        LiveWriter::open(&files.main, budget(), &active).unwrap();
+    writer.close().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn unprotected_modes_survive_the_transitions() {
+    // The process-switch fallback shape: an unprotected source under
+    // umask 022 keeps group/other read through both transitions.
+    let files = TestPair::new("modes-survive");
+    create_unprotected(&files);
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new())
+        .unwrap();
+    writer.close().unwrap();
+
+    reset_live_coordination(
+        &files.main,
+        3,
+        LiveResetPolicy::RollbackSafe,
+        &CancellationToken::new(),
+    )
+        .unwrap();
+    let mode = mode_of(&files.main);
+    assert_eq!(
+        mode, 0o644,
+        "the reset must not flip an unprotected main to a protected mode"
+    );
+
+    {
+        let mut name = files.main.file_name().unwrap().to_os_string();
+        name.push(".readers");
+        let _ = fs::remove_file(files.main.with_file_name(name));
+    }
+    initialize_live(&files.main, 3, &CancellationToken::new()).unwrap();
+    let mode = mode_of(&files.main);
+    assert_eq!(
+        mode, 0o644,
+        "the initialize must not flip an unprotected main either"
+    );
+}

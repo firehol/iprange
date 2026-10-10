@@ -152,7 +152,11 @@ func InitializeLive(path string, readerCapacity uint32, check func() error) (*Li
 	if err := checkpoint(check); err != nil {
 		return nil, err
 	}
-	sidecar, failure := reserve(main.path, attempt.databaseID, attempt.sidecarID, readerCapacity, true)
+	// The replacement sidecar follows the recorded source choice (a
+	// hardcoded creator-only request would record Protected over an
+	// unprotected source and lock later live opens out).
+	creatorOnly := SourceCreatorOnly(main.path)
+	sidecar, failure := reserve(main.path, attempt.databaseID, attempt.sidecarID, readerCapacity, creatorOnly)
 	if failure != nil {
 		return attempt.reservationFailure(*failure), nil
 	}

@@ -29,8 +29,9 @@ entry() {  # entry <heading> <cwd> <command...>
     echo "GENERATOR-REFUSED: rc=$rc — this entry is NOT attestable" >&2
     exit 1
   fi
-  if ! echo "$out" | rg -q "^test |^--- |^ok |^PASS |^self-test "; then
-    echo "GENERATOR-REFUSED: no named results — this entry is NOT attestable" >&2
+  if ! echo "$out" | rg -q "^--- |^test result: ok" \
+          || echo "$out" | rg -q "no tests to run"; then
+    echo "GENERATOR-REFUSED: no executed named results — this entry is NOT attestable" >&2
     exit 1
   fi
   echo
@@ -73,7 +74,7 @@ entry "Go control-file mode twin" \
   "$REPO/v4/go" env GOFLAGS=-buildvcs=false go test -count=1 -v -run TestCreateParentModeIndependentOfUmask ./internal/worker/
 
 entry "Go creator-only flag twins (main+readers exact 0666; switch default)" \
-  "$REPO/v4/go" env GOFLAGS=-buildvcs=false go test -count=1 -v -run "TestCreatorOnly" .
+  "$REPO/v4/go" env GOFLAGS=-buildvcs=false go test -count=1 -v -run "TestCreatorOnly|TestUnprotectedCreateSkipsProofEvenAtMode0600" .
 
 entry "Rust creator-only flag twins (main+readers exact 0666; switch default)" \
   "$REPO" nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-livedb --offline --test creator_only_flag -v
