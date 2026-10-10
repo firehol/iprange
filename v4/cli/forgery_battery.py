@@ -1112,7 +1112,7 @@ def _run_gate(work_dir, bundle, tag, ledger):
         # rebuilt suffix let identical baseline texts compare unequal
         # across branches — the label channel credited a baseline-
         # shared reason as an own reason (the 9bc0eb7e false catch).
-        tokens.append((bundle.manifest, "battery-manifest"))
+        tokens.append((bundle.manifest, MANIFEST_TOKEN))
     else:
         # The manifest speaks the gate's role names; the sandbox speaks the
         # battery's short names.  One mapping, in one place.
@@ -1135,7 +1135,7 @@ def _run_gate(work_dir, bundle, tag, ledger):
         manifest_path = os.path.join(work_dir, f"{tag}-manifest.json")
         with open(manifest_path, "w", encoding="utf-8") as stream:
             json.dump(document, stream, sort_keys=True, indent=1)
-        tokens.append((manifest_path, "battery-manifest"))
+        tokens.append((manifest_path, MANIFEST_TOKEN))
         paths["battery-manifest"] = [manifest_path]
     command = _gate_command(paths, ledger)
     rc, stdout, stderr = _invoke_gate(command)
@@ -1186,6 +1186,12 @@ def _duplicate_groups(new_reasons):
         if reasons:
             by_reasons.setdefault(reasons, []).append(label)
     return [group for group in by_reasons.values() if len(group) > 1]
+
+
+# The single manifest comparison token (tester r27 R27-F1): both
+# _run_gate branches append THIS constant — a literal at either site
+# reopens the masquerade channel silently. P9 pins the coupling.
+MANIFEST_TOKEN = "battery-manifest"
 
 
 # The temp manifests the manifest-forging classes write (owned_temp_root
@@ -1330,26 +1336,32 @@ def _run_battery(ledger):
 def _label_channel_self_test():
     """P9: the committed/rebuilt token split cannot reopen silently.
 
-    Identical problem texts naming the committed vs a rebuilt manifest
-    must normalize to the SAME comparison key (the r25 masquerade
-    died on this); a split token makes them compare unequal and
-    credits baseline reasons as own reasons.
+    Both _run_gate branches must append the ONE module-level
+    MANIFEST_TOKEN — a literal at either site (the pre-r25 shape)
+    makes identical baseline texts normalize to different keys and
+    credits baseline reasons as own reasons (the 9bc0eb7e false
+    catch). A copy of the comparison (two hardcoded literals) is
+    statically true and detects nothing; this pin reads the SOURCE
+    and asserts the coupling itself (tester r27 R27-F1).
     """
-    committed = os.path.join("evidence", "battery-manifest.json")
-    rebuilt = os.path.join("work", "f0-baseline-manifest.json")
-    text = "battery-manifest {}: no single revision covers the battery"
-    tokens = [(committed, "battery-manifest"), (rebuilt, "battery-manifest")]
-    keys = set()
-    for path, token in tokens:
-        problem = text.format(path)
-        for candidate_path, candidate_token in tokens:
-            if candidate_path in problem or candidate_path == path:
-                normalized = problem.replace(path, "<" + token + ">")
-                keys.add(normalized)
-                break
-    assert len(keys) == 1, (
-        "the label channel reopened: identical manifest texts normalize "
-        "to %d different keys" % len(keys))
+    with open(__file__, encoding="utf-8") as stream:
+        # Scan only the code BEFORE this pin (its own detection list
+        # carries the literals it hunts).
+        source = stream.read().split("def _label_channel_self_test")[0]
+    coupling = source.count("tokens.append((bundle.manifest, "
+                            "MANIFEST_TOKEN))")
+    rebuilding = source.count("tokens.append((manifest_path, "
+                              "MANIFEST_TOKEN))")
+    assert coupling == 1 and rebuilding == 1, (
+        "the manifest token coupling drifted: the committed branch has "
+        "%d MANIFEST_TOKEN references (want 1) and the rebuilt branch "
+        "%d (want 1) — a literal at either site reopens the label "
+        "channel" % (coupling, rebuilding))
+    for literal in ('"battery-manifest#', "'battery-manifest#",
+                    '"battery-manifest"))', "'battery-manifest'))"):
+        assert literal not in source, (
+            "a hardcoded manifest token literal reopens the label "
+            "channel: %r" % literal)
 
 
 def _self_test():
