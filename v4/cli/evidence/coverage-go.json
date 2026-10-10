@@ -3,56 +3,56 @@
  "command": [
   "v4/cli/coverage_harness.py",
   "--work",
-  "/tmp/opencode/iprange-sow35/battery-gate51/W-cov",
+  "/tmp/opencode/iprange-sow35/battery-gate52/W-cov",
   "--rust",
-  "/tmp/opencode/iprange-sow35/battery-gate51/bin/rust/iprange",
+  "/tmp/opencode/iprange-sow35/battery-gate52/bin/rust/iprange",
   "--fixture-tool",
-  "/tmp/opencode/iprange-sow35/battery-gate51/bin/rust/v4-fixture",
+  "/tmp/opencode/iprange-sow35/battery-gate52/bin/rust/v4-fixture",
   "--json-report",
-  "/tmp/opencode/iprange-sow35/battery-gate51/reports/coverage-go.json"
+  "/tmp/opencode/iprange-sow35/battery-gate52/reports/coverage-go.json"
  ],
  "coverage_dirs": [
-  "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/cov-unit",
-  "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/cov-integration"
+  "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/cov-unit",
+  "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/cov-integration"
  ],
- "elapsed_seconds": 68.62,
- "git_head": "63155da49ba91152f0437493e5ddee9355e57366",
+ "elapsed_seconds": 119.71,
+ "git_head": "411ba02cf3b048335ef05a5067e6095e96d2c487",
  "instrumented_binaries": {
   "iprange": {
    "covermode": "atomic",
    "instrumented": true,
-   "path": "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/bin/iprange",
-   "sha256": "fea349c0498935a1b64e1b0e989e7b90d0503eb76fc505b405a3997ce1613c07"
+   "path": "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/bin/iprange",
+   "sha256": "78ff0f6aa004624bcc8d3d0080ddeaece967ef1af671c1dfe46fc2041987eb40"
   },
   "iprange-v4-worker": {
    "covermode": "atomic",
    "instrumented": true,
-   "path": "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/bin/iprange-v4-worker",
-   "sha256": "f220246d75ea482a50fb0695c3e4993fa520dde440c141ab6bab23efd23bb2d0"
+   "path": "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/bin/iprange-v4-worker",
+   "sha256": "5e32893a20f5b0e0f24862663c3594b5c087d8407d822240f33260db951c9eaa"
   }
  },
  "integration": {
   "cover_files": 204,
   "measured": {
    "blocks": 39928,
-   "blocks_covered": 15273,
-   "covered_functions": 3539,
-   "covered_statements": 22961,
+   "blocks_covered": 15256,
+   "covered_functions": 3536,
+   "covered_statements": 22941,
    "functions": 5793,
-   "statements": 54298
+   "statements": 54300
   },
   "percent": {
-   "blocks": 38.25,
-   "functions": 61.09,
+   "blocks": 38.21,
+   "functions": 61.04,
    "measured": {
     "blocks": 39928,
-    "blocks_covered": 15273,
-    "covered_functions": 3539,
-    "covered_statements": 22961,
+    "blocks_covered": 15256,
+    "covered_functions": 3536,
+    "covered_statements": 22941,
     "functions": 5793,
-    "statements": 54298
+    "statements": 54300
    },
-   "statements": 42.29
+   "statements": 42.25
   },
   "runs": [
    {
@@ -60,17 +60,17 @@
      "/usr/bin/python3.14",
      "v4/cli/run.py",
      "--go",
-     "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/bin/iprange",
+     "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/bin/iprange",
      "--rust",
-     "/tmp/opencode/iprange-sow35/battery-gate51/bin/rust/iprange",
+     "/tmp/opencode/iprange-sow35/battery-gate52/bin/rust/iprange",
      "--fixture-tool",
-     "/tmp/opencode/iprange-sow35/battery-gate51/bin/rust/v4-fixture",
+     "/tmp/opencode/iprange-sow35/battery-gate52/bin/rust/v4-fixture",
      "--matrix",
      "go",
      "--work-dir",
-     "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/matrix-go",
+     "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/matrix-go",
      "--json-report",
-     "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/coverage-matrix-go.json"
+     "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/coverage-matrix-go.json"
     ],
     "failed": 0,
     "matrix": "go",
@@ -83,17 +83,17 @@
      "/usr/bin/python3.14",
      "v4/cli/run.py",
      "--go",
-     "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/bin/iprange",
+     "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/bin/iprange",
      "--rust",
-     "/tmp/opencode/iprange-sow35/battery-gate51/bin/rust/iprange",
+     "/tmp/opencode/iprange-sow35/battery-gate52/bin/rust/iprange",
      "--fixture-tool",
-     "/tmp/opencode/iprange-sow35/battery-gate51/bin/rust/v4-fixture",
+     "/tmp/opencode/iprange-sow35/battery-gate52/bin/rust/v4-fixture",
      "--matrix",
      "rust_to_go",
      "--work-dir",
-     "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/matrix-rust_to_go",
+     "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/matrix-rust_to_go",
      "--json-report",
-     "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/coverage-matrix-rust_to_go.json"
+     "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/coverage-matrix-rust_to_go.json"
     ],
     "failed": 0,
     "matrix": "rust_to_go",
@@ -106,17 +106,17 @@
      "/usr/bin/python3.14",
      "v4/cli/run.py",
      "--go",
-     "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/bin/iprange",
+     "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/bin/iprange",
      "--rust",
-     "/tmp/opencode/iprange-sow35/battery-gate51/bin/rust/iprange",
+     "/tmp/opencode/iprange-sow35/battery-gate52/bin/rust/iprange",
      "--fixture-tool",
-     "/tmp/opencode/iprange-sow35/battery-gate51/bin/rust/v4-fixture",
+     "/tmp/opencode/iprange-sow35/battery-gate52/bin/rust/v4-fixture",
      "--matrix",
      "go_to_rust",
      "--work-dir",
-     "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/matrix-go_to_rust",
+     "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/matrix-go_to_rust",
      "--json-report",
-     "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/coverage-matrix-go_to_rust.json"
+     "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/coverage-matrix-go_to_rust.json"
     ],
     "failed": 0,
     "matrix": "go_to_rust",
@@ -126,28 +126,28 @@
    }
   ]
  },
- "measured_git_head": "63155da49ba91152f0437493e5ddee9355e57366",
+ "measured_git_head": "411ba02cf3b048335ef05a5067e6095e96d2c487",
  "merged": {
   "measured": {
    "blocks": 42265,
-   "blocks_covered": 23792,
+   "blocks_covered": 23793,
    "covered_functions": 4889,
-   "covered_statements": 35246,
+   "covered_statements": 35249,
    "functions": 6006,
-   "statements": 57729
+   "statements": 57731
   },
   "percent": {
    "blocks": 56.29,
    "functions": 81.4,
    "measured": {
     "blocks": 42265,
-    "blocks_covered": 23792,
+    "blocks_covered": 23793,
     "covered_functions": 4889,
-    "covered_statements": 35246,
+    "covered_statements": 35249,
     "functions": 6006,
-    "statements": 57729
+    "statements": 57731
    },
-   "statements": 61.05
+   "statements": 61.06
   }
  },
  "module": "github.com/firehol/iprange/v4/go",
@@ -225,14 +225,14 @@
    "statements_total": 160
   },
   "github.com/firehol/iprange/v4/go/internal/calleropen": {
-   "block_percent": 45.95,
+   "block_percent": 46.85,
    "blocks": 111,
-   "blocks_covered": 51,
+   "blocks_covered": 52,
    "covered_functions": 13,
-   "covered_statements": 76,
+   "covered_statements": 77,
    "function_percent": 61.9,
    "functions": 21,
-   "statement_percent": 44.44,
+   "statement_percent": 45.03,
    "statements": 171,
    "statements_total": 171
   },
@@ -325,12 +325,12 @@
    "blocks": 2720,
    "blocks_covered": 1468,
    "covered_functions": 332,
-   "covered_statements": 1990,
+   "covered_statements": 1992,
    "function_percent": 76.5,
    "functions": 434,
-   "statement_percent": 57.58,
-   "statements": 3456,
-   "statements_total": 3456
+   "statement_percent": 57.61,
+   "statements": 3458,
+   "statements_total": 3458
   },
   "github.com/firehol/iprange/v4/go/internal/mapping": {
    "block_percent": 59.91,
@@ -549,8 +549,8 @@
   "mode": "working-tree",
   "v4_tree": "v4"
  },
- "staged_tree": "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/v4",
- "staging": "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/bin",
+ "staged_tree": "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/v4",
+ "staging": "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/bin",
  "toolchain": {
   "covdata": "go tool covdata",
   "go_version": "go version go1.27.0 linux/amd64"
@@ -565,31 +565,31 @@
    "-covermode=atomic",
    "...",
    "-args",
-   "-test.gocoverdir=/tmp/opencode/iprange-sow35/battery-gate51/W-cov/cov-unit"
+   "-test.gocoverdir=/tmp/opencode/iprange-sow35/battery-gate52/W-cov/cov-unit"
   ],
   "cover_files": 50,
-  "coverdir": "/tmp/opencode/iprange-sow35/battery-gate51/W-cov/cov-unit",
+  "coverdir": "/tmp/opencode/iprange-sow35/battery-gate52/W-cov/cov-unit",
   "covermode": "atomic",
   "measured": {
    "blocks": 42258,
-   "blocks_covered": 19310,
-   "covered_functions": 3947,
-   "covered_statements": 28397,
+   "blocks_covered": 19352,
+   "covered_functions": 3952,
+   "covered_statements": 28458,
    "functions": 6005,
-   "statements": 57717
+   "statements": 57719
   },
   "percent": {
-   "blocks": 45.7,
-   "functions": 65.73,
+   "blocks": 45.79,
+   "functions": 65.81,
    "measured": {
     "blocks": 42258,
-    "blocks_covered": 19310,
-    "covered_functions": 3947,
-    "covered_statements": 28397,
+    "blocks_covered": 19352,
+    "covered_functions": 3952,
+    "covered_statements": 28458,
     "functions": 6005,
-    "statements": 57717
+    "statements": 57719
    },
-   "statements": 49.2
+   "statements": 49.3
   },
   "rc": 0
  }
