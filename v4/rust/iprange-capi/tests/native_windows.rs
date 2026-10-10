@@ -67,6 +67,11 @@ fn compile_c(work: &Path, source_name: &str) -> PathBuf {
         .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
         .arg("-I")
         .arg(include)
+        // The fixtures' shared support header sits beside the sources;
+        // the cygwin gcc's quote-include search does not resolve the
+        // mixed-separator absolute source directory, so name it.
+        .arg("-I")
+        .arg(source.parent().unwrap())
         .arg(source)
         .arg(&import_library)
         .arg("-Wl,--no-undefined")
