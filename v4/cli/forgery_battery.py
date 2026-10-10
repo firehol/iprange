@@ -1215,8 +1215,9 @@ _atexit.register(_forget_temp_manifests)
 def _sweep_stale_temp_manifests():
     """Cross-process residue cleanup (operations r26): a killed run's
     manifests survive atexit; the in-process registry cannot see them.
-    Manifests are NamedTemporaryFile-shaped (tmp*.json) in the battery-
-    owned temp root - the root is scratch, so all matches go."""
+    The battery's own manifests carry the fmani- prefix; the glob is
+    scoped to it because the temp root is SHARED with concurrent
+    runs whose files must not be touched."""
     import glob
     # Scoped to the battery's own prefix (parity r27's blast-radius
     # warning): the root is shared with concurrent runs, and a bare
