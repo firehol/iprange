@@ -1363,6 +1363,7 @@ def _self_test():
     process rather than a mock.  P4 to P7 are pure cases for the verdict and
     reason comparison, and P8 proves the G2 comparison discriminates.
     """
+    _label_channel_self_test()
     def expect_harness_error(action, needle, case):
         try:
             action()
