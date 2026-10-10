@@ -142,7 +142,11 @@ static inline int selftest_decode_utf8_to_utf16(void)
 static inline iprange_v4_abi1_path path_from(const char *path)
 {
     iprange_v4_abi1_path value = {0};
-#if defined(_WIN32)
+    /* The ABI's platform is the DLL's, not the C runtime's: a cygwin
+     * build of the fixture still talks to a native Windows library,
+     * so it must widen the path the same way (_WIN32 alone is not
+     * defined under the cygwin gcc). */
+#if defined(_WIN32) || defined(__CYGWIN__)
     /* The Windows ABI refuses POSIX path kinds, so a caller that only
      * passes bytes cannot reach any fixture.  Decode strictly and
      * reject loudly: a wrong wide path would open the wrong file or
