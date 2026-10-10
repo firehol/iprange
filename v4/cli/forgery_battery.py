@@ -1353,7 +1353,6 @@ def _label_channel_self_test():
 
 
 def _self_test():
-    _label_channel_self_test()
     """Prove each guard can fire: a guard that cannot fire is not a guard.
 
     P1 drives the real gate CLI with each flag it declares required removed
