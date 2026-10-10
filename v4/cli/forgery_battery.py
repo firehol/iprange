@@ -246,7 +246,7 @@ FORGERIES = []
 # class guards the create-mode axis's pass-set enforcement: a report whose
 # switched pass is deleted reverts the round-8 identity layer while every
 # standing suite stays green, so the forgery class is the standing net.
-EXPECTED_CLASSES = 44
+EXPECTED_CLASSES = 45
 
 
 def _forgery(label, whole_bundle=False):
@@ -856,6 +856,78 @@ def c2v(bundle):
     if isinstance(document, dict) \
             and isinstance(document.get("method"), dict):
         document["method"]["burst_frames"] = True
+
+
+@_forgery("C2w-manifest-byteclean-hostile-name", whole_bundle=True)
+def c2w(bundle):
+    # The entry guards' ISOLATING feeder (parity r26 zprobe: the bytes
+    # lattice is a battery-construction artifact, not a net — a byte-
+    # clean manifest with a hostile name on a MATRIX entry is judged
+    # identically to clean under the arms' revert). This class builds
+    # the manifest exactly as the staging will produce it (same
+    # documents, same json.dump serialization, same tag-prefixed
+    # names, single-revision normalization) so the ONLY red is the
+    # entry guard on the hostile name.
+    import tempfile
+    from check_kind_coverage import _canonical_digest
+    tag = "C2w-manifest-byteclean-hostile-name"
+    slots = [
+        ("matrix", "m", bundle.matrices, True),
+        ("crash", "crash", [bundle.crash], False),
+        ("crash-negative", "crash-negative", bundle.negatives, True),
+        ("fifo-surface", "fifo", [bundle.fifo], False),
+        ("create-mode", "create_mode", [bundle.create_mode], False),
+        ("throughput", "throughput", [bundle.throughput], False),
+        ("refusal-class-parity", "parity", [bundle.parity], False),
+        ("coverage-go", "coverage", [bundle.coverage], False),
+        ("windows-housekeeping", "windows", [bundle.windows], False),
+        ("windows-guard", "guard", [bundle.guard], False),
+        ("resource", "resource", [bundle.resource], False),
+        ("golden", "golden", [bundle.golden], False),
+        ("sensitivity", "sensitivity", [bundle.sensitivity], False),
+        ("guard-posix", "posix_guard", [bundle.posix_guard], False),
+        ("race-battery", "race", [bundle.race], False),
+    ]
+    # Normalize the whole bundle to one revision (the W7 shape): the
+    # two-revision hold state otherwise forces per-entry git_head
+    # mismatches no manifest can avoid.
+    single = bundle.matrices[0].get("git_head")
+    for documents in (bundle.matrices, [bundle.crash],
+                      bundle.negatives, [bundle.fifo],
+                      [bundle.create_mode], [bundle.throughput],
+                      [bundle.parity], [bundle.coverage],
+                      [bundle.windows], [bundle.guard],
+                      [bundle.resource], [bundle.golden],
+                      [bundle.sensitivity], [bundle.posix_guard],
+                      [bundle.race]):
+        for document in documents or []:
+            if isinstance(document, dict):
+                document["git_head"] = single
+                provenance = document.get("build_provenance")
+                if isinstance(provenance, dict):
+                    provenance["revision"] = single
+    entries = []
+    for role, short, documents, indexed in slots:
+        for index, document in enumerate(documents or []):
+            suffix = str(index) if indexed else ""
+            name = f"{tag}-{short}{suffix}.json"
+            rendered = json.dumps(document)
+            entry = {"role": role, "name": name,
+                     "content_sha256": _canonical_digest(document),
+                     "git_head": single,
+                     "bytes": len(rendered.encode("utf-8"))}
+            if role == "matrix" and not entries:
+                entry["name"] = 7  # the hostile shape under test
+            entries.append(entry)
+    document = {"schema": "iprange-cli-battery-manifest-v1",
+                "git_head": single, "revisions": [single],
+                "reports": entries}
+    with tempfile.NamedTemporaryFile(
+            dir=owned_temp_root(), suffix=".json",
+            delete=False, mode="w", encoding="utf-8") as stream:
+        json.dump(document, stream, sort_keys=True, indent=1)
+        bundle.manifest = stream.name
+        _TEMP_MANIFESTS.append(stream.name)
 
 
 @_forgery("C1-create-mode-switched-pass-deleted", whole_bundle=True)
