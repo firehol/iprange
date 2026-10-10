@@ -85,7 +85,6 @@ fn native_c_creator_only_opt_out_is_observable() {
     // C fixture creates the same direct live database with 0 and 2;
     // the artifact modes are the observable contract (0666&~umask vs
     // the 0600 floor).
-    use std::os::unix::fs::PermissionsExt;
     let files = TestFiles::new();
     let opt_out = files.directory.join("opt-out.ipr");
     let opt_in = files.directory.join("opt-in.ipr");
