@@ -706,17 +706,52 @@ func exportNamesOf(declaration string) ([]string, bool) {
 	return nil, name == ""
 }
 
+// stripBlockComments removes /* ... */ sequences (nested, as Rust
+// lexes them) from the whole source, leaving a space: a block comment
+// between keywords is ordinary whitespace (sol round-11 P2 — "pub
+// /* note */ use" bypassed every prefix check). An unterminated block
+// comment leaves a trailing "/*" marker in the text, which the walker
+// then reports as unhandled: fail closed, never silent.
+func stripBlockComments(source string) string {
+	var out strings.Builder
+	depth := 0
+	for i := 0; i < len(source); i++ {
+		if i+1 < len(source) && source[i] == '/' && source[i+1] == '*' {
+			depth++
+			i++
+			if depth == 1 {
+				out.WriteByte(' ')
+			}
+			continue
+		}
+		if depth > 0 {
+			if i+1 < len(source) && source[i] == '*' && source[i+1] == '/' {
+				depth--
+				i++
+			}
+			continue
+		}
+		out.WriteByte(source[i])
+	}
+	if depth > 0 {
+		out.WriteString(" /*")
+	}
+	return out.String()
+}
+
 // exportNamesIn walks the COMPLETE export declarations of a lib.rs
-// source. Line comments are stripped first — a trailing ``// note``
-// must not glue two declarations into one chunk (sol round-9 P2) —
-// and the text is chunked on every semicolon, so a commented export
-// and the declaration after it, or two declarations sharing one
-// physical line, are each examined on their own. Any chunk that does
-// not itself start with ``pub use``/``pub mod`` but contains one
-// anyway is reported as unhandled (an export glued inside a larger
-// chunk), as is any export declaration whose syntax the walker cannot
-// parse: the gate fails closed instead of silently skipping.
+// source. Block comments are removed first (they are lexical
+// whitespace), then line comments are stripped — a trailing ``// note``
+// must not glue two declarations into one chunk — and the text is
+// chunked on every semicolon, so a commented export and the
+// declaration after it, or two declarations sharing one physical
+// line, are each examined on their own. Any chunk that does not
+// itself start with ``pub use``/``pub mod`` but contains one anyway is
+// reported as unhandled (an export glued inside a larger chunk), as
+// is any export declaration whose syntax the walker cannot parse: the
+// gate fails closed instead of silently skipping.
 func exportNamesIn(source string) (names, unhandled []string) {
+	source = stripBlockComments(source)
 	var pending strings.Builder
 	flush := func(chunk string) {
 		// Whitespace normalization first: Rust keywords may be
@@ -725,6 +760,13 @@ func exportNamesIn(source string) (names, unhandled []string) {
 		// prefix check), and export names never contain significant
 		// spaces beyond the " as " alias separator this walker parses.
 		chunk = strings.Join(strings.Fields(chunk), " ")
+		// A comment remnant the lexer could not balance (an
+		// unterminated block comment leaves "/*"; a stray "*/" means
+		// text survived stripping that was never code): fail closed.
+		if strings.Contains(chunk, "/*") || strings.Contains(chunk, "*/") {
+			unhandled = append(unhandled, chunk)
+			return
+		}
 		// Leading attributes (#[doc(hidden)], #[path = "..."]) belong
 		// to the declaration they precede: strip them, bracket-matched,
 		// before the export-prefix check. An unterminated attribute is
@@ -881,6 +923,16 @@ func TestGroupedExportDeclarationsYieldTheirNames(t *testing.T) {
 	tabs, unhandled := exportNamesIn("pub\tuse epsilon::{four, five};\npub\tmod\ttabbed;")
 	if len(unhandled) != 0 || len(tabs) != 3 || tabs[0] != "four" || tabs[1] != "five" || tabs[2] != "tabbed" {
 		t.Fatalf("tab-spelled exports yielded %v (unhandled %v)", tabs, unhandled)
+	}
+	// A block comment is lexical whitespace (sol round-11 P2), nested
+	// per the Rust Reference, and may span lines.
+	blocked, unhandled := exportNamesIn(strings.Join([]string{
+		"pub /* audit */ use zeta::{six, seven};",
+		"pub /* multi",
+		"line, nested /* inner */ still */ use eta::eight;",
+	}, "\n"))
+	if len(unhandled) != 0 || len(blocked) != 3 || blocked[0] != "six" || blocked[1] != "seven" || blocked[2] != "eight" {
+		t.Fatalf("block-comment exports yielded %v (unhandled %v)", blocked, unhandled)
 	}
 }
 
