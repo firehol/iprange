@@ -648,13 +648,13 @@ var rustSourceExportsRecorded = map[string]bool{
 
 // exportNamesOf extracts every public name one COMPLETE lib.rs export
 // declaration publishes and reports whether the declaration's syntax
-// was handled. Single-line declarations carry one path; grouped
-// re-exports (``pub use path::{a, b as c};``) carry one name per group
-// member, the alias when ``as`` renames it. Wildcard stars and braces
-// without a closing brace are unhandled — the caller fails closed on
-// them instead of skipping (sol rounds 7-8: both the grouped and the
-// multiline grouped shapes escaped a scan that looked at physical
-// lines only).
+// was handled. A grouped re-export (``pub use path::{a, b as c}``)
+// carries one name per group member, the alias when ``as`` renames it.
+// Wildcard stars and braces without a closing brace are unhandled —
+// the caller fails closed on them instead of skipping. The caller
+// passes declarations WITHOUT their terminating semicolon (it chunks
+// on semicolons); inline ``pub mod`` blocks carrying braces are
+// unhandled for the same reason.
 func exportNamesOf(declaration string) ([]string, bool) {
 	declaration = strings.TrimSpace(declaration)
 	var prefix string
@@ -666,9 +666,6 @@ func exportNamesOf(declaration string) ([]string, bool) {
 	default:
 		return nil, true // not an export declaration; nothing to extract
 	}
-	if !strings.HasSuffix(declaration, ";") {
-		return nil, false
-	}
 	single := func(name string) string {
 		if space := strings.LastIndex(name, " "); space >= 0 {
 			name = name[space+1:]
@@ -679,6 +676,9 @@ func exportNamesOf(declaration string) ([]string, bool) {
 		return name
 	}
 	if open := strings.Index(declaration, "{"); open >= 0 {
+		if strings.HasPrefix(declaration, "pub mod ") {
+			return nil, false // an inline module block is not an export group
+		}
 		close := strings.LastIndex(declaration, "}")
 		if close < open {
 			return nil, false
@@ -699,7 +699,7 @@ func exportNamesOf(declaration string) ([]string, bool) {
 		}
 		return names, true
 	}
-	name := single(strings.TrimSuffix(strings.TrimPrefix(declaration, prefix), ";"))
+	name := single(strings.TrimSpace(strings.TrimPrefix(declaration, prefix)))
 	if name != "" && name != "*" {
 		return []string{name}, true
 	}
@@ -707,42 +707,89 @@ func exportNamesOf(declaration string) ([]string, bool) {
 }
 
 // exportNamesIn walks the COMPLETE export declarations of a lib.rs
-// source: a declaration spans lines until its terminating semicolon
-// (the repository's own formatting uses multiline groups), and any
-// export declaration whose syntax the walker cannot parse is returned
-// in unhandled so the gate fails closed instead of silently skipping
-// it (sol round-8 P2: the single-line scan let multiline groups
-// escape).
+// source. Line comments are stripped first — a trailing ``// note``
+// must not glue two declarations into one chunk (sol round-9 P2) —
+// and the text is chunked on every semicolon, so a commented export
+// and the declaration after it, or two declarations sharing one
+// physical line, are each examined on their own. Any chunk that does
+// not itself start with ``pub use``/``pub mod`` but contains one
+// anyway is reported as unhandled (an export glued inside a larger
+// chunk), as is any export declaration whose syntax the walker cannot
+// parse: the gate fails closed instead of silently skipping.
 func exportNamesIn(source string) (names, unhandled []string) {
-	var declaration string
-	flush := func() {
-		if declaration == "" {
+	var pending strings.Builder
+	flush := func(chunk string) {
+		chunk = strings.TrimSpace(chunk)
+		// Leading attributes (#[doc(hidden)], #[path = "..."]) belong
+		// to the declaration they precede: strip them, bracket-matched,
+		// before the export-prefix check. An unterminated attribute is
+		// unhandled, not silence.
+		for strings.HasPrefix(chunk, "#[") {
+			depth, end := 0, -1
+			for i := 0; i < len(chunk); i++ {
+				switch chunk[i] {
+				case '[':
+					depth++
+				case ']':
+					depth--
+					if depth == 0 {
+						end = i
+					}
+				}
+				if end >= 0 {
+					break
+				}
+			}
+			if end < 0 {
+				unhandled = append(unhandled, chunk)
+				return
+			}
+			chunk = strings.TrimSpace(chunk[end+1:])
+		}
+		if chunk == "" {
 			return
 		}
-		if found, ok := exportNamesOf(declaration); ok {
+		exportPrefix := strings.HasPrefix(chunk, "pub use ") ||
+			strings.HasPrefix(chunk, "pub mod ")
+		glued := !exportPrefix &&
+			(strings.Contains(chunk, "pub use ") || strings.Contains(chunk, "pub mod "))
+		if glued {
+			unhandled = append(unhandled, chunk)
+			return
+		}
+		found, ok := exportNamesOf(chunk)
+		if ok {
 			names = append(names, found...)
 		} else {
-			unhandled = append(unhandled, declaration)
+			unhandled = append(unhandled, chunk)
 		}
-		declaration = ""
 	}
 	for _, line := range strings.Split(source, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if declaration != "" {
-			declaration += " " + trimmed
-			if strings.HasSuffix(trimmed, ";") {
-				flush()
-			}
+		if slash := strings.Index(line, "//"); slash >= 0 {
+			line = line[:slash]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "pub use ") || strings.HasPrefix(trimmed, "pub mod ") {
-			declaration = trimmed
-			if strings.HasSuffix(trimmed, ";") {
-				flush()
+		if pending.Len() > 0 {
+			pending.WriteString(" ")
+		}
+		pending.WriteString(line)
+		for {
+			text := pending.String()
+			semicolon := strings.Index(text, ";")
+			if semicolon < 0 {
+				break
 			}
+			flush(text[:semicolon])
+			pending.Reset()
+			pending.WriteString(strings.TrimSpace(text[semicolon+1:]))
 		}
 	}
-	flush() // an unterminated declaration is unhandled syntax, not silence
+	if rest := strings.TrimSpace(pending.String()); rest != "" {
+		unhandled = append(unhandled, rest) // unterminated: fail closed
+	}
 	return names, unhandled
 }
 
@@ -788,6 +835,41 @@ func TestGroupedExportDeclarationsYieldTheirNames(t *testing.T) {
 	}
 	if got, _ := exportNamesIn("pub use path::name;"); len(got) != 1 || got[0] != "name" {
 		t.Fatalf("single export yielded %v, want [name]", got)
+	}
+	// sol round-9 P2: a trailing line comment must not glue the export
+	// to the declaration after it, and two declarations sharing one
+	// physical line must each be examined.
+	commented, unhandled := exportNamesIn(strings.Join([]string{
+		"pub use alpha::observer; // observer",
+		"pub use error::{Error, ErrorCode, Result}; // authority",
+	}, "\n"))
+	if len(unhandled) != 0 {
+		t.Fatalf("commented exports must be handled, got unhandled %v", unhandled)
+	}
+	wantCommented := []string{"observer", "Error", "ErrorCode", "Result"}
+	if len(commented) != len(wantCommented) {
+		t.Fatalf("commented exports yielded %v, want %v", commented, wantCommented)
+	}
+	for i := range wantCommented {
+		if commented[i] != wantCommented[i] {
+			t.Fatalf("commented exports yielded %v, want %v", commented, wantCommented)
+		}
+	}
+	shared, unhandled := exportNamesIn("pub use beta::one; pub use gamma::two;")
+	if len(unhandled) != 0 || len(shared) != 2 || shared[0] != "one" || shared[1] != "two" {
+		t.Fatalf("two declarations on one line yielded %v (unhandled %v)", shared, unhandled)
+	}
+	// Attributed declarations (the walker found two in the real source
+	// on its first fail-closed run): the attribute belongs to the
+	// declaration it precedes.
+	attributed, unhandled := exportNamesIn(strings.Join([]string{
+		"#[doc(hidden)]",
+		"pub mod c_abi_support;",
+		"#[cfg(all(unix, feature = \"x\"))]",
+		"pub use delta::three;",
+	}, "\n"))
+	if len(unhandled) != 0 || len(attributed) != 2 || attributed[0] != "c_abi_support" || attributed[1] != "three" {
+		t.Fatalf("attributed exports yielded %v (unhandled %v)", attributed, unhandled)
 	}
 }
 
