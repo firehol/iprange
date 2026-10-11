@@ -5,8 +5,8 @@
 Status: in-progress
 
 Sub-state: final external-gate iteration. All 28 internal review rounds
-converged; the sol milestone gate is at rounds 6-13 fixed (round 14
-dispatched at the rotation).
+converged; the sol milestone gate is at rounds 6-14 fixed (round 15
+pending after the leg re-stamp and the one-stamp closing battery).
 
 ## Requirements
 
@@ -380,6 +380,8 @@ Windows evidence leg (cleared): `windows-guard.json` and `windows-housekeeping.j
 - THE FIX CHAIN (`2f27ff1f`..`411ba02c` + the rotation): all four transition call sites resolve from the recorded source choice; six detectors (both engines) prove the unprotected transitions; the C fixture + Rust wrapper assert the artifact modes for 0 and 2; the manifests are per-invocation-private; the ledger is lazy; the read is selector-bounded; the Windows battery runs the C tests (the gendef/dlltool import-library generation bridging the MSVC DLL to the cygwin linker; the __CYGWIN__ path widening; the fixture-directory -I); the specs and wiki document the contract.
 - The Windows leg ran green at the fix HEAD (29 steps, the reports stamping `411ba02c`, the ledger verified 6/6) after ten attempts, each fixing exactly one first-run-on-Windows gap (the platform-aware reset policy, the committed-tree manifest, the full disk — 56 GB of prior-session debris pruned, the debug worker placement, the import library, the gendef stdout redirection, the header path, the path-kind guard).
 - The closing gate battery (gate-52): ALLDONE, 465 s, zero mismatches; the forgery verdict PASS — every class rejected on its own distinct reason, genuine evidence accepted.
+- SOL ROUND 14 (gpt-6.1-sol at `3bf2c8cd`, effort xhigh, continuation): NEEDS CHANGES — the round-13 fixes verified fixed; one P2:
+  - P2 recognized_public_items_swallow_later_exports — VERIFIED and FIXED (this batch): the round-13 public-item fast path accepted the first name of a COMBINED chunk and returned, so a forwarding fn's brace body chunked together with the declarations after it concealed them (a use group or an unrecorded struct). The walker now counts public-declaration markers per chunk (use/mod/fn/struct/enum/trait/const/static/type/unsafe) and refuses any chunk with more than one marker — or one marker not at the start — WHOLE, before any name is accepted. The detector covers the fn-body+export, fn+struct, and group+module combinations with terminating semicolons and spaced parens; an attached-paren fn name is refused too (fail closed rather than guessing). Mutation-verified with the finding's exact scenario: the forwarding-fn chunk fails closed as unhandled naming the combined declaration.
 - SOL ROUND 13 (gpt-6.1-sol at `6762f912`, effort xhigh, continuation): NEEDS CHANGES — the round-12 lexer verified fixed; two P2s and one P3:
   - P2 literal_boundaries_still_erase_real_exports — VERIFIED and FIXED (this batch): character literals (`'"'`) whose quote must not open a string, raw strings (`r"..."`/`r#"..."#`, no escape interpretation), and byte strings/chars are now lexed with their own rules; lifetimes stay code (an apostrophe that does not close a short literal). The first draft of the raw-string fix had an off-by-one that re-processed the closing quote as code — caught by the round-13 detector BEFORE commit and fixed (`i` lands on the close's last character).
   - P2 unsupported_public_items_are_silently_accepted — VERIFIED and FIXED (this batch): top-level `pub <keyword>` items (fn/struct/enum/trait/const/static/type, with `pub unsafe` variants) now contribute their declared name to the inventory check (type annotations and generics trimmed); an unrecognized `pub`-prefixed chunk fails closed as unhandled; `pub(crate)`/`pub(super)`/`pub(in ...)` visibility passes as non-export code. A semicolon-free pub-fn body extends its chunk into following items — that glued shape is unhandled BY DESIGN (fail closed until the walker is extended), recorded in the detector.

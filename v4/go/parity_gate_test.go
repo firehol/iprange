@@ -893,6 +893,14 @@ func stripLexicalNoise(source string) string {
 	return out.String()
 }
 
+// publicMarkers are the top-level public-declaration keywords the
+// walker recognizes; "pub unsafe" is listed separately because it
+// never introduces an item on its own.
+var publicMarkers = []string{
+	"pub use ", "pub mod ", "pub fn ", "pub struct ", "pub enum ",
+	"pub trait ", "pub const ", "pub static ", "pub type ", "pub unsafe ",
+}
+
 // exportNamesIn walks the COMPLETE export declarations of a lib.rs
 // source. Block comments are removed first (they are lexical
 // whitespace), then line comments are stripped — a trailing ``// note``
@@ -952,6 +960,26 @@ func exportNamesIn(source string) (names, unhandled []string) {
 		}
 		exportPrefix := strings.HasPrefix(chunk, "pub use ") ||
 			strings.HasPrefix(chunk, "pub mod ")
+		// A chunk may carry exactly ONE public declaration. Semicolon
+		// chunking cannot split brace-delimited items, so a forwarding
+		// function body followed by an export group, or a function
+		// followed by a struct, arrives as one chunk (sol round-14
+		// P2): accepting the first name would conceal the rest, so any
+		// chunk with more than one public marker — or one marker not
+		// at the start — is refused whole, before any name is
+		// accepted.
+		markerCount := 0
+		leading := false
+		for _, marker := range publicMarkers {
+			markerCount += strings.Count(chunk, marker)
+			if strings.HasPrefix(chunk, marker) {
+				leading = true
+			}
+		}
+		if markerCount > 1 || (markerCount == 1 && !leading) {
+			unhandled = append(unhandled, chunk)
+			return
+		}
 		// Any other top-level `pub <keyword>` item is part of the
 		// crate's public surface too (sol round-13 P2: a pub struct
 		// passed silently). Recognized item keywords contribute their
@@ -969,12 +997,6 @@ func exportNamesIn(source string) (names, unhandled []string) {
 				strings.HasPrefix(chunk, "pub(in ") {
 				return // crate-local visibility: not a public export
 			}
-			unhandled = append(unhandled, chunk)
-			return
-		}
-		glued := !exportPrefix &&
-			(strings.Contains(chunk, "pub use ") || strings.Contains(chunk, "pub mod "))
-		if glued {
 			unhandled = append(unhandled, chunk)
 			return
 		}
@@ -1168,9 +1190,24 @@ func TestGroupedExportDeclarationsYieldTheirNames(t *testing.T) {
 	if _, unhandled := exportNamesIn("pub opaque Widget;"); len(unhandled) != 1 {
 		t.Fatalf("an unrecognized pub item must be unhandled, got %v", unhandled)
 	}
-	glued, unhandled := exportNamesIn("pub fn creator_only_requested() -> bool { true }\npub(crate) fn helper() {}\n")
+	glued, unhandled := exportNamesIn(strings.Join([]string{
+		// sol round-14 P2: a forwarding function's brace body chunks
+		// together with the declarations that follow it (terminating
+		// semicolons present, whitespace before the parens) — the
+		// combined chunk must be refused whole, never partially
+		// accepted for its first public name.
+		"pub fn creator_only_requested () -> bool { publication::security::creator_only_requested() } pub use epsilon::{four, five};",
+	}, "\n"))
 	if len(glued) != 0 || len(unhandled) != 1 {
-		t.Fatalf("a semicolon-free pub fn body must glue and fail closed, got names %v unhandled %v", glued, unhandled)
+		t.Fatalf("a combined fn-body+export chunk must be refused, got names %v unhandled %v", glued, unhandled)
+	}
+	afterFn, unhandled := exportNamesIn("pub fn one() -> bool { true } pub struct After;")
+	if len(afterFn) != 0 || len(unhandled) != 1 {
+		t.Fatalf("a fn followed by a struct must be refused, got %v %v", afterFn, unhandled)
+	}
+	groupPlus, unhandled := exportNamesIn("pub use path::{x} pub mod more;")
+	if len(groupPlus) != 0 || len(unhandled) != 1 {
+		t.Fatalf("an export group followed by a module must be refused, got %v %v", groupPlus, unhandled)
 	}
 	if only, unhandled := exportNamesIn("pub(crate) mod internal;\n"); len(unhandled) != 0 || len(only) != 0 {
 		t.Fatalf("crate-local visibility must pass as ordinary code, got %v %v", only, unhandled)
