@@ -2,11 +2,11 @@
 
 ## Status
 
-Status: in-progress
+Status: completed
 
-Sub-state: final external-gate iteration. All 28 internal review rounds
-converged; the sol milestone gate is at rounds 6-14 fixed (round 15
-dispatched at the rotation).
+Sub-state: closed. The sol milestone gate ran 15 rounds; rounds 6-14
+fixed, round 15's two test-side P2s accepted as residuals by user
+decision B and mapped to the pending SOW-0037.
 
 ## Requirements
 
@@ -380,6 +380,9 @@ Windows evidence leg (cleared): `windows-guard.json` and `windows-housekeeping.j
 - THE FIX CHAIN (`2f27ff1f`..`411ba02c` + the rotation): all four transition call sites resolve from the recorded source choice; six detectors (both engines) prove the unprotected transitions; the C fixture + Rust wrapper assert the artifact modes for 0 and 2; the manifests are per-invocation-private; the ledger is lazy; the read is selector-bounded; the Windows battery runs the C tests (the gendef/dlltool import-library generation bridging the MSVC DLL to the cygwin linker; the __CYGWIN__ path widening; the fixture-directory -I); the specs and wiki document the contract.
 - The Windows leg ran green at the fix HEAD (29 steps, the reports stamping `411ba02c`, the ledger verified 6/6) after ten attempts, each fixing exactly one first-run-on-Windows gap (the platform-aware reset policy, the committed-tree manifest, the full disk — 56 GB of prior-session debris pruned, the debug worker placement, the import library, the gendef stdout redirection, the header path, the path-kind guard).
 - The closing gate battery (gate-52): ALLDONE, 465 s, zero mismatches; the forgery verdict PASS — every class rejected on its own distinct reason, genuine evidence accepted.
+- SOL ROUND 15 (gpt-6.1-sol at `1e7754b3`, effort xhigh, continuation): NEEDS CHANGES — the round-14 combined-chunk refusal verified fixed; two P2s and one P3:
+  - P2 async_public_items_bypass_surface_gate (`pub async fn` — the async keyword is not in the recognized marker list) and P2 macro_export_visibility_discarded (`#[macro_export] macro_rules!` — the visibility-bearing attribute is stripped before inventory). ACCEPTED AS RESIDUALS by user decision B (2026-10-11): after seven consecutive gate-test-only rounds (rounds 9-15, each hardening one lexical class of the parity walker while the engine, product, and records stayed qualified — gate-77 all gates rc=0, the forgery positive control ACCEPTED, one stamp, 323/0), the user closed the SOW over these two findings rather than continue iterating a hand-written Rust lexer by review. The residuals live in a TEST-SIDE scanner only; the engine surface it guards is additionally pinned by the Rust-side suites and the frozen inventory; SOW-0037 (pending) retires the whole class by replacing lexing with authoritative enumeration. The standing user constraint is honored: no more testing-framework machinery.
+  - P3 stale status.md body — the kit status was refreshed at close; kit-internal, not committed.
 - SOL ROUND 14 (gpt-6.1-sol at `3bf2c8cd`, effort xhigh, continuation): NEEDS CHANGES — the round-13 fixes verified fixed; one P2:
   - P2 recognized_public_items_swallow_later_exports — VERIFIED and FIXED (this batch): the round-13 public-item fast path accepted the first name of a COMBINED chunk and returned, so a forwarding fn's brace body chunked together with the declarations after it concealed them (a use group or an unrecorded struct). The walker now counts public-declaration markers per chunk (use/mod/fn/struct/enum/trait/const/static/type/unsafe) and refuses any chunk with more than one marker — or one marker not at the start — WHOLE, before any name is accepted. The detector covers the fn-body+export, fn+struct, and group+module combinations with terminating semicolons and spaced parens; an attached-paren fn name is refused too (fail closed rather than guessing). Mutation-verified with the finding's exact scenario: the forwarding-fn chunk fails closed as unhandled naming the combined declaration.
 - SOL ROUND 13 (gpt-6.1-sol at `6762f912`, effort xhigh, continuation): NEEDS CHANGES — the round-12 lexer verified fixed; two P2s and one P3:
@@ -429,7 +432,7 @@ Windows evidence leg (cleared): `windows-guard.json` and `windows-housekeeping.j
 - REVIEWER FINDINGS AND HANDLING: 28 review rounds, all seven roles, every round's findings dispositioned in the Execution Log (the per-round entries and the CARRIED DISPOSITIONS list). The final confirmation round (27) converged on one finding (the P9 tautology) — fixed with the source-coupled pin, probe-verified in both directions by security mid-review.
 - SAME-FAILURE SEARCHES: every fix batch's commit message records the same-failure sweep; the loop's recurring disease (the unfed check / phantom record) has its own traced history (instances #1-#10, each caught and corrected in the landing commit).
 - SENSITIVE DATA GATE: the Windows reports pass the native privacy gate (no profile spelling, nodename redacted — the leg's own step); the SOW and evidence carry no secrets (the audit gate [23c] green at every rotation).
-- THE SOL MILESTONE GATE: dispatched at the closing HEAD with the complete state (the verdict recorded below when it returns).
+- THE SOL MILESTONE GATE: 15 rounds (rounds 1-5 in the prior session, rounds 6-15 in the closing session after the server move, per REVIEWS.md continuity). Every product, engine, and records finding of every round was fixed with a detecting test and verified — round 1's two product P1s (the unprotected-database lockout; the missing C-ABI opt-out detector), round 6's output-ACL P1, round 7's platform-neutral proof P1, round 8's composed structural proof P1, round 10's records-truthfulness P2 (the correction of record and the line-verification discipline). Rounds 9-15 were confined to the parity walker's lexical coverage (test tooling); round 15's two P2s are ACCEPTED RESIDUALS by user decision B, mapped to the pending SOW-0037 — the engine, product, and evidence records stand qualified at the final rotation (gate-77: all gates rc=0, the forgery positive control ACCEPTED, VERDICT PASS, 323 steps, 0 mismatches, one stamp, the Windows reports re-stamped at the fix HEAD each round).
 - ARTIFACT MAINTENANCE:
   - AGENTS.md: no update needed — the workflow, guardrails, and project structure are unchanged by this SOW (the v4 multi-language note already covers the engines; no new commands beyond the battery the AGENTS.md already names).
   - Runtime project skills: no update needed — .agents/skills/project-v4-rust/SKILL.md's release-verification workflow is untouched (no release was cut); project-final-review was loaded for this close.
@@ -445,9 +448,36 @@ Windows evidence leg (cleared): `windows-guard.json` and `windows-housekeeping.j
 
 ## Outcome
 
-Pending.
+Delivered: creator-only follows the database everywhere — five product
+creates that forced creator-only now resolve from the recorded source
+choice (the initialize/reset transitions included), the C ABI carries
+creator_only:u8 with its opt-out detected, every artifact the engines
+create follows the source's recorded policy with the full security
+authority (mode, ACL/DACL, single-link proof) on both engines and both
+platforms, and the qualification apparatus (gate battery, Windows
+native leg, forgery battery, parity gate) rotates truthful,
+digest-bound evidence. The sol milestone gate ran 15 rounds; all
+product findings are fixed with detecting tests, and the two remaining
+residuals are test-tooling escapes accepted by user decision and
+mapped to SOW-0037. The user's scope decisions (hostile-null disabled
+by default; toolchain version-identity provenance; the committed
+ledger authority) are implemented and recorded.
 
 ## Follow-up
+
+Final mapping at close (user decision B, 2026-10-11):
+
+- The two round-15 parity-walker residuals (async public items;
+  macro_export visibility) — TRACKED: pending SOW-0037 (authoritative
+  export enumeration), which retires the whole lexical-scanner class.
+- SOW-0036 (bare-relative JSON-RPC inputs) — pending, separately
+  sequenced by the user.
+- SOW-0030 (Go performance residuals) — pending.
+- SOW-0017 (authenticated public snapshots, Phase 2) — paused, resumes
+  when scheduled.
+- The items below this mapping were dispositioned in the 2026-10-10
+  close-out validation (each implemented, rejected with evidence, or
+  tracked as named) and remain the historical record of that sweep.
 
 Tracked for the gate-close sweep (named-path removals, grep-visible by
 the pre-close search):
@@ -485,6 +515,17 @@ Pending.
 - Shared temp roots need per-run identity: the bare-glob sweep and the name-pattern cleanup both touched neighbors (the r25 incidents); the fmani- prefix and the enumerated named paths are the corrections.
 - The battery's own guards (the no-op guard, crash-reddens, G2/G3 attribution) caught the author's mistakes more reliably than the author did — invest in harness self-checks before investing in more classes.
 - Never commit while a battery runs (three self-inflicted three-revision manifests); class-level verification pre-push, full-battery qualification post-push, both stated as exactly what they are.
+- A review loop that finds one lexical class per round in a test-side
+  scanner is iterating a hand-written lexer, not reviewing the product:
+  the user closed it at round 15 and mapped the class to an
+  authoritative-enumeration SOW rather than continue.
+- Read the deferral lines, not the ALLDONE banner: a deferred step can
+  carry rc=1 (the round-10 records defect; the line-verification
+  discipline is the correction).
+- Environment restorations and scope decisions belong in the record
+  with their reasoning — the hostile-null disable and the
+  version-identity provenance each removed an entire class of
+  workstation dependency instead of accommodating it.
 
 ## Followup
 
