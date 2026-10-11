@@ -95,6 +95,8 @@ if _HERE not in sys.path:
 
 from check_refusal_class_parity import (  # noqa: E402  (same-directory sibling)
     PRESSURE_HOSTILE_CLASSES,
+    HOSTILE_NULL_ENABLED,
+    HOSTILE_NULL_DISABLED_WHY,
     IMMUTABLE_FEED_BUDGET,
     RESULT_BUDGET,
     TEXT_INPUT,
@@ -851,6 +853,15 @@ def run_cell(engine, bins, ctx, hold_path, arm, band, hold, runtime,
     cell = {"arm": arm, "engine": engine, "band": band, "hold": hold,
             "runtime": runtime, "null_device": null_state,
             "cell": f"{engine}/{arm}/b{band}/h{hold}/{runtime}/{null_state}"}
+    if null_state != "normal" and not HOSTILE_NULL_ENABLED:
+        # Same rule as the two preclusions below: an environment this
+        # launcher cannot build is host state, never a refusal and never
+        # coverage. The disable is a recorded user decision, not a
+        # capability probe -- the code path is retained and re-enabled
+        # by the environment variable named in the reason.
+        cell.update(verdict=HOST_UNSUPPORTED, exit=None,
+                    why=HOSTILE_NULL_DISABLED_WHY)
+        return cell
     if stdio_in_use + hold > band:
         # Section 13.2: with hold = 3 the bands at or below 5 cannot supply
         # the launcher's own held count, so no engine runs there. Host state,
@@ -1210,6 +1221,8 @@ def _report(records, args, failed):
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as out:
             json.dump({"schema": "iprange-fd-pressure-grid-v1",
+                       "hostile_null": ("enabled" if HOSTILE_NULL_ENABLED
+                                        else HOSTILE_NULL_DISABLED_WHY),
                        "cells": records, "failed": failed}, out, indent=1)
     summary = {}
     for rec in records:

@@ -652,6 +652,24 @@ PRESSURE_RUNTIMES = ("before", "after")
 PRESSURE_HOSTILE_NULL = ("fifo", "absent")
 PRESSURE_GENEROUS_BAND = 64
 
+# The hostile-null cells substitute /dev/null inside a private mount
+# namespace (``unshare -rm``). Hosts that deny unprivileged user
+# namespaces (Ubuntu 24.04's default AppArmor restriction) cannot build
+# that environment, and the failure surfaces as bogus engine wedges.
+# DISABLED by default (user decision 2026-10-11): the launcher, the
+# grading, and the pinned law are retained untouched; this gate does not
+# sweep the hostile profiles while disabled (their pins stay in the
+# table), the fd-pressure harness records each hostile cell as
+# host-unsupported with this reason, and IPRANGE_HOSTILE_NULL=1
+# re-enables the real path on a permitting host.
+HOSTILE_NULL_ENABLED = os.environ.get("IPRANGE_HOSTILE_NULL", "") == "1"
+HOSTILE_NULL_DISABLED_WHY = (
+    "hostile-null cells disabled (user decision 2026-10-11): the "
+    "/dev/null substitution needs unprivileged user namespaces, which "
+    "restricted hosts deny; set IPRANGE_HOSTILE_NULL=1 on a permitting "
+    "host to re-enable"
+)
+
 PRESSURE_SUCCESS = ("RESULT", "RESULT")
 
 # The band at which the reader.open/reader.close warm-up that establishes the
@@ -817,15 +835,44 @@ def _build_pressure_profiles():
     return tuple(profiles[name] for name in sorted(profiles))
 
 
-PRESSURE_PROFILES = _build_pressure_profiles()
+# The LAW set always carries the hostile profiles: the pinned table below
+# is derived from it, and a disabled cell's pin is law without an
+# execution (user decision 2026-10-11 -- disabled, retained, re-enabled
+# by IPRANGE_HOSTILE_NULL=1). The SWEEP set drops them while disabled,
+# which is what the obligation lists and the live runs see.
+PRESSURE_LAW_PROFILES = _build_pressure_profiles()
+PRESSURE_PROFILES = (PRESSURE_LAW_PROFILES if HOSTILE_NULL_ENABLED
+                     else tuple(profile for profile in PRESSURE_LAW_PROFILES
+                                if profile["null_device_state"] == "normal"))
+# The name map covers the LAW set: the pin builder resolves hostile
+# names into their definitions even while the axis is disabled (law
+# without an execution), and every sweep-side consumer looks up only
+# the names it sweeps.
 PRESSURE_PROFILE_BY_NAME = {profile["name"]: profile
-                            for profile in PRESSURE_PROFILES}
+                            for profile in PRESSURE_LAW_PROFILES}
 
 # Every environment is an obligation, named literally rather than derived from
 # the table above: deleting a row of PRESSURE_PROFILES is the cheapest way to
 # shrink this axis, so the verifier compares the two lists in both directions
 # exactly as it does for path kinds and arms.
-MANDATORY_PRESSURE_PROFILES = (
+def _hostile_null_filtered(names):
+    """The obligation lists with the hostile cells suspended, not deleted.
+
+    One filter applied to every profile list the integrity check compares,
+    so the both-directions obligation check stays balanced whether the
+    hostile axis is enabled or disabled; the pinned law is untouched
+    either way (a disabled cell's pin is law without an execution, and
+    re-enabling restores the sweep without touching any table).
+    """
+    if HOSTILE_NULL_ENABLED:
+        return tuple(names)
+    suspended = {pressure_profile_name(PRESSURE_GENEROUS_BAND, 0, "before",
+                                       null_state)
+                 for null_state in PRESSURE_HOSTILE_NULL}
+    return tuple(name for name in names if name not in suspended)
+
+
+MANDATORY_PRESSURE_PROFILES = _hostile_null_filtered((
     "b03h0-after-normal", "b03h0-before-normal", "b03h3-after-normal",
     "b03h3-before-normal", "b04h0-after-normal", "b04h0-before-normal",
     "b04h3-after-normal", "b04h3-before-normal", "b05h0-after-normal",
@@ -840,18 +887,18 @@ MANDATORY_PRESSURE_PROFILES = (
     "b11h0-before-normal", "b11h3-after-normal", "b11h3-before-normal",
     "b12h0-after-normal", "b12h0-before-normal", "b12h3-after-normal",
     "b12h3-before-normal", "b64h0-before-absent", "b64h0-before-fifo",
-)
+))
 
 # The routine subset, for the cost budget in AGENTS.md: the band boundaries of
 # each family on a fresh table, one occupied-table probe, one after-init probe,
 # and both hostile null devices. The full PRESSURE_PROFILES product runs at a
 # milestone.
-ROUTINE_PRESSURE_PROFILES = (
+ROUTINE_PRESSURE_PROFILES = _hostile_null_filtered((
     "b03h0-before-normal", "b04h0-before-normal", "b05h0-before-normal",
     "b06h0-before-normal", "b07h0-before-normal", "b08h0-before-normal",
     "b10h0-before-normal", "b12h0-before-normal", "b08h3-before-normal",
     "b08h0-after-normal", "b64h0-before-fifo", "b64h0-before-absent",
-)
+))
 
 # The axis a pressure sweep executed, recorded in its report.  The routine gate
 # sweeps a 12-profile subset and a milestone sweeps all 42, so the report has to
@@ -1029,9 +1076,12 @@ def pinned_pressure_expectation(arm, profile):
 
 
 def _build_pinned_pressure_classes():
+    # Built from the LAW set, not the sweep set, so the table (and its
+    # committed digest and count) is identical whether the hostile-null
+    # axis is enabled or disabled.
     return {(arm, profile["name"]): pinned_pressure_expectation(
                 arm, profile["name"])
-            for arm in PRESSURE_ARMS for profile in PRESSURE_PROFILES}
+            for arm in PRESSURE_ARMS for profile in PRESSURE_LAW_PROFILES}
 
 
 PINNED_PRESSURE_CLASSES = _build_pinned_pressure_classes()
@@ -1724,6 +1774,11 @@ def pressure_rollup(cells, profiles=None):
         "arms": list(PRESSURE_ARMS),
         "profiles": list(swept),
         "mandatory_profiles": list(MANDATORY_PRESSURE_PROFILES),
+        # The hostile-null axis state, recorded in every report so
+        # evidence says which law executed: the suspended cells are a
+        # recorded user decision, not a silent shrink.
+        "hostile_null": ("enabled" if HOSTILE_NULL_ENABLED
+                         else HOSTILE_NULL_DISABLED_WHY),
         "cells_expected": len(expected),
         "cells_executed": len({(cell.get("arm"), cell.get("profile"))
                                for cell in coverage} & expected),
@@ -3270,6 +3325,7 @@ def live_run(args):
         report["pressure"] = run_pressure_sweep(
             args.go, args.rust, args.fixture, work, profiles, args.pressure,
             runs=args.pressure_runs, jobs=args.pressure_jobs)
+        print(f"pressure: {report['pressure']['hostile_null']}")
         print(f"pressure: {report['pressure']['cells_executed']} of "
               f"{report['pressure']['cells_expected']} cells, "
               f"{report['pressure']['divergences']} divergences, "
@@ -3555,8 +3611,13 @@ def _sync_summary(report):
 # be deleted to leave a shorter self-test that still looks green. It covers the
 # doctored-report cases and every control that assesses a report or mutates the
 # tables directly; adding or removing one changes this constant in the same
-# change, and a run whose total drifts from it fails.
-SELF_TEST_CASES_TOTAL = 70
+# change, and a run whose total drifts from it fails. The four hostile-null
+# controls are the one sanctioned exception: while that axis is disabled they
+# are SKIPPED with a printed reason (user decision 2026-10-11), and the
+# obligation shrinks with them so the skip is counted, not hidden.
+SELF_TEST_HOSTILE_NULL_CONTROLS = 4
+SELF_TEST_CASES_TOTAL = 70 - (0 if HOSTILE_NULL_ENABLED
+                              else SELF_TEST_HOSTILE_NULL_CONTROLS)
 
 
 def _self_test():
@@ -4114,9 +4175,14 @@ def _self_test():
                           "data_code": "RESULT", "outcome": "RESULT",
                           "exit_class": "success"}
 
-    with_pressure_report(hostile_worker_claimed_success,
-                         "a hostile worker cell that claimed success must FAIL",
-                         "hostile null device answered")
+    if HOSTILE_NULL_ENABLED:
+        with_pressure_report(hostile_worker_claimed_success,
+                             "a hostile worker cell that claimed success must FAIL",
+                             "hostile null device answered")
+    else:
+        print("skip 'a hostile worker cell that claimed success must FAIL': "
+              "the hostile-null axis is disabled; the grading rule it attacks "
+              "is retained code, re-covered by IPRANGE_HOSTILE_NULL=1")
 
     def hostile_one_engine_only(report):
         # The hostile class must be the same in both engines; one engine
@@ -4126,9 +4192,14 @@ def _self_test():
                         "data_code": "RESULT", "outcome": "RESULT",
                         "exit_class": "success"}
 
-    with_pressure_report(hostile_one_engine_only,
-                         "a hostile cell answered success by one engine must FAIL",
-                         "hostile null device answered")
+    if HOSTILE_NULL_ENABLED:
+        with_pressure_report(hostile_one_engine_only,
+                             "a hostile cell answered success by one engine must FAIL",
+                             "hostile null device answered")
+    else:
+        print("skip 'a hostile cell answered success by one engine must FAIL': "
+              "the hostile-null axis is disabled; the grading rule it attacks "
+              "is retained code, re-covered by IPRANGE_HOSTILE_NULL=1")
 
     def blocked_cell_claimed_coverage(report):
         # Section 13.4 with the softer terms disabled: an engine that reports a
@@ -4139,9 +4210,14 @@ def _self_test():
                           "data_code": "RESULT", "outcome": "RESULT",
                           "result": True, "exit_class": "success"}
 
-    with_pressure_report(blocked_cell_claimed_coverage,
-                         "a blocked arm claiming a completed removal must FAIL",
-                         "records as blocked")
+    if HOSTILE_NULL_ENABLED:
+        with_pressure_report(blocked_cell_claimed_coverage,
+                             "a blocked arm claiming a completed removal must FAIL",
+                             "records as blocked")
+    else:
+        print("skip 'a blocked arm claiming a completed removal must FAIL': "
+              "the control's cell is a disabled hostile-null profile; the "
+              "blocked-arm rule is re-covered by IPRANGE_HOSTILE_NULL=1")
 
     def hostile_cell_leaked_the_poller(report):
         # The hostile cells fall through to the descriptor-set assertion, so a
@@ -4150,9 +4226,14 @@ def _self_test():
         target = pressure_cell_in(report, ("validate(worker)", "b64h0-before-fifo"))
         target["go_poller"] = [1, 1]
 
-    with_pressure_report(hostile_cell_leaked_the_poller,
-                         "a hostile worker cell that leaked the poller must FAIL",
-                         "poller-free")
+    if HOSTILE_NULL_ENABLED:
+        with_pressure_report(hostile_cell_leaked_the_poller,
+                             "a hostile worker cell that leaked the poller must FAIL",
+                             "poller-free")
+    else:
+        print("skip 'a hostile worker cell that leaked the poller must FAIL': "
+              "the hostile-null axis is disabled; the poller rule it attacks "
+              "is retained code, re-covered by IPRANGE_HOSTILE_NULL=1")
 
 
     with_pressure_table(
