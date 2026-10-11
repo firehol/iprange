@@ -719,7 +719,12 @@ func exportNamesOf(declaration string) ([]string, bool) {
 func exportNamesIn(source string) (names, unhandled []string) {
 	var pending strings.Builder
 	flush := func(chunk string) {
-		chunk = strings.TrimSpace(chunk)
+		// Whitespace normalization first: Rust keywords may be
+		// separated by tabs or other whitespace (sol round-10 P2 — a
+		// literal tab between "pub" and "use" bypassed the literal
+		// prefix check), and export names never contain significant
+		// spaces beyond the " as " alias separator this walker parses.
+		chunk = strings.Join(strings.Fields(chunk), " ")
 		// Leading attributes (#[doc(hidden)], #[path = "..."]) belong
 		// to the declaration they precede: strip them, bracket-matched,
 		// before the export-prefix check. An unterminated attribute is
@@ -870,6 +875,12 @@ func TestGroupedExportDeclarationsYieldTheirNames(t *testing.T) {
 	}, "\n"))
 	if len(unhandled) != 0 || len(attributed) != 2 || attributed[0] != "c_abi_support" || attributed[1] != "three" {
 		t.Fatalf("attributed exports yielded %v (unhandled %v)", attributed, unhandled)
+	}
+	// A tab between the keywords is valid Rust spelling (sol round-10
+	// P2): the normalized chunk must recognize it.
+	tabs, unhandled := exportNamesIn("pub\tuse epsilon::{four, five};\npub\tmod\ttabbed;")
+	if len(unhandled) != 0 || len(tabs) != 3 || tabs[0] != "four" || tabs[1] != "five" || tabs[2] != "tabbed" {
+		t.Fatalf("tab-spelled exports yielded %v (unhandled %v)", tabs, unhandled)
 	}
 }
 

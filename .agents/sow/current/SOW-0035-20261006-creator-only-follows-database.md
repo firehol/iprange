@@ -5,9 +5,10 @@
 Status: in-progress
 
 Sub-state: final external-gate iteration. All 28 internal review rounds
-converged; the sol milestone gate is at rounds 6-9 fixed (round 10
-pending; the round-9 fix is gate-test-only — no engine source changed,
-so the Windows reports at 165f9a2a still name the exact source).
+converged; the sol milestone gate is at rounds 6-10 fixed (round 11
+pending after the leg re-stamp, the one-stamp closing battery whose
+log lines are verified before any rotation claim is written, and the
+rotation).
 
 ## Requirements
 
@@ -381,6 +382,9 @@ Windows evidence leg (cleared): `windows-guard.json` and `windows-housekeeping.j
 - THE FIX CHAIN (`2f27ff1f`..`411ba02c` + the rotation): all four transition call sites resolve from the recorded source choice; six detectors (both engines) prove the unprotected transitions; the C fixture + Rust wrapper assert the artifact modes for 0 and 2; the manifests are per-invocation-private; the ledger is lazy; the read is selector-bounded; the Windows battery runs the C tests (the gendef/dlltool import-library generation bridging the MSVC DLL to the cygwin linker; the __CYGWIN__ path widening; the fixture-directory -I); the specs and wiki document the contract.
 - The Windows leg ran green at the fix HEAD (29 steps, the reports stamping `411ba02c`, the ledger verified 6/6) after ten attempts, each fixing exactly one first-run-on-Windows gap (the platform-aware reset policy, the committed-tree manifest, the full disk — 56 GB of prior-session debris pruned, the debug worker placement, the import library, the gendef stdout redirection, the header path, the path-kind guard).
 - The closing gate battery (gate-52): ALLDONE, 465 s, zero mismatches; the forgery verdict PASS — every class rejected on its own distinct reason, genuine evidence accepted.
+- SOL ROUND 10 (gpt-6.1-sol at `e01f1d85`, effort xhigh, continuation): NEEDS CHANGES — the round-9 fix verified fixed; two P2s:
+  - P2 export_keyword_whitespace_bypasses_surface_gate — VERIFIED and FIXED (this batch): a literal tab between `pub` and `use` bypassed the literal prefix check. The walker normalizes whitespace (strings.Fields join) before the prefix, glued-export, and attribute checks; the detector covers the tab spelling. Mutation-verified: tab-spelled export with rows removed fails the gate naming both.
+  - P2 closing_rotation_claims_pass_for_rejected_evidence — VERIFIED and FIXED (this batch, the honest record): gate-72's rotation combined linux reports stamped 1a830477 with windows reports stamped 165f9a2a; the two-revision rule redded [10f]/[10r]/[16r] (recorded as the windows-hold deferrals) and the forgery positive control was REJECTED — while the rotation README claimed rc-0 gate passes and an accepted control. The lead's error: reading ALLDONE/0-mismatches without reading the deferral lines. The fix is procedural and complete: the Windows leg re-runs at this fix HEAD so the closing battery runs at ONE stamp with genuinely green gates, and every rotation-record claim is verified against the actual battery log lines before it is written (this SOW entry is the correction of record for gate-72's claims; the gate-72 log remains staged as evidence of the defect).
 - SOL ROUND 9 (gpt-6.1-sol at `e7122e88`, effort xhigh, continuation): NEEDS CHANGES — rounds 6-8 fixes verified fixed; ONE P2 remained:
   - P2 commented_exports_are_swallowed_by_later_declaration — VERIFIED and FIXED (this batch): the walker terminated declarations only at line-ending semicolons, so a trailing line comment glued the export to the next declaration and both disappeared; multiple declarations sharing one line lost names too. The walker now strips line comments, chunks on every semicolon (each chunk examined on its own), strips bracket-matched leading attributes (its first fail-closed run found the two real attributed exports in lib.rs — `#[doc(hidden)] pub mod c_abi_support`, `#[path = "sdk_error.rs"] pub mod error`), rejects inline `pub mod` blocks and glued mid-chunk exports as unhandled, and fails closed on unterminated text. The detector covers commented consecutive exports, multiple declarations per line, and attributed declarations. Mutation-verified with the finding's exact scenario: separate commented declarations with the inventory rows removed fails the gate naming both exports.
 - SOL ROUND 8 (gpt-6.1-sol at `8386e560`, effort xhigh, continuation): NEEDS CHANGES — rounds 6-7 fixes verified fixed; two follow-on blockers:
