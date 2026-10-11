@@ -4192,6 +4192,17 @@ def windows_provenance_evidence(path, report, ledger, problems,
                 f"colocation step; without it the Rust tests that shell out "
                 f"to the worker answer from a missing executable, and the "
                 f"recorded tally then describes a different run")
+        capi_lines = [item for item in commands
+                      if "iprange-capi" in str(item)]
+        if (not any("build" in str(item) for item in capi_lines)
+                or not any("test" in str(item) for item in capi_lines)
+                or not any("gendef" in str(item) and "dlltool" in str(item)
+                           for item in commands)):
+            problems.append(
+                f"{where}: build_commands do not include the C-boundary "
+                f"steps (the capi library build, the gendef/dlltool import "
+                f"library, the capi native tests); without them the report "
+                f"claims a C ABI qualification it does not substantiate")
     binaries = report.get("binaries")
     if not isinstance(binaries, dict):
         problems.append(f"{where}: no binaries table to bind to the ledger")
@@ -7000,6 +7011,14 @@ def _self_test():
             "nice cargo build --manifest-path v4/rust/Cargo.toml --release",
             "cp v4/rust/target/release/iprange-v4-worker.exe "
             "v4/rust/target/debug/deps/iprange-v4-worker.exe",
+            "nice cargo build --manifest-path v4/rust/Cargo.toml "
+            "-p iprange-capi --lib",
+            "cd v4/rust/target/debug/deps && gendef ../iprange_v4.dll > "
+            "iprange_v4.def && dlltool -d iprange_v4.def "
+            "-l libiprange_v4.dll.a -D iprange_v4.dll",
+            "nice cargo test --manifest-path v4/rust/Cargo.toml "
+            "-p iprange-capi --no-fail-fast --test native_windows "
+            "--test native_header",
             "nice cargo test --manifest-path v4/rust/Cargo.toml "
             "-p iprange-cli"]
         return {
@@ -7721,7 +7740,7 @@ def _self_test():
         # an assertion deleted from one helper must not turn a refused
         # authentic capture into a passing self-test.
         accepted_controls: list = []
-        min_controls = 133
+        min_controls = 134
         min_acceptance_controls = 5
 
         def assess(matrix_paths, crash_paths, **kwargs):
@@ -10650,6 +10669,16 @@ def _self_test():
 
         genuine_mutation_fails("windows-worker-colocation-step-missing",
                                windows_drop_colocation,
+                               mutator_kind="windows-housekeeping")
+
+        def windows_drop_capi_steps(reports):
+            for report in reports:
+                report["build_provenance"]["build_commands"] = [
+                    line for line in report["build_provenance"]["build_commands"]
+                    if "iprange-capi" not in line and "gendef" not in line]
+
+        genuine_mutation_fails("windows-capi-steps-missing",
+                               windows_drop_capi_steps,
                                mutator_kind="windows-housekeeping")
 
         def windows_borrows_linux_build(reports):

@@ -1,46 +1,43 @@
-Every measurement report in this directory records its own provenance,
-and reading that provenance is the only way to know what a committed
-artifact measures.  The set is now a completed rotation: the twenty
-measurement reports (eighteen authored by the closing gate battery at
-`git_head` `6b8960d84c149fce40e0f392e4a4d48b41ae898f` — the revision
+Current rotation: the SOW-0035 sol-gate close chain at `1330c0b3`
+(`ed4b98d1`..`1330c0b3`, all pushed).  Every measurement report in this
+directory records its own provenance, and reading that provenance is the
+only way to know what a committed artifact measures.  This set is the
+gate-65 rotation: eighteen reports authored by the closing gate battery
+at `git_head` `1330c0b30f9624596bb4628ebd4ed53847124e44` — the revision
 under test — plus the two Windows reports authored natively on the
-authorized validation host at the same revision from a fresh detached
-checkout), `build-ids.json`, and `battery-manifest.json` carry that published commit (transferred
-as a complete-history git bundle; tree `00248d3dd70b1deba4cf448c3602dba265bbe9a2`
-equal to the qualification workstation's, `git status --porcelain` empty
-before and after; the one file the leg's snapshot manifest pins
-against its base commit is recorded in the reports by commit-blob
-SHA-256).  The earlier
-mid-rotation state (Linux reports at one revision, Windows reports at a
-throwaway snapshot, a manifest binding zero live files) is what the kind
-gate (`check_kind_coverage.py`) refuses, and the manifest — emitted by
-that same gate over the fresh reports and promoted through the shared
-committed-report writer — is what makes relabelling detectable without
-trusting the producing machine: it binds every report by role, byte
-length, content SHA-256, and revision, plus the eleven-entry staged
-binary ledger by digest.  Both kind-gate passes (fresh and committed,
-after rotation) returned rc 0 at the revision they name.  The parity
-class now carries ONE committed artifact: the chosen axis — at the
-milestone tier the 378-cell full sweep, which replaces the routine
-subset — executes once per gate under one committed name (astra gate
-finding P2-6; an earlier wave paid for the same axis twice under two
-names, which is exactly the rule "an expensive axis runs at most once
-per gate and replaces its overlapping subset" forbids).  The manifest
-committed here is the one that battery emitted, and it is therefore
-true of its own revision `4b42cc0b`: it lists one `refusal-class-parity`
-entry, because `refusal-class-parity-full.json` no longer exists at this
-revision — the single-name set is the post-rotation state the parity
-rule above describes, not a pre-rotation lag.
-Against the previously fully-qualified revision `2c788b8e`, this set's
-revisions DO change engine sources — the legacy parse/DNS paths of
-`v4/rust/iprange-cli` and `v4/go/internal/cli/legacy` (the
-Windows-portability repairs, the DNS numeric-form platform scoping with
-its cross-language effective-build-set gate, and the android/bionic
-umbrella correction) — plus the `v4/cli` gates and records.  What
-carries over is the **worker-handshake build identity**: `build-ids.json`
-hashes only `iprange-livedb` inputs, and none changed since `7c2d2cf7`,
-so the identity below names the same digest for every artifact in the
-set.
+authorized validation host at the same revision from a detached,
+tree-verified checkout, plus `build-ids.json`, `battery-manifest.json`,
+and `SHASUMS.txt` (the staged-binary ledger's committed copy, rotated
+with the reports by battery step `[16i]`).  The closing battery
+recorded 323 checked steps, 0 mismatches, 4 deferrals (the two Windows
+reports the native leg owns, plus the two retired duplicate
+pressure-axis steps), 489.3 s wall at pooled 4 jobs.  Both kind-gate
+passes (fresh and committed, after rotation) returned rc 0; the kind
+self-test executed 134 rejection controls (the new
+`windows-capi-steps-missing` feeder among them); the forgery battery's
+verdict is PASS — every class rejected on its own distinct reason,
+genuine evidence accepted — and it now runs standalone on a clean
+checkout against the committed ledger.  The refusal-class parity gate
+executed 483/483 cells with 0 divergences, 0 hangs, 36/36 pins, and the
+routine pressure subset 90/90; the hostile `/dev/null`-substitution
+cells are DISABLED by recorded user decision (2026-10-11 — the code,
+grading, and the 378-entry pinned law are retained;
+`IPRANGE_HOSTILE_NULL=1` re-enables them on a host that permits
+unprivileged user namespaces; the disabled state is recorded in every
+pressure report).  Recorded commands spell the toolchain as its version
+identity (`go1.27.1`), not an absolute path (user decision 2026-10-11).
+The Windows reports' provenance now records the C-boundary steps — the
+capi library build, the gendef/dlltool import library, and the capi
+native tests, each with its scored attempt and rc — which the committed
+kind-gate detector requires and whose removal redds the self-test.
+
+Toolchains this rotation: `go version go1.27.1 linux/amd64`, `rustc
+1.97.1 (8bab26f4f 2026-07-14)` host `x86_64-unknown-linux-gnu` LLVM
+22.1.6, CPython 3.12.3; the Windows host's toolchains are recorded in
+the two native reports.  The staged ledger
+`.local/shared/binaries/SHASUMS.txt` lists 12 members and verifies
+12/12, and its committed copy in this directory binds the same digests
+for standalone re-runs of the forgery battery.
 
 Rotation contract.  No report here is authored by hand and none is
 expected to be edited in place.  The qualification battery builds the
@@ -59,6 +56,10 @@ path into an operator profile, and the shared writer refuses such a
 write.  This head block stays the present-state record of the CLI
 qualification surface: gates, corpus, evidence identity, toolchain and
 binary provenance.
+
+Previous rotation blocks below remain part of the historical record;
+they are not superseded, only superseded-in-position by this head.
+
 
 Battery outcome at the revision the committed reports describe.  Every
 step of the wave-19.27 full-tier closure battery
