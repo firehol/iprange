@@ -74,7 +74,7 @@ pub fn initialize_live(
         attempt.database_id,
         attempt.sidecar_id,
         reader_capacity,
-        crate::live_sidecar::transition_creator_only(&main.path),
+        crate::live_sidecar::transition_creator_only(&main.path, &main.file),
     ) {
         Ok(sidecar) => sidecar,
         Err(cause) => return Ok(attempt.reservation_failure(cause)),
@@ -133,7 +133,7 @@ pub fn reset_live_coordination(
         attempt.database_id,
         attempt.sidecar_id,
         reader_capacity,
-        crate::live_sidecar::transition_creator_only(&main.path),
+        crate::live_sidecar::transition_creator_only(&main.path, &main.file),
     ) {
         Ok(sidecar) => sidecar,
         Err(cause) => return Ok(attempt.reservation_failure(cause)),

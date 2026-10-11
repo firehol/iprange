@@ -9,6 +9,7 @@ package live
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -40,6 +41,7 @@ func followsSourcePair(t *testing.T, label string) string {
 
 func createUnprotectedForTransition(t *testing.T, main string) {
 	t.Helper()
+	umaskWindow(t, 0o022)
 	_, err := CreateLive(main, format.AddressFamilyIPv4,
 		format.ValueKindDirect, format.StructureKindNone,
 		[16]byte{}, 3, neverCheck, false)
@@ -139,6 +141,12 @@ func TestSwitchOnPreservesAnAlreadyProtectedMain(t *testing.T) {
 	if _, err := InitializeLive(main, 3, neverCheck); err != nil {
 		t.Fatal("initialize:", err)
 	}
+	// The PRESERVATION assertion (sol round-4 P2): reopening alone
+	// cannot detect a fallback that always records Unprotected — the
+	// sidecar itself must record Protected for a protected main.
+	if !SourceCreatorOnly(main) {
+		t.Fatal("a protected main must preserve the Protected policy through the transition")
+	}
 	openLiveReaderForFollows(t, main)
 }
 
@@ -154,8 +162,38 @@ func TestSpecialBitsMainIsNotClassifiedProtected(t *testing.T) {
 	if err := os.Remove(main + ".readers"); err != nil {
 		t.Fatal("remove sidecar:", err)
 	}
-	if err := os.Chmod(main, 0o4600); err != nil {
+	if err := os.Chmod(main, 0o600|os.ModeSetuid); err != nil {
 		t.Fatal("chmod:", err)
+	}
+	if _, err := InitializeLive(main, 3, neverCheck); err != nil {
+		t.Fatal("initialize:", err)
+	}
+	openLiveReaderForFollows(t, main)
+}
+
+func TestACLCarryingMainIsNotClassifiedProtected(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("setfacl is a Linux tool")
+	}
+	// The exact shape a mode-only classifier misses (the sol gate's
+	// round-3 P1): a named-user ACL entry granting nothing keeps the
+	// mask (and the mode's group bits) empty — mode stays 0600 — but
+	// the access ACL is EXTENDED, which the complete proof rejects.
+	main := followsSourcePair(t, "acl-main")
+	createUnprotectedForTransition(t, main)
+	if err := os.Remove(main + ".readers"); err != nil {
+		t.Fatal("remove sidecar:", err)
+	}
+	if err := os.Chmod(main, 0o600); err != nil {
+		t.Fatal("chmod:", err)
+	}
+	if out, err := exec.Command("setfacl", "-m", "u:65534:---", main).CombinedOutput(); err != nil {
+		t.Skipf("setfacl unavailable (%v): %s", err, out)
+	}
+	if info, err := os.Stat(main); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm() != 0o600 {
+		t.Fatalf("the ACL fixture must keep mode 0600, got %#o", info.Mode().Perm())
 	}
 	if _, err := InitializeLive(main, 3, neverCheck); err != nil {
 		t.Fatal("initialize:", err)

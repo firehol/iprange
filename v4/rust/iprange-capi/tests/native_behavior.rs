@@ -88,18 +88,21 @@ fn native_c_creator_only_opt_out_is_observable() {
     let files = TestFiles::new();
     let opt_out = files.directory.join("opt-out.ipr");
     let opt_in = files.directory.join("opt-in.ipr");
+    // The umask window is set BEFORE the fixture runs: creation, not
+    // metadata reading, is what the umask affects (sol round-4 P2 —
+    // setting it after creation asserted nothing).
+    let previous = umask_set(0o022);
     let executable = compile_c_fixture(&files, "abi_creator_only.c", &[]);
     let output = run_fixture(&executable, [&opt_out, &opt_in]);
+    umask_restore(previous);
     assert!(
         output.status.success(),
         "native creator-only fixture failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let previous = umask_set(0o022);
     let out_mode = creator_only_mode_of(&opt_out);
     let in_mode = creator_only_mode_of(&opt_in);
-    umask_restore(previous);
     assert_eq!(
         out_mode,
         0o644,

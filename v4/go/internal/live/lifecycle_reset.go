@@ -65,7 +65,7 @@ func ResetLiveCoordination(path string, readerCapacity uint32, policy LiveResetP
 	if err := checkpoint(check); err != nil {
 		return nil, err
 	}
-	creatorOnly := TransitionCreatorOnly(main.path)
+	creatorOnly := TransitionCreatorOnly(main.path, main.file)
 	sidecar, failure := reserveAt(private, attempt.databaseID, attempt.sidecarID, readerCapacity, creatorOnly)
 	if failure != nil {
 		return attempt.reservationFailure(*failure), nil

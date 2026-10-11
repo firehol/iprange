@@ -16,12 +16,47 @@ use iprange_livedb::{
     TransactionBudget, ValueKind, ValueTag,
 };
 
+// The strongest reset policy the platform supports (rollback-safe
+// needs renameat2 exchange; Windows uses discard-previous). The Go
+// twin: resetPolicy in lifecycle_follows_source_test.go.
+#[cfg(target_os = "linux")]
+fn reset_policy() -> LiveResetPolicy {
+    LiveResetPolicy::RollbackSafe
+}
+
+#[cfg(not(target_os = "linux"))]
+fn reset_policy() -> LiveResetPolicy {
+    LiveResetPolicy::DiscardPrevious
+}
+
 fn budget() -> TransactionBudget {
     TransactionBudget {
         max_heap_bytes: 2 * 1024 * 1024,
         max_private_pages: 1_000,
         max_file_growth_pages: 1_000,
         max_open_files: 2,
+    }
+}
+
+// A RAII umask window (restored on drop; the test owns its thread).
+#[cfg(unix)]
+struct UmaskWindow(u32);
+#[cfg(unix)]
+impl UmaskWindow {
+    fn new(mask: u32) -> Self {
+        extern "C" {
+            fn umask(mask: u32) -> u32;
+        }
+        UmaskWindow(unsafe { umask(mask) })
+    }
+}
+#[cfg(unix)]
+impl Drop for UmaskWindow {
+    fn drop(&mut self) {
+        extern "C" {
+            fn umask(mask: u32) -> u32;
+        }
+        unsafe { umask(self.0) };
     }
 }
 
@@ -54,6 +89,10 @@ impl Drop for TestPair {
 }
 
 fn create_unprotected(files: &TestPair) {
+    // A fixed umask window so the mode assertions hold regardless of
+    // the ambient umask (sol round-4 P2): 0666 & ~022 == 0644.
+    #[cfg(unix)]
+    let _umask = crate::UmaskWindow::new(0o022);
     create_live(
         &files.main,
         AddressFamily::Ipv4,
@@ -140,10 +179,12 @@ fn unprotected_modes_survive_the_transitions() {
         .unwrap();
     writer.close().unwrap();
 
+    #[cfg(unix)]
+    let _umask = UmaskWindow::new(0o022);
     reset_live_coordination(
         &files.main,
         3,
-        LiveResetPolicy::RollbackSafe,
+        reset_policy(),
         &CancellationToken::new(),
     )
         .unwrap();
@@ -218,6 +259,14 @@ fn switch_on_preserves_an_already_protected_main() {
     std::env::remove_var("IPRANGE_CREATOR_ONLY");
     let result = initialize_live(&files.main, 3, &CancellationToken::new()).unwrap();
     assert_eq!(result.status, iprange_livedb::LiveTransitionStatus::Initialized);
+    // The PRESERVATION assertion (sol round-4 P2): reopening alone
+    // cannot detect a fallback that always records Unprotected — the
+    // sidecar itself must record Protected for a protected main.
+    assert_eq!(
+        iprange_livedb::source_creator_only(&files.main),
+        true,
+        "a protected main must preserve the Protected policy through the transition"
+    );
 
     let active = CancellationToken::new();
     let mut reader = LiveReader::open(&files.main, &active).unwrap();
@@ -243,14 +292,26 @@ fn acl_carrying_main_is_not_classified_protected() {
         perms.set_mode(0o600);
         fs::set_permissions(&files.main, perms).unwrap();
     }
-    // Grant an access ACL entry (the "other" user) via setfacl.
+    // A named-user ACL entry granting nothing: the mask stays empty
+    // (the mode's group-class bits show the mask, so the mode stays
+    // 0600), but the access ACL is EXTENDED — the exact shape a
+    // mode-only classifier misses and the complete proof rejects.
     let status = std::process::Command::new("setfacl")
-        .args(["-m", "o:r", &files.main.to_string_lossy()])
-        .status()
-        .expect("setfacl runs");
-    if !status.success() {
-        eprintln!("setfacl unavailable; skipping");
-        return;
+        .args(["-m", "u:65534:---", &files.main.to_string_lossy()])
+        .status();
+    match status {
+        Ok(status) if status.success() => {}
+        _ => {
+            eprintln!("setfacl unavailable; skipping");
+            return;
+        }
+    }
+    // Assert the fixture: mode must still be 0600 (an extended ACL
+    // the mode-only classifier would miss), and the proof must fail.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&files.main).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o600, "the ACL fixture must keep mode 0600");
     }
     {
         let mut name = files.main.file_name().unwrap().to_os_string();

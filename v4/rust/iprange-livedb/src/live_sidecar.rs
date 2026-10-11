@@ -45,8 +45,8 @@ use header::{read_header_mapping, sidecar_length, write_header_mapping};
 /// must not silently change existing access, and recording Protected
 /// over an unprotected main locks the next live open out — the sol
 /// gate's round-2 P1).
-pub fn transition_creator_only(main: &Path) -> bool {
-    match path::sidecar_path(main) {
+pub fn transition_creator_only(main_path: &Path, main: &std::fs::File) -> bool {
+    match path::sidecar_path(main_path) {
         Ok(sidecar) => {
             #[cfg(unix)]
             {
@@ -88,20 +88,15 @@ pub fn transition_creator_only(main: &Path) -> bool {
 /// permission bits are exactly the creator mode. Windows: the DACL
 /// zero-security commitment the security module records (a main the
 /// creator-only path secured carries it; any other main does not).
-fn main_satisfies_protected_contract(main: &Path) -> bool {
-    // The COMPLETE authoritative proof on the retained main descriptor
-    // (the sol gate's round-3 P1): mode+nlink alone accepts a 0600
-    // file carrying an extended access ACL, which the proof every
-    // later open demands would reject — publishing Protected over it
-    // is the same lockout. The proof is the one the reader enforces:
-    // trivial ACL, regular, single link, mode exactly the creator
-    // mode including the special bits.
-    match std::fs::File::open(main) {
-        Ok(file) => {
-            crate::publication::security::creator_only_commitment(&file).is_ok()
-        }
-        Err(_) => false,
-    }
+fn main_satisfies_protected_contract(main: &std::fs::File) -> bool {
+    // The COMPLETE authoritative proof on the RETAINED, locked main
+    // descriptor (the sol gate's round-3/4 P1s): mode+nlink alone
+    // accepts a 0600 file carrying an extended access ACL, which the
+    // proof every later open demands would reject — and reopening the
+    // PATH would both re-arm the Go poller's fatal initialization and
+    // block on a substituted FIFO. The descriptor the transition
+    // already holds and validated is the identity to prove.
+    crate::publication::security::creator_only_commitment(main).is_ok()
 }
 
 pub fn source_creator_only(main: &Path) -> bool {

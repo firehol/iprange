@@ -28,8 +28,8 @@ import (
 // protected contract (the transition must not silently change
 // existing access, and recording Protected over an unprotected main
 // locks the next live open out — the sol gate's round-2 P1).
-func TransitionCreatorOnly(main string) bool {
-	path, err := CanonicalSidecarPath(main)
+func TransitionCreatorOnly(mainPath string, mainFile *os.File) bool {
+	path, err := CanonicalSidecarPath(mainPath)
 	if err == nil {
 		if file, err := calleropen.Open(path, os.O_RDONLY|calleropen.NonBlocking, 0); err == nil {
 			recorded, ok := func() (bool, bool) {
@@ -57,7 +57,7 @@ func TransitionCreatorOnly(main string) bool {
 			}
 		}
 	}
-	return mainSatisfiesProtectedContract(main)
+	return mainSatisfiesProtectedContract(mainFile)
 }
 
 func SourceCreatorOnly(main string) bool {

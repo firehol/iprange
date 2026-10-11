@@ -29,9 +29,22 @@ entry() {  # entry <heading> <cwd> <command...>
     echo "GENERATOR-REFUSED: rc=$rc — this entry is NOT attestable" >&2
     exit 1
   fi
-  if ! echo "$out" | rg -q "^--- |^test result: ok" \
-          || echo "$out" | rg -q "no tests to run"; then
+  # Per-runner validation (sol round-4 P2): Go must show named PASS
+  # lines; Rust must show a nonzero executed count beside its ok
+  # summary; the Python self-test must show its PASS line. A Rust
+  # "test result: ok. 0 passed" is an empty run, not a detector.
+  if echo "$out" | rg -q "^--- PASS"; then
+    :
+  elif echo "$out" | rg -q "^PASS self-test"; then
+    :
+  elif echo "$out" | rg -q "^test result: ok\. [1-9][0-9]* passed"; then
+    :
+  else
     echo "GENERATOR-REFUSED: no executed named results — this entry is NOT attestable" >&2
+    exit 1
+  fi
+  if echo "$out" | rg -q "no tests to run"; then
+    echo "GENERATOR-REFUSED: empty run — this entry is NOT attestable" >&2
     exit 1
   fi
   echo
