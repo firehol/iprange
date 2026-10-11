@@ -288,9 +288,15 @@ normal executable suffix. The embedding application installs it beside its own
 executable; the library does not search `PATH` or accept an environment
 override. This helper is an installation requirement, not a public ABI handle.
 
-`create_live` takes `structure_kind:u32` immediately after `value_kind`.
-The C entry takes `creator_only` as `uint8_t` after `reader_capacity`.
-Zero is unprotected. Any other value requests the proof. The
+`create_live` takes `structure_kind:u32` immediately after `value_kind`;
+the C entry takes `creator_only` as `uint8_t` after `reader_capacity`.
+Zero is unprotected (the process default: 0666 under umask for
+unprotected artifacts). Any other value requests the proof: owner
+read/write floored on every artifact the database or its adapters
+create (0600 for protected artifacts under any umask). The flag is
+advisory to the engine's own artifacts only; a database that records a
+creator-only choice governs its own files regardless of the creating
+process's flag (SOW-0035). The
 scalar enrichment lookup takes reader, IP, `present:u8*`, typed-value output,
 and typed-error output. Its with-membership variant adds one
 `membership_view**` output, initialized to null. Structured scan and cursor use

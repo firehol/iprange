@@ -38,16 +38,23 @@ fn budget() -> TransactionBudget {
     }
 }
 
-// A RAII umask window (restored on drop; the test owns its thread).
+// A RAII umask window. umask(2) is PROCESS-WIDE (sol round-5 P2):
+// concurrent tests would race the window, so every window holds one
+// static mutex for its lifetime. The guard is OWNED by value: a
+// `&mut MutexGuard` field would only drop the reference on take(),
+// never releasing the mutex (the deadlock the first draft had).
 #[cfg(unix)]
-struct UmaskWindow(u32);
+struct UmaskWindow(u32, Option<std::sync::MutexGuard<'static, ()>>);
+#[cfg(unix)]
+static UMASK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(unix)]
 impl UmaskWindow {
     fn new(mask: u32) -> Self {
         extern "C" {
             fn umask(mask: u32) -> u32;
         }
-        UmaskWindow(unsafe { umask(mask) })
+        // The static's borrow is 'static, so the guard can be a field.
+        UmaskWindow(unsafe { umask(mask) }, Some(UMASK_LOCK.lock().unwrap()))
     }
 }
 #[cfg(unix)]
@@ -57,6 +64,7 @@ impl Drop for UmaskWindow {
             fn umask(mask: u32) -> u32;
         }
         unsafe { umask(self.0) };
+        drop(self.1.take());
     }
 }
 
@@ -92,7 +100,7 @@ fn create_unprotected(files: &TestPair) {
     // A fixed umask window so the mode assertions hold regardless of
     // the ambient umask (sol round-4 P2): 0666 & ~022 == 0644.
     #[cfg(unix)]
-    let _umask = crate::UmaskWindow::new(0o022);
+    let _umask = UmaskWindow::new(0o022);
     create_live(
         &files.main,
         AddressFamily::Ipv4,
@@ -130,7 +138,7 @@ fn reset_of_unprotected_database_stays_openable() {
     reset_live_coordination(
         &files.main,
         3,
-        LiveResetPolicy::RollbackSafe,
+        reset_policy(),
         &CancellationToken::new(),
     )
         .unwrap();

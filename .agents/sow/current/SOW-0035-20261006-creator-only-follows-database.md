@@ -4,7 +4,10 @@
 
 Status: in-progress
 
-Sub-state: implementation started. Spec exception removed. Detecting snapshot tests pass. Not committed.
+Sub-state: final external-gate iteration. All 28 internal review rounds
+converged; the sol milestone gate is at round 5 fixed (round 6 pending
+after the Windows leg re-run and the rotation). Everything committed and
+pushed through the current HEAD.
 
 ## Requirements
 
@@ -378,6 +381,14 @@ Windows evidence leg (cleared): `windows-guard.json` and `windows-housekeeping.j
 - THE FIX CHAIN (`2f27ff1f`..`411ba02c` + the rotation): all four transition call sites resolve from the recorded source choice; six detectors (both engines) prove the unprotected transitions; the C fixture + Rust wrapper assert the artifact modes for 0 and 2; the manifests are per-invocation-private; the ledger is lazy; the read is selector-bounded; the Windows battery runs the C tests (the gendef/dlltool import-library generation bridging the MSVC DLL to the cygwin linker; the __CYGWIN__ path widening; the fixture-directory -I); the specs and wiki document the contract.
 - The Windows leg ran green at the fix HEAD (29 steps, the reports stamping `411ba02c`, the ledger verified 6/6) after ten attempts, each fixing exactly one first-run-on-Windows gap (the platform-aware reset policy, the committed-tree manifest, the full disk — 56 GB of prior-session debris pruned, the debug worker placement, the import library, the gendef stdout redirection, the header path, the path-kind guard).
 - The closing gate battery (gate-52): ALLDONE, 465 s, zero mismatches; the forgery verdict PASS — every class rejected on its own distinct reason, genuine evidence accepted.
+- SOL ROUND 5 (gpt-6.1-sol at `ca13a676`, effort xhigh): NEEDS CHANGES — round-4's two P1s cleared (the retained-descriptor proof landed and the detectors construct their claimed shapes). Open items and dispositions:
+  - P2 rust_reset_detector_still_fails_on_windows — FIXED (this batch): the last hardcoded `RollbackSafe` site in `transitions_follow_source.rs` resolves through `reset_policy()`.
+  - P2 rust_transition_umask_windows_race — FIXED, in two steps (the honest record): the paused session's draft (a leaked-box `&'static mut MutexGuard` field) was never executed green — the session died before capturing the run. On resume it DEADLOCKED: `drop(self.1.take())` dropped the `&mut` REFERENCE, never the guard, so the mutex was never released (one test passed, six parked in `futex_do_wait`; killed by tracked PID). The completed fix owns the `MutexGuard<'static, ()>` by value in the window (no box, no leak); the concurrent run is green.
+  - P2 windows_c_boundary_qualification_not_substantiated — fix in flight (post server-move): the report-authoring scripts on the Windows host record `cargo-build-capi`, the gendef/dlltool import-library step, and `cargo-test-iprange-capi` in `build_commands`/`native_steps`; a committed detector mirroring the worker-colocation pin lands with the rotated reports (user decision 2A).
+  - P2 standalone_forgery_battery_requires_private_kit — fix in flight (user decision 1A, the follow-up commit in this push): the committed `evidence/SHASUMS.txt` becomes the mutators' default digest authority (rotated by battery step `[16i]`), so C2/C2w run on a clean checkout without the private kit; the gate tier still selects the live staged ledger via `--sha256-ledger`.
+  - P3s: the evidence README refresh (after the next rotation, naming the new under-test HEAD); the design-spec "floor" wording at the creator-only opening (follow-up commit); the stale Sub-state line (fixed in this commit).
+- SESSION HANDOFF (2026-10-11, server move): the lead session moved workstations mid-gate; per REVIEWS.md the external-control session `b9b60c72c75e404b99312361e087d31c` did not survive the move (last verdict: NEEDS CHANGES, round 5, at `ca13a676`). Round 6 opens a NEW sol session; the prompt is reconstructed from this SOW's sol-gate records plus the per-round factual delta pattern.
+- USER DECISIONS (2026-10-11): (1) standalone forgery-battery ledger contract — Option A, the committed authority; (2) Windows C-boundary provenance — Option A, host-side recording plus the committed detector mirroring `windows-worker-colocation-step-missing`; with the standing constraint that fixes follow existing repo patterns only — no new testing-framework machinery.
 
 ### Close-out validation (2026-10-10)
 
