@@ -646,6 +646,54 @@ var rustSourceExportsRecorded = map[string]bool{
 	"validation":    true,
 }
 
+// publicItemName extracts the declared name of one top-level public
+// item whose keyword is not use/mod: `pub fn NAME`, `pub struct NAME`,
+// `pub enum NAME`, `pub trait NAME`, `pub const NAME`/`pub const NAME:
+// T`, `pub static NAME`, `pub type NAME`, and the `pub unsafe`
+// variants of fn/const/static. Returns ok=false when the chunk is not
+// a recognized public item — the caller then fails closed, because an
+// unrecognized `pub`-prefixed declaration is exactly the surface-drift
+// this gate exists to catch (sol round-13 P2).
+func publicItemName(chunk string) (string, bool) {
+	isIdent := func(s string) bool {
+		if s == "" {
+			return false
+		}
+		for k := 0; k < len(s); k++ {
+			c := s[k]
+			if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (k > 0 && c >= '0' && c <= '9') {
+				continue
+			}
+			return false
+		}
+		return true
+	}
+	fields := strings.Fields(chunk)
+	if len(fields) < 3 || fields[0] != "pub" {
+		return "", false
+	}
+	i := 1
+	if fields[i] == "unsafe" && i+1 < len(fields) {
+		i++
+	}
+	switch fields[i] {
+	case "fn", "struct", "enum", "trait", "const", "static", "type":
+	default:
+		return "", false
+	}
+	name := strings.TrimSuffix(fields[i+1], ";")
+	if colon := strings.Index(name, ":"); colon >= 0 {
+		name = name[:colon] // `pub const NAME: TYPE = ...`
+	}
+	if angle := strings.Index(name, "<"); angle >= 0 {
+		name = name[:angle] // `pub struct NAME<T>`
+	}
+	if !isIdent(name) {
+		return "", false
+	}
+	return name, true
+}
+
 // exportNamesOf extracts every public name one COMPLETE lib.rs export
 // declaration publishes and reports whether the declaration's syntax
 // was handled. A grouped re-export (``pub use path::{a, b as c}``)
@@ -706,14 +754,16 @@ func exportNamesOf(declaration string) ([]string, bool) {
 	return nil, name == ""
 }
 
-// stripLexicalNoise removes comments and string-literal contents from
-// the source in ONE context-aware scan (sol rounds 9-12: line
-// comments gluing declarations, block comments as whitespace, and the
-// round-12 pair — a "/*" inside a line comment or a string must not
-// open a block comment that swallows real code). Comments and strings
-// become single spaces; code text is preserved. Char lifetimes stay
-// code (their quotes never delimit these states); an unterminated
-// block comment leaves a "/*" marker so the walker fails closed.
+// stripLexicalNoise removes comments and literal contents from the
+// source in ONE context-aware scan (sol rounds 9-13: line comments
+// gluing declarations; block comments as whitespace; lexical context
+// for comment openers; and the round-13 classes — character literals
+// like '"' whose quote must not open a string, and raw strings
+// r"..." / r#"..."# that do not interpret backslash escapes).
+// Comments and string contents become single spaces; code text is
+// preserved. Lifetimes stay code (an apostrophe not closing a short
+// literal is a lifetime, never a literal opener). An unterminated
+// block comment or string leaves a marker the walker fails closed on.
 func stripLexicalNoise(source string) string {
 	const (
 		stCode = iota
@@ -723,6 +773,9 @@ func stripLexicalNoise(source string) string {
 	)
 	var out strings.Builder
 	state, depth := stCode, 0
+	isIdent := func(c byte) bool {
+		return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+	}
 	for i := 0; i < len(source); i++ {
 		c := source[i]
 		switch state {
@@ -736,9 +789,75 @@ func stripLexicalNoise(source string) string {
 				state, depth = stBlock, 1
 				i++
 				out.WriteByte(' ')
+			case c == 'r' || c == 'b':
+				// Raw and byte string openers: r"..." / r#"..."# /
+				// br##"..."## / b"..." / b'...'. Raw strings have no
+				// escapes; byte strings behave like strings.
+				j := i
+				if j < len(source) && source[j] == 'b' {
+					j++
+				}
+				if j < len(source) && source[j] == 'r' {
+					j++
+					hashes := 0
+					for j < len(source) && source[j] == '#' {
+						hashes++
+						j++
+					}
+					if j < len(source) && source[j] == '"' {
+						// raw string: close at '"' + hashes '#'
+						close := "\"" + strings.Repeat("#", hashes)
+						end := strings.Index(source[j+1:], close)
+						if end < 0 {
+							out.WriteString(" \"UNTERMINATED")
+							return out.String()
+						}
+						// Land on the LAST character of the close so the
+						// loop's increment resumes after it; one short
+						// re-processes the closing quote as code (found by
+						// the round-13 detector before commit).
+						i = j + end + len(close)
+						out.WriteByte(' ')
+						continue
+					}
+				} else if j < len(source) && (source[j] == '"' || source[j] == '\'') {
+					// byte string / byte char: byte strings behave
+					// like strings; byte chars like chars (below).
+					if source[j] == '"' {
+						i = j
+						state = stString
+						out.WriteByte(' ')
+						continue
+					}
+					i = j - 1 // fall through to the char-literal rule
+				}
+				out.WriteByte(c)
 			case c == '"':
 				state = stString
 				out.WriteByte(' ')
+			case c == '\'':
+				// A character literal is short and closes soon; an
+				// apostrophe that does not is a lifetime, which is
+				// code. Scan ahead for the closing quote within one
+				// literal's worth of characters.
+				k := i + 1
+				if k < len(source) && source[k] == '\\' {
+					k += 2
+					for k < len(source) && isIdent(source[k]) {
+						k++ // \u{...}: consume the escape word
+						if source[k-1] == '}' {
+							break
+						}
+					}
+				} else if k < len(source) {
+					k++
+				}
+				if k < len(source) && source[k] == '\'' && k-i <= 12 {
+					i = k
+					out.WriteByte(' ')
+				} else {
+					out.WriteByte(c) // lifetime: ordinary code
+				}
 			default:
 				out.WriteByte(c)
 			}
@@ -768,6 +887,8 @@ func stripLexicalNoise(source string) string {
 	}
 	if state == stBlock {
 		out.WriteString(" /*")
+	} else if state == stString {
+		out.WriteString(" \"UNTERMINATED")
 	}
 	return out.String()
 }
@@ -831,6 +952,26 @@ func exportNamesIn(source string) (names, unhandled []string) {
 		}
 		exportPrefix := strings.HasPrefix(chunk, "pub use ") ||
 			strings.HasPrefix(chunk, "pub mod ")
+		// Any other top-level `pub <keyword>` item is part of the
+		// crate's public surface too (sol round-13 P2: a pub struct
+		// passed silently). Recognized item keywords contribute their
+		// declared name to the inventory check; a `pub`-prefixed chunk
+		// matching no keyword fails closed. Crate-local visibility
+		// modifiers (pub(crate), pub(super), pub(in ...)) are not the
+		// public surface and pass as ordinary code.
+		if !exportPrefix && strings.HasPrefix(chunk, "pub ") {
+			if keyword, ok := publicItemName(chunk); ok {
+				names = append(names, keyword)
+				return
+			}
+			if strings.HasPrefix(chunk, "pub(crate) ") ||
+				strings.HasPrefix(chunk, "pub(super) ") ||
+				strings.HasPrefix(chunk, "pub(in ") {
+				return // crate-local visibility: not a public export
+			}
+			unhandled = append(unhandled, chunk)
+			return
+		}
 		glued := !exportPrefix &&
 			(strings.Contains(chunk, "pub use ") || strings.Contains(chunk, "pub mod "))
 		if glued {
@@ -987,6 +1128,52 @@ func TestGroupedExportDeclarationsYieldTheirNames(t *testing.T) {
 	}, "\n"))
 	if len(unhandled) != 0 || len(blocked) != 3 || blocked[0] != "six" || blocked[1] != "seven" || blocked[2] != "eight" {
 		t.Fatalf("block-comment exports yielded %v (unhandled %v)", blocked, unhandled)
+	}
+	// sol round-13 P2 (literals): a character literal's quote must not
+	// open a string, and raw strings do not interpret escapes —
+	// otherwise balanced delimiters erase the exports between them.
+	literals, unhandled := exportNamesIn(strings.Join([]string{
+		"const _: char = '\"';",
+		"pub use kappa::{twelve, thirteen};",
+		"const _: char = '\"';",
+		`#[doc = r"C:\\"]`,
+		"pub use lambda::fourteen;",
+		`#[doc = "\""]`,
+		"pub mod fault;",
+	}, "\n"))
+	wantLiterals := []string{"twelve", "thirteen", "fourteen", "fault"}
+	if len(unhandled) != 0 || len(literals) != len(wantLiterals) {
+		t.Fatalf("literal-boundary exports yielded %v (unhandled %v), want %v", literals, unhandled, wantLiterals)
+	}
+	for i := range wantLiterals {
+		if literals[i] != wantLiterals[i] {
+			t.Fatalf("literal-boundary exports yielded %v, want %v", literals, wantLiterals)
+		}
+	}
+	// sol round-13 P2 (public items): a pub item's declared name joins
+	// the inventory check when the chunk is complete (semicolon- or
+	// brace-free name position); a pub fn whose body has no semicolon
+	// extends the chunk into following items, and that glued shape is
+	// unhandled BY DESIGN — the gate fails closed until the walker is
+	// extended, never silently accepts.
+	items, unhandled := exportNamesIn(strings.Join([]string{
+		"#[derive(Debug)]",
+		"pub struct UnrecordedGateExport;",
+		"pub const ANSWER: u8 = 3;",
+	}, "\n"))
+	if len(unhandled) != 0 || len(items) != 2 ||
+		items[0] != "UnrecordedGateExport" || items[1] != "ANSWER" {
+		t.Fatalf("public items yielded %v (unhandled %v)", items, unhandled)
+	}
+	if _, unhandled := exportNamesIn("pub opaque Widget;"); len(unhandled) != 1 {
+		t.Fatalf("an unrecognized pub item must be unhandled, got %v", unhandled)
+	}
+	glued, unhandled := exportNamesIn("pub fn creator_only_requested() -> bool { true }\npub(crate) fn helper() {}\n")
+	if len(glued) != 0 || len(unhandled) != 1 {
+		t.Fatalf("a semicolon-free pub fn body must glue and fail closed, got names %v unhandled %v", glued, unhandled)
+	}
+	if only, unhandled := exportNamesIn("pub(crate) mod internal;\n"); len(unhandled) != 0 || len(only) != 0 {
+		t.Fatalf("crate-local visibility must pass as ordinary code, got %v %v", only, unhandled)
 	}
 }
 
