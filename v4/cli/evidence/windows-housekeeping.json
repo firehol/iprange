@@ -1,21 +1,21 @@
 {
   "binaries": {
     "go": {
-      "mtime": "2026-10-11T14:29:48.437766+00:00",
+      "mtime": "2026-10-11T15:18:56.797860+00:00",
       "path": "C:/msys64/tmp/qualsvc-w192627-W10/win/go/iprange.exe",
       "sha256": "4c7d2f79675825093d1f7838656cc7739f7ae5c9d7e9f344c158cc52117c935f",
       "size": 14126592
     },
     "rust": {
-      "mtime": "2026-10-11T14:29:48.577760+00:00",
+      "mtime": "2026-10-11T15:18:56.875860+00:00",
       "path": "C:/msys64/tmp/qualsvc-w192627-W10/win/rust/iprange.exe",
-      "sha256": "2a620282617f5ef5f87632a6c300959441edcb3919ac58d3e40e3cddd1e6a11f",
-      "size": 6350336
+      "sha256": "1c9c19306f0729ff264bcb3d782e9700e669a9bde3214accc90aff5f181c22d6",
+      "size": 6351360
     }
   },
   "build_provenance": {
-    "base_commit": "9c9d3070d32f4c92dbdac60daa010b3ee089706b",
-    "base_commit_subject": "evidence: the final rotation at the sol round-6 fix HEAD \u00e2\u20ac\u201d everything at one revision",
+    "base_commit": "8386e5608375d5378b96b06a1806f961ec49c1e1",
+    "base_commit_subject": "evidence: the round-8 rotation at the sol round-7 fix HEAD \u00e2\u20ac\u201d one revision, detectors in the native suite",
     "build_commands": [
       "go-vet [scored attempt 1, rc=0]: (cd <checkout>/v4/go && nice go vet ./...)",
       "go-build-cli [scored attempt 1, rc=0]: (cd <checkout>/v4/go && nice env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -o C:/msys64/tmp/qualsvc-w192627-W10/bin/go/iprange.exe ./cmd/iprange)",
@@ -43,7 +43,7 @@
       "selftest-guard [scored attempt 1, rc=0]: (cd <checkout> && nice /mingw64/bin/python.exe v4/cli/windows_guard_harness.py --self-test)",
       "selftest-housekeeping [scored attempt 1, rc=0]: (cd <checkout> && nice /mingw64/bin/python.exe v4/cli/windows_housekeeping_harness.py --self-test)"
     ],
-    "build_identity": "IPRANGE_V4_BUILD_ID 36d92513da175584d2c660b4d7b808c941e193017cdbf4c0bbdf8ee0222e3dfa recomputed from this clean checkout by command_sanitize --emit-build-ids over the manifest and 357 sources and found verbatim in both built Rust products (cli_contains_expected=True, worker_contains_expected=True); the windows entry equals the darwin, freebsd and linux entries, which is the host-invariant logical-name algorithm of v4/rust/iprange-livedb/build.rs. This revision changes v4/rust and v4/go sources relative to the previously qualified revision, so this identity is expected to differ from the one recorded in the previously installed reports.",
+    "build_identity": "IPRANGE_V4_BUILD_ID 78c2f64da0a1ce00ef3293cde24843bcc2db24b949c499fd70fb472f276895fd recomputed from this clean checkout by command_sanitize --emit-build-ids over the manifest and 357 sources and found verbatim in both built Rust products (cli_contains_expected=True, worker_contains_expected=True); the windows entry equals the darwin, freebsd and linux entries, which is the host-invariant logical-name algorithm of v4/rust/iprange-livedb/build.rs. This revision changes v4/rust and v4/go sources relative to the previously qualified revision, so this identity is expected to differ from the one recorded in the previously installed reports.",
     "c_oracle_unavailable": "The released C CLI has no native Windows build, so on this host the comparison against the reference is unavailable. It is stated per case: the verbose Go run printed 246 'C-ORACLE-UNAVAILABLE' markers, and in each of those cases the engine's own pinned bytes were compared first and decided the case. No case was dropped: the engine assertions in TestNulTextRecordsMatchC, TestDNSBookkeepingMatchesCByteForByte, TestDNSBookkeepingInterleavedBatch and the four verbose diagnostic families ran here. The cases whose pinned bytes depend on how the host answers a name report themselves as scoped, with the answer this host measured, and those lines are listed in go_targeted_scoped.",
     "carried_observation": "The release build graph (35 units compiled, target tree moved out of the checkout before the build so nothing was reused) reports 0 warning line(s) and the summary line(s) (none). The abandon_spawn warning(s) recorded verbatim: (none). Compared with the previously qualified native run's build log (qualsvc-w1925c-W/logs/cargo-build-bins.GREEN.log): that run reported 2 warning line(s) and this one 0; identical as a set: no. abandon_spawn is now #[cfg(unix)]-gated at v4/rust/iprange-livedb/src/worker/client.rs, whose doc comment records that its only callers are in the unix owned-stdio spawn path, so the Windows build graph has no dead-code report for it and none was suppressed here. This recipe does not deny warnings, and this leg neither introduced nor silenced any of them.",
     "changed_files": [
@@ -117,7 +117,7 @@
       },
       {
         "path": ".agents/sow/current/SOW-0035-20261006-creator-only-follows-database.md",
-        "sha256": "245a8d9ab257550586c157c05c98f0adad3b069e91866bb932de2ab044f8fb6b"
+        "sha256": "173326ee8e774bf740e95079502592e13cd76f4b1b248ea2f3b7a30d464f4cd6"
       },
       {
         "path": ".agents/sow/done/.gitkeep",
@@ -2641,55 +2641,55 @@
       },
       {
         "path": "v4/cli/evidence/README.md",
-        "sha256": "7435c6336b54b12d9f863e7ee62e805ff4bfd06e77aab8533a61babaaa31d7a1"
+        "sha256": "5608e3dd7f9ed6d4e68fa68753dd89d2d6c02bc8f81013abefc12a6d9fe12698"
       },
       {
         "path": "v4/cli/evidence/SHASUMS.txt",
-        "sha256": "363b34f5874fd6eeee9e4d1ba1d95c9fe7a7cfcc4b0df20520908a00a4cbf2ca"
+        "sha256": "3e775d169eeb3f484cd91d3e8f8cab51c2b1a8867d5b9ff7da8ba98bc386b626"
       },
       {
         "path": "v4/cli/evidence/battery-manifest.json",
-        "sha256": "3b2e072634172ef52229971fdf5e9f997a3a1cd4d8375ef9c1644043360bdcd5"
+        "sha256": "2cb5334ae4fde30209241ca0643588f77b07fcda43b146959b98fb3e43bc5d0e"
       },
       {
         "path": "v4/cli/evidence/build-ids.json",
-        "sha256": "7b0077601b2f65402f68a03654a2f44f8fede8d37bfbce09673b2bbe0c5c2ffb"
+        "sha256": "91cd856f97d0b03f6b350d9c897cccda2759cb737bf8df84a448732273fe64b7"
       },
       {
         "path": "v4/cli/evidence/coverage-go.json",
-        "sha256": "f69b0c86c9e44390378d57e74212f5b33a997b1ab5766a0e7d62a7c756608b90"
+        "sha256": "29cbf79ce82ba7cc7495cbaf4b482c2a12431f0f009422fc95769969950e6129"
       },
       {
         "path": "v4/cli/evidence/crash-go_to_rust.json",
-        "sha256": "574cd9dc59a2767eda202ec57e0feab088b2ec32264977b04a54f9898f8b80f6"
+        "sha256": "8f8f28e024ffae4a790da2234ad932790411e1d9631e6944dd79aeecc65867ca"
       },
       {
         "path": "v4/cli/evidence/crash-negative-consumer-false.json",
-        "sha256": "b72382e0df6f8b6d942d29215d8cd3c12f88ff3168f4bb1e410c567f4d283d05"
+        "sha256": "52738b585c7e9b20e39c7724c3517acb37edccf6a071140729ee0858f0126627"
       },
       {
         "path": "v4/cli/evidence/crash-negative-producer-false.json",
-        "sha256": "5bd2a14b42749bc78a47f60a2006e064b29917993853f5d0b7894f78922a92d4"
+        "sha256": "44e1840d5b91547ab801becaa27e33f90bb5be31ed18541294c15afd2c8ba43b"
       },
       {
         "path": "v4/cli/evidence/crash-negative.json",
-        "sha256": "b72382e0df6f8b6d942d29215d8cd3c12f88ff3168f4bb1e410c567f4d283d05"
+        "sha256": "52738b585c7e9b20e39c7724c3517acb37edccf6a071140729ee0858f0126627"
       },
       {
         "path": "v4/cli/evidence/crash-rust_to_go.json",
-        "sha256": "6cce4eaa7b8bb10e7d377b9cda4d1e19cf97088f40f898984dabe368da5f9576"
+        "sha256": "45839594209edb6d78b7a591974ddfc0e9867fa1557844f658c70469121fa9a4"
       },
       {
         "path": "v4/cli/evidence/crash.json",
-        "sha256": "6cce4eaa7b8bb10e7d377b9cda4d1e19cf97088f40f898984dabe368da5f9576"
+        "sha256": "45839594209edb6d78b7a591974ddfc0e9867fa1557844f658c70469121fa9a4"
       },
       {
         "path": "v4/cli/evidence/create-mode.json",
-        "sha256": "2de5bc298b8673a3c62b666222de0cfd3823520e3993464de82d6689f8e3dff4"
+        "sha256": "e816f75cb03f5cc8a6572abaed988315dc62c4fbd427238c4b40566c0cb317bd"
       },
       {
         "path": "v4/cli/evidence/fifo-surface.json",
-        "sha256": "e95a1df8f7d73e71935135ea99b11680ddaf7cd972c21818003b49954b510fa1"
+        "sha256": "02fd23e5883f6d2831a6a42194e0326585ab27b1e5fdc605a0d8c2b296240cea"
       },
       {
         "path": "v4/cli/evidence/fold-enum/README.md",
@@ -2709,11 +2709,11 @@
       },
       {
         "path": "v4/cli/evidence/golden.json",
-        "sha256": "79c7e5fc9394eb8fc1efc8c4bd3bf38637dad95121fc3c109479cd85bd99e798"
+        "sha256": "15d1d7d0bc13fc8d35701eef3724df16a79240843dfecca2b29e7ee7bec79be3"
       },
       {
         "path": "v4/cli/evidence/guard-posix.json",
-        "sha256": "0b220619a60116e887abfb2041f1893a2176fdc580a0ccfbfae3579cc800519d"
+        "sha256": "df9abbaefa3598949179845c96472e4a2103fa3c8dc49aa936d8cd2e8c896c15"
       },
       {
         "path": "v4/cli/evidence/known-defects.json",
@@ -2721,47 +2721,47 @@
       },
       {
         "path": "v4/cli/evidence/matrix-go.json",
-        "sha256": "8c721a9b910745e2c9c58ed1c5c82711311b79ba07e766fff97622604769d14f"
+        "sha256": "89b139518757fea66263993f98bf096d55b19e4cc376467929aa4ec51e49e9f4"
       },
       {
         "path": "v4/cli/evidence/matrix-go_to_rust.json",
-        "sha256": "cb2d4f8f3f87ad8fccdbb8bdf1fcef56739f2cec4f002051e29f94d701be0f52"
+        "sha256": "ebf29d2ca59d9fa0e6234aec0dba6429e06f9e22d5d0cd5ee8017a6d6431a7bb"
       },
       {
         "path": "v4/cli/evidence/matrix-rust.json",
-        "sha256": "76f9bbc4613284ba6a9fe469dc01e61335102f3cb87fee9c46f391fe61c33c0b"
+        "sha256": "71d5c527b3afb6acd8709b74460fd3adda9a11c69c620a782da0ae9fc82ff677"
       },
       {
         "path": "v4/cli/evidence/matrix-rust_to_go.json",
-        "sha256": "7da81479a6d5e4211acbaab366e362f9283a5677ccef077b9eada400ae023f1c"
+        "sha256": "644fb644426b8872c83b873e068f596b11733e7169f30713e38218ff0dee7593"
       },
       {
         "path": "v4/cli/evidence/race-battery.json",
-        "sha256": "1ad284f3e03547fcf5d07ad5ab8cf81f269077539dc08bde423401641f48bfe1"
+        "sha256": "85de41866a5f6fd0a90442c1e2253c7c34829b68bd581edbc2eb5a070ae2e5e9"
       },
       {
         "path": "v4/cli/evidence/refusal-class-parity.json",
-        "sha256": "4912dca7c8eecf168db4e4e8b3317151696b20b5d72cce96f7599ace188be2f7"
+        "sha256": "e5b909b1a5fe0d019daa0c9ba5c181a8e94449959bf14f9faeecfcc5d0d00524"
       },
       {
         "path": "v4/cli/evidence/resource.json",
-        "sha256": "2c5413d6ef2c2e85ed277e6187ede55b3a6689bccafcb20ab2a2a13ce5518a2a"
+        "sha256": "17659a35d5a8b72ccc9fdb37b510e696615878143140b3651aaa0cd3c9e2691a"
       },
       {
         "path": "v4/cli/evidence/sensitivity.json",
-        "sha256": "e725df624a53659daecc8d53cea3195fb08ca203cf8d251cb153d56f31edad4a"
+        "sha256": "029ce563f6923bcd4723e872922bb5f3b52ed742291cfabadf7a5961904e45d4"
       },
       {
         "path": "v4/cli/evidence/throughput.json",
-        "sha256": "5d49598a0d9038667f4f826a8351b70aa194c543a55228489fbe93575a65fefe"
+        "sha256": "bd1a4ed92599af3018e24097ebdc58892b9102db14e612d3b87a65f2202ff2f1"
       },
       {
         "path": "v4/cli/evidence/windows-guard.json",
-        "sha256": "4b6bc7fb8dda6df2db1452e557d6a4478cc1bc39d3ebac337c5c563b3163e76f"
+        "sha256": "c9d4c1e93c7711cd9e339dab32ba0c4928d823c037acf44cb5a974b960c0273b"
       },
       {
         "path": "v4/cli/evidence/windows-housekeeping.json",
-        "sha256": "893fc0a58c5a48337ed9439633aa1785cf6c7158ae8826099d4996c8400c3b20"
+        "sha256": "cabad9be90d3679be97fd5701f4a40ce94a843ec252de961a6a936aa2fe22e0b"
       },
       {
         "path": "v4/cli/fake_server.py",
@@ -7285,7 +7285,7 @@
       },
       {
         "path": "v4/go/parity_gate_test.go",
-        "sha256": "5e986eda8d6c2285daadd55e053b5d3089b8edc153e5eedccbcfe07bd5fdbdde"
+        "sha256": "cd6c01d6f6bd78bff494c340b2836af6493db7a5509abf20ebf8b83dca3aeed6"
       },
       {
         "path": "v4/go/parity_manifest.tsv",
@@ -7793,7 +7793,7 @@
       },
       {
         "path": "v4/rust/iprange-cli/src/io/export_writer.rs",
-        "sha256": "3162095969e8ae97231212f4c56d2e1fae139770a7310e1cda1e768aa5b0cae9"
+        "sha256": "4afc8468c028433d5ab04f2eef6de668898375754ed342ed810b4f1603cf7731"
       },
       {
         "path": "v4/rust/iprange-cli/src/io/input.rs",
@@ -8385,7 +8385,7 @@
       },
       {
         "path": "v4/rust/iprange-livedb/src/lib.rs",
-        "sha256": "74bff97fb7e573aa57f4f05c2acb7bc904e4f564ba4922d2d27501391e08fffa"
+        "sha256": "e7526f7f570e357570cf8c6373f4f22ae3012c84acef19bcf6fdaa6017625f6c"
       },
       {
         "path": "v4/rust/iprange-livedb/src/live_cleanup.rs",
@@ -8909,7 +8909,7 @@
       },
       {
         "path": "v4/rust/iprange-livedb/src/publication/security.rs",
-        "sha256": "9f38292d129f208457d449e3f26965c4bac867f7364dd2fc9fe3f4d1e3f6b1a8"
+        "sha256": "4c6166bdf339782ae1495eb24f76490861dc7f96bd46bcd388c0731ed52b2a52"
       },
       {
         "path": "v4/rust/iprange-livedb/src/publication/security/apple.rs",
@@ -9764,10 +9764,10 @@
         "sha256": "071bc7e3b4f9620207fb6331b9a2207ad8f0145906c8987434a43456aad02c6c"
       }
     ],
-    "changed_files_note": "2429 files differ between this revision and the previously Windows-qualified revision a691ab8c (the span the transferred snapshot manifest covers); each is listed with the SHA-256 of the qualification-workstation copy, and the checkout is byte-identical to commit b7134ac97681, proven by the equal tree object (tree hashing covers every tracked file, so the manifest measures content, the tree proves completeness). They carry the sol round-7 fix batch: the output-protection helpers are platform-neutral (every platform routes through the real creator-only authority \u2014 on Windows the protected-descriptor DACL proof \u2014 with a negative detector that runs in this leg's cargo suite), and the parity export inventory now detects grouped declarations. The Rust library changes; the Windows products re-record their digests from this leg's own build.",
-    "checkout": "authorized Windows validation host; the checkout is detached at the recorded revision and git status --porcelain is empty, so the tree is exactly commit b7134ac976812ff38bd9f681c29be7a21dec802f with no local edit. It was updated in place by a git fetch of master from a git bundle transferred from the qualification workstation over ssh (prerequisite 2cd7ef09, the previously verified snapshot this checkout was already detached at) and git checkout --detach to the recorded revision. Tree identity is proven by measurement rather than by sampling files: the checked-out tree object is a4bb5a87740a2281fe5c8895e60c9ed6c8202556, which equals the tree of the same revision on the qualification workstation, and a git tree object hashes every tracked file, so an equal tree object is byte-identity of the whole source tree.",
-    "content_snapshot_note": "git_head is b7134ac976812ff38bd9f681c29be7a21dec802f: the PUBLISHED master commit of the repository (9c9d3070d32f4c92dbdac60daa010b3ee089706b is its parent, evidence: the final rotation at the sol round-6 fix HEAD \u00e2\u20ac\u201d everything at one revision). There is no throwaway commit-tree snapshot here: the SOW-0035 creator-only work was committed and pushed, the Linux gate-tier battery qualified it, and this leg builds from the commit itself, transferred as an incremental git bundle on top of the previously verified snapshot. The leg is reproducible from the public commit alone; changed_files lists every file the commit adds or changes versus its parent, pinned by SHA-256, including v4/cli/evidence/** (the two Windows reports this leg re-author are rotated into that directory by a later commit; the stale copies in the checkout are inputs the leg verifies byte-identical and then replaces by transfer, never in place).",
-    "flake_history": "Scored invocation: 0 of 33 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 24 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory.",
+    "changed_files_note": "2429 files differ between this revision and the previously Windows-qualified revision b7134ac9 (the span the transferred snapshot manifest covers); each is listed with the SHA-256 of the qualification-workstation copy, and the checkout is byte-identical to commit 165f9a2a807e, proven by the equal tree object (tree hashing covers every tracked file, so the manifest measures content, the tree proves completeness). They carry the sol round-8 fix batch: the public output proof composes the structural single-link check through the namespace's retained-identity proof beside the descriptor proof \u2014 with the hard-link negative detector that runs in this leg's native cargo suite \u2014 and the parity export walker scans complete multiline declarations, failing closed on unhandled syntax. The Rust library changes; the Windows products re-record their digests from this leg's own build.",
+    "checkout": "authorized Windows validation host; the checkout is detached at the recorded revision and git status --porcelain is empty, so the tree is exactly commit 165f9a2a807ec4693eaa9c4aef78dcd67c19737f with no local edit. It was updated in place by a git fetch of master from a git bundle transferred from the qualification workstation over ssh (prerequisite 2cd7ef09, the previously verified snapshot this checkout was already detached at) and git checkout --detach to the recorded revision. Tree identity is proven by measurement rather than by sampling files: the checked-out tree object is 061bff5f22950a8462cee5cbacb5a29db4f713b1, which equals the tree of the same revision on the qualification workstation, and a git tree object hashes every tracked file, so an equal tree object is byte-identity of the whole source tree.",
+    "content_snapshot_note": "git_head is 165f9a2a807ec4693eaa9c4aef78dcd67c19737f: the PUBLISHED master commit of the repository (8386e5608375d5378b96b06a1806f961ec49c1e1 is its parent, evidence: the round-8 rotation at the sol round-7 fix HEAD \u00e2\u20ac\u201d one revision, detectors in the native suite). There is no throwaway commit-tree snapshot here: the SOW-0035 creator-only work was committed and pushed, the Linux gate-tier battery qualified it, and this leg builds from the commit itself, transferred as an incremental git bundle on top of the previously verified snapshot. The leg is reproducible from the public commit alone; changed_files lists every file the commit adds or changes versus its parent, pinned by SHA-256, including v4/cli/evidence/** (the two Windows reports this leg re-author are rotated into that directory by a later commit; the stale copies in the checkout are inputs the leg verifies byte-identical and then replaces by transfer, never in place).",
+    "flake_history": "Scored invocation: 0 of 33 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 25 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory.",
     "flake_reasons": [],
     "flake_reasons_note": "Each retry the driver classified as a host process-creation failure is recorded by the driver itself, per attempt, in flake-reasons.tsv; the recognised signatures are 0xc0000142 / STATUS_DLL_INIT_FAILED / its decimal spelling appearing in the step's own log, and an exit 127 whose log is empty (the tool was never started). Neither signature turns a red step green: a step that keeps failing exhausts the 4 attempts and is reported red with its log.",
     "go_targeted_scoped": [
@@ -9780,8 +9780,8 @@
       "SCOPED:     c_dns_bookkeeping_test.go:659: dns same host twice v4: scoped, not run: the pinned bytes require the glibc numeric short-circuit, which this platform's resolver does not answer and the Rust authority therefore does not answer either; the failure shape here is pinned by TestDNSNumericFormsAreNotAnsweredHere",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v4 (0.00s)",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_two_files_one_host_each (0.00s)",
-      "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_localhost (0.01s)",
-      "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_allnodes (2.70s)",
+      "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_localhost (0.02s)",
+      "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_allnodes (2.69s)",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v4_binary (0.00s)",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_one_host_v6_binary_header (0.00s)",
       "SCOPED:     --- SKIP: TestDNSBookkeepingMatchesCByteForByte/dns_same_host_twice_v4 (0.00s)",
@@ -9795,13 +9795,13 @@
     ],
     "go_targeted_verbose_rows": "The scored verbose Go leg recorded 533 run and PASS rows and 246 C-ORACLE-UNAVAILABLE disclosure markers. Both are counted over the whole log rather than only its unindented lines, because go test indents every nested subtest row. The rows this leg could not run against the reference or against a name the host answers are listed verbatim in go_targeted_scoped.",
     "host": "Windows 11 10.0.26200, MSYS_NT-10.0-26200 [nodename redacted] 3.6.10-9a6cbe55.x86_64 2026-07-16 20:47 UTC x86_64 Msys, authorized Windows validation host",
-    "native_cargo_test": "GREEN with the recorded worker-colocation step. nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-fail-fast returned rc=0 after cargo test --no-run and copying v4/rust/target/release/iprange-v4-worker.exe beside the debug test executable in v4/rust/target/debug/deps/iprange-v4-worker.exe (the step documented in iprange-cli/src/rpc/handlers/export.rs live_source_tests module docs; without it the six worker-dependent live_source_tests answer os_unsupported, which that module records as an environment defect). Tally: 359 passed, 0 failed, 0 ignored across the 13 test targets (src\\main.rs, tests\\legacy_bare_directory_input.rs, tests\\legacy_dns_bookkeeping.rs, tests\\legacy_missing_option_value.rs, tests\\legacy_nonutf8_load_path.rs, tests\\legacy_nul_records.rs, tests\\legacy_prefixes_int_truncation.rs, tests\\legacy_quiet_is_diff_only.rs, tests\\legacy_unrecognized_dash_args.rs, tests\\legacy_verbose_diagnostics.rs, tests\\nonutf8_argv.rs, tests\\termination_signals.rs, tests\\thread_creation_discipline.rs), including rpc::handlers::maintenance::tests::list_rows_round_trip_into_remove_for_every_removable_kind and one_list_covers_every_kind_and_every_row_stays_removable, and the six io::caller_open::windows_judgment_tests pins answered ok. The scored attempt is cargo-test-iprange-cli.a1.log.",
+    "native_cargo_test": "GREEN with the recorded worker-colocation step. nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-fail-fast returned rc=0 after cargo test --no-run and copying v4/rust/target/release/iprange-v4-worker.exe beside the debug test executable in v4/rust/target/debug/deps/iprange-v4-worker.exe (the step documented in iprange-cli/src/rpc/handlers/export.rs live_source_tests module docs; without it the six worker-dependent live_source_tests answer os_unsupported, which that module records as an environment defect). Tally: 360 passed, 0 failed, 0 ignored across the 13 test targets (src\\main.rs, tests\\legacy_bare_directory_input.rs, tests\\legacy_dns_bookkeeping.rs, tests\\legacy_missing_option_value.rs, tests\\legacy_nonutf8_load_path.rs, tests\\legacy_nul_records.rs, tests\\legacy_prefixes_int_truncation.rs, tests\\legacy_quiet_is_diff_only.rs, tests\\legacy_unrecognized_dash_args.rs, tests\\legacy_verbose_diagnostics.rs, tests\\nonutf8_argv.rs, tests\\termination_signals.rs, tests\\thread_creation_discipline.rs), including rpc::handlers::maintenance::tests::list_rows_round_trip_into_remove_for_every_removable_kind and one_list_covers_every_kind_and_every_row_stays_removable, and the six io::caller_open::windows_judgment_tests pins answered ok. The scored attempt is cargo-test-iprange-cli.a1.log.",
     "native_cargo_test_attempts": {
       "green_log": "cargo-test-iprange-cli.a1.log",
       "logs_present": [
         "cargo-test-iprange-cli.a1.log"
       ],
-      "note": "Scored invocation: 0 of 33 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 24 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory."
+      "note": "Scored invocation: 0 of 33 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 25 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory."
     },
     "native_go_test": "GREEN. nice go test ./... -count=1 in v4/go on the native Windows host returned rc=0: 32 packages -- 24 ok, 8 with no test files, 0 failures (go-test-final.a1.log), scored with no concurrent compile running. The maintenance removal round-trip TestMaintenanceListRowsRoundTripIntoRemoveForEveryRemovableKind was run separately with -v and passed 4 of 4 PASS rows (the test plus its scratch, reservation and publication_temp subtests) with 0 failing rows (go-test-maintenance-roundtrip.a1.log). The five packages whose Windows arms the wave-19.25 maintenance work touched were each run separately with -v -count=1 and returned rc=0: go-test-internal_publication.a1.log, go-test-internal_live.a1.log, go-test-internal_cli_handlers.a1.log, go-test-internal_calleropen.a1.log, go-test-internal_worker.a1.log. The attempt history is in native_go_test_attempts.",
     "native_go_test_attempts": {
@@ -9822,7 +9822,7 @@
         "go-test-maintenance-roundtrip.GREEN.log",
         "go-test-maintenance-roundtrip.a1.log"
       ],
-      "note": "Scored invocation: 0 of 33 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 24 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory."
+      "note": "Scored invocation: 0 of 33 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 25 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory."
     },
     "native_steps": {
       "build-ids": {
@@ -9986,7 +9986,7 @@
         "scored_attempt": 1
       }
     },
-    "revision": "b7134ac976812ff38bd9f681c29be7a21dec802f",
+    "revision": "165f9a2a807ec4693eaa9c4aef78dcd67c19737f",
     "rust_build_recipe_note": "The Rust products were built by the recorded canonical invocation (--release --all-features --bins --examples) from the checkout itself into the checkout's own v4/rust/target, which was moved out of the tree to the work root before this run so nothing from an earlier build could be reused; the worker was also built explicitly with --release -p iprange-livedb --bin iprange-v4-worker, and the release worker was copied beside the debug test executable so the live_source_tests pins could answer. The Go products were built CGO_ENABLED=0 GOOS=windows GOARCH=amd64 -trimpath -buildvcs=false, which is why their digests do not depend on the build tree location.",
     "rust_dns_hex_scoped_note": "legacy::dns::tests::hex_numeric_hostnames_answer_locally_where_the_authority_answers is #[cfg(unix)]: glibc answers the inet_at-style hex numeric forms locally and Windows has no such form, so the compatibility is pinned only where it exists. The step still ran natively and its own summary line is 'running 0 tests', recorded so the case reads as scoped rather than omitted. The platform-independent batching contract it used to be tangled with is pinned by multi_file_batches_drain_independently, which runs on every target on the dotted-numeric loopback.",
     "shared_self_tests": {
@@ -10022,7 +10022,7 @@
         "tool": "windows_housekeeping_harness.py"
       }
     },
-    "slow_steps": "Steps whose measured wall time exceeded 120 s: go-test-final=477s. Every step's seconds are recorded in timings.tsv in the work root.",
+    "slow_steps": "Steps whose measured wall time exceeded 120 s: none. Every step's seconds are recorded in timings.tsv in the work root.",
     "targeted_repairs": "The targeted checks this leg re-runs natively with their own scored step: rust-targeted-parse (Rust directory-expansion naming plus the four portable directory and CSV-name pins), rust-targeted-dns (the Rust DNS batching case on the dotted-numeric loopback, with the glibc hex form scoped to unix), go-targeted-legacy (the Go directory, cross-engine name, per-platform message and DNS cases, and the four C-parity families run verbosely so every unavailable C-oracle leg and every scoped case is printed rather than inferred), and cross-engine-csv (both Windows products asked for the same --count-unique --header rows and compared byte for byte).",
     "toolchain": {
       "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
@@ -10053,7 +10053,7 @@
     "C:/msys64/tmp/qualsvc-w192627-W10/reports/windows-housekeeping.json"
   ],
   "failed": 0,
-  "git_head": "b7134ac976812ff38bd9f681c29be7a21dec802f",
+  "git_head": "165f9a2a807ec4693eaa9c4aef78dcd67c19737f",
   "outcomes": [
     {
       "after_listing": {
@@ -10065,7 +10065,7 @@
       "cross_listing": {
         "binary": "rust",
         "directory_identity": {
-          "file": "12384898975834302",
+          "file": "15481123719651519",
           "volume": "8264173776665448027"
         },
         "entries": "2",
@@ -10078,46 +10078,46 @@
         "rows": [
           {
             "artifact": {
-              "attempt_id": "70429d5a430bb089d876ba2fd272151e",
+              "attempt_id": "25e6894c2c058b152475abbc2a5af7fc",
               "basename_encoding": 2,
               "creation_security": {
                 "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
                 "kind": 2
               },
               "directory_identity": {
-                "file": "12384898975834302",
+                "file": "15481123719651519",
                 "volume": "8264173776665448027"
               },
               "directory_role": "destination",
-              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "envelope_identity": {
-                "file": "30680772462027007",
+                "file": "9007199255306497",
                 "volume": "8264173776665448027"
               },
-              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "inert_identity": {
-                "file": "32088147345580286",
+                "file": "19140298416890112",
                 "volume": "8264173776665448027"
               },
               "inert_presence": "present",
               "kind": "private_output",
               "ordinal": 1,
               "selected_envelope_sequence": "1",
-              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000.\u0000t\u0000m\u0000p\u0000",
+              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000.\u0000t\u0000m\u0000p\u0000",
               "source_presence": "absent",
               "state": "inert"
             },
-            "attempt_id": "70429d5a430bb089d876ba2fd272151e",
-            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAC0ANwAwADQAMgA5AGQANQBhADQAMwAwAGIAYgAwADgAOQBkADgANwA2AGIAYQAyAGYAZAAyADcAMgAxADUAMQBlAC0AMAAwADAAMAAwADAAMAAxAC4AdABtAHAA",
+            "attempt_id": "25e6894c2c058b152475abbc2a5af7fc",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAC0AMgA1AGUANgA4ADkANABjADIAYwAwADUAOABiADEANQAyADQANwA1AGEAYgBiAGMAMgBhADUAYQBmADcAZgBjAC0AMAAwADAAMAAwADAAMAAxAC4AdABtAHAA",
             "basename_encoding": 2,
             "candidate_kind": "inert_payload",
             "directory": "C:/msys64/tmp/qualsvc-w192627-W10/whouse/gc-go",
             "directory_identity": {
-              "file": "12384898975834302",
+              "file": "15481123719651519",
               "volume": "8264173776665448027"
             },
             "identity": {
-              "file": "32088147345580286",
+              "file": "19140298416890112",
               "volume": "8264173776665448027"
             },
             "kind": "windows_housekeeping",
@@ -10125,46 +10125,46 @@
           },
           {
             "artifact": {
-              "attempt_id": "70429d5a430bb089d876ba2fd272151e",
+              "attempt_id": "25e6894c2c058b152475abbc2a5af7fc",
               "basename_encoding": 2,
               "creation_security": {
                 "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
                 "kind": 2
               },
               "directory_identity": {
-                "file": "12384898975834302",
+                "file": "15481123719651519",
                 "volume": "8264173776665448027"
               },
               "directory_role": "destination",
-              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "envelope_identity": {
-                "file": "30680772462027007",
+                "file": "9007199255306497",
                 "volume": "8264173776665448027"
               },
-              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "inert_identity": {
-                "file": "32088147345580286",
+                "file": "19140298416890112",
                 "volume": "8264173776665448027"
               },
               "inert_presence": "present",
               "kind": "private_output",
               "ordinal": 1,
               "selected_envelope_sequence": "1",
-              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000.\u0000t\u0000m\u0000p\u0000",
+              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000.\u0000t\u0000m\u0000p\u0000",
               "source_presence": "absent",
               "state": "inert"
             },
-            "attempt_id": "70429d5a430bb089d876ba2fd272151e",
-            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQA3ADAANAAyADkAZAA1AGEANAAzADAAYgBiADAAOAA5AGQAOAA3ADYAYgBhADIAZgBkADIANwAyADEANQAxAGUALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
+            "attempt_id": "25e6894c2c058b152475abbc2a5af7fc",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQAyADUAZQA2ADgAOQA0AGMAMgBjADAANQA4AGIAMQA1ADIANAA3ADUAYQBiAGIAYwAyAGEANQBhAGYANwBmAGMALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
             "basename_encoding": 2,
             "candidate_kind": "envelope",
             "directory": "C:/msys64/tmp/qualsvc-w192627-W10/whouse/gc-go",
             "directory_identity": {
-              "file": "12384898975834302",
+              "file": "15481123719651519",
               "volume": "8264173776665448027"
             },
             "identity": {
-              "file": "30680772462027007",
+              "file": "9007199255306497",
               "volume": "8264173776665448027"
             },
             "kind": "windows_housekeeping",
@@ -10198,7 +10198,7 @@
           "live.iprange.readers",
           "removals.jsonl"
         ],
-        "reader": "6a18b8036f9b75dccddc764351af485c",
+        "reader": "46c22d301dd82a7c87fddde4a4f77cb0",
         "step_error": null,
         "steps": [
           {
@@ -10219,10 +10219,10 @@
               "jsonrpc": "2.0",
               "result": {
                 "address_family": "ipv4",
-                "commit_nonce": "efae1767d45d7712e83761771ed988ce",
-                "database_id": "0c985568ebe5d88cc428dff1bbfe879b",
+                "commit_nonce": "3b8466c9de8c224535b424912759578f",
+                "database_id": "3e279ed23a95dc4daeb8e1a2729f2011",
                 "directory_identity": {
-                  "file": "9288674232017021",
+                  "file": "9851624185438343",
                   "volume": "8264173776665448027"
                 },
                 "housekeeping": {
@@ -10230,15 +10230,15 @@
                 },
                 "main_basename": "live.iprange",
                 "main_identity": {
-                  "file": "18858823440179352",
+                  "file": "10977524092280985",
                   "volume": "8264173776665448027"
                 },
                 "method": "iprange.v1.database.create",
                 "reader_capacity": 8,
                 "residue_possible": false,
-                "sidecar_id": "5740f03f266b2e8b395c67b71aed8045",
+                "sidecar_id": "5fdd622eb3682ca770f34b19f7c580cc",
                 "sidecar_identity": {
-                  "file": "18295873486758033",
+                  "file": "19140298416890008",
                   "volume": "8264173776665448027"
                 },
                 "state": "created",
@@ -10276,18 +10276,18 @@
               "jsonrpc": "2.0",
               "result": {
                 "commit": {
-                  "attempted_commit_nonce": "911c318f0faf47711abbee8673b2c698",
-                  "attempted_database_id": "0c985568ebe5d88cc428dff1bbfe879b",
+                  "attempted_commit_nonce": "7cb209daa8a4b97496322e85e233e679",
+                  "attempted_database_id": "3e279ed23a95dc4daeb8e1a2729f2011",
                   "attempted_transaction_id": "2",
                   "cleanup": {},
                   "coordination_cleanup": {},
                   "directory_identity": {
-                    "file": "9288674232017021",
+                    "file": "9851624185438343",
                     "volume": "8264173776665448027"
                   },
                   "durability": "committed",
                   "main_identity": {
-                    "file": "18858823440179352",
+                    "file": "10977524092280985",
                     "volume": "8264173776665448027"
                   }
                 },
@@ -10337,8 +10337,8 @@
                 "info": {
                   "active_feed_count": "0",
                   "address_family": "ipv4",
-                  "commit_nonce": "911c318f0faf47711abbee8673b2c698",
-                  "database_id": "0c985568ebe5d88cc428dff1bbfe879b",
+                  "commit_nonce": "7cb209daa8a4b97496322e85e233e679",
+                  "database_id": "3e279ed23a95dc4daeb8e1a2729f2011",
                   "meta_selection": "proven_current",
                   "page_count": "8",
                   "range_record_count": "200",
@@ -10350,7 +10350,7 @@
                   }
                 },
                 "method": "iprange.v1.reader.open",
-                "reader": "6a18b8036f9b75dccddc764351af485c"
+                "reader": "46c22d301dd82a7c87fddde4a4f77cb0"
               }
             }
           },
@@ -10397,28 +10397,28 @@
                 "method": "iprange.v1.current.publish",
                 "publication": {
                   "attempt": {
-                    "commit_nonce": "c64d87074306e0eba85eb72ba6bd3b71",
+                    "commit_nonce": "74d2ff93e3817f441ef42e79e8d8a5f5",
                     "creation_security": {
                       "commitment": "0000000000000000000000000000000000000000000000000000000000000000",
                       "kind": 2
                     },
-                    "database_id": "2882bf5c7ece4e96158cc102f600977d",
+                    "database_id": "082bb70dc3e170c5640513d5f5e77677",
                     "destination_basename": "YwBvAHYAZQByAGEAZwBlAC4AaQBwAHIAYQBuAGcAZQA=",
                     "destination_basename_encoding": 2,
                     "directory_identity": {
-                      "file": "9288674232017021",
+                      "file": "9851624185438343",
                       "volume": "8264173776665448027"
                     },
                     "output_byte_length": "40960",
                     "output_identity": {
-                      "file": "10696049115570329",
+                      "file": "19140298416890010",
                       "volume": "8264173776665448027"
                     },
-                    "output_sha512": "c39b49462a47a7e0d54c62f045c71f45020f6516782e247940aabdf5ff92537e524b0a64cb439a8740a4907beab6ac7335cff011ebbc4915346f32850015c278",
-                    "publication_attempt_id": "6eed9f9f5e0e0541e9293a63992c08e5",
+                    "output_sha512": "41976dadc31b48ab03bd987e52bf9178ed553ba2e8a2edcbeaf13526c5494c52a20c83e45c8461ccaa04c223831141055cbab75a84b1b468f1708ba5c2b1f90c",
+                    "publication_attempt_id": "16ec51a034cb589b692efe77d7d6e4fb",
                     "publication_policy": "fail_if_exists",
                     "reservation_identity": {
-                      "file": "18577348463468698",
+                      "file": "16325548649783459",
                       "volume": "8264173776665448027"
                     },
                     "transaction_id": "1"
@@ -10482,18 +10482,18 @@
               "jsonrpc": "2.0",
               "result": {
                 "commit": {
-                  "attempted_commit_nonce": "0ab056c2b1f037173ed25ae006cb03f9",
-                  "attempted_database_id": "0c985568ebe5d88cc428dff1bbfe879b",
+                  "attempted_commit_nonce": "78212af0f9cf35b137a878104ff12c5e",
+                  "attempted_database_id": "3e279ed23a95dc4daeb8e1a2729f2011",
                   "attempted_transaction_id": "3",
                   "cleanup": {},
                   "coordination_cleanup": {},
                   "directory_identity": {
-                    "file": "9288674232017021",
+                    "file": "9851624185438343",
                     "volume": "8264173776665448027"
                   },
                   "durability": "committed",
                   "main_identity": {
-                    "file": "18858823440179352",
+                    "file": "10977524092280985",
                     "volume": "8264173776665448027"
                   }
                 },
@@ -10635,7 +10635,7 @@
           "product_version": "0.0.0"
         },
         "implementation": "go",
-        "mtime": "2026-10-11T14:29:48.437766+00:00",
+        "mtime": "2026-10-11T15:18:56.797860+00:00",
         "path": "C:/msys64/tmp/qualsvc-w192627-W10/win/go/iprange.exe",
         "sha256": "4c7d2f79675825093d1f7838656cc7739f7ae5c9d7e9f344c158cc52117c935f",
         "size": 14126592
@@ -10651,23 +10651,23 @@
             "details": {
               "removals_publication_failure": {
                 "code": "name_exists",
-                "message": "publish removal output: link C:/msys64/tmp/qualsvc-w192627-W10/whouse/abort-publish-go\\.5c09b86371d36a8e7f0b3c775c7cfaaf.removals.tmp C:/msys64/tmp/qualsvc-w192627-W10/whouse/abort-publish-go/removals.jsonl: Cannot create a file when that file already exists.",
+                "message": "publish removal output: link C:/msys64/tmp/qualsvc-w192627-W10/whouse/abort-publish-go\\.a0fb4d853e7e2f5c6d7787cac08c36ed.removals.tmp C:/msys64/tmp/qualsvc-w192627-W10/whouse/abort-publish-go/removals.jsonl: Cannot create a file when that file already exists.",
                 "outcome": "not_started"
               },
               "result": {
                 "commit": {
-                  "attempted_commit_nonce": "4841bb4abcb7ffb86dca36ef508b7561",
-                  "attempted_database_id": "eafe274c4cab49db86c10f0d84211fa1",
+                  "attempted_commit_nonce": "6856cb182a568ecbd38f525e5ceca229",
+                  "attempted_database_id": "44e64569e2e0191d603ec5240f2dadae",
                   "attempted_transaction_id": "3",
                   "cleanup": {},
                   "coordination_cleanup": {},
                   "directory_identity": {
-                    "file": "16044073673072803",
+                    "file": "19140298416890020",
                     "volume": "8264173776665448027"
                   },
                   "durability": "committed",
                   "main_identity": {
-                    "file": "13792273859387621",
+                    "file": "24206847997681908",
                     "volume": "8264173776665448027"
                   }
                 },
@@ -10723,7 +10723,7 @@
               "live.iprange.readers",
               "removals.jsonl"
             ],
-            "reader": "b7da534c29822990dde32823c6c7a48f",
+            "reader": "b105fe28822785877eb171e292a1e228",
             "step_error": "iprange.v1.retention.first_seen.refresh",
             "steps": [
               {
@@ -10744,10 +10744,10 @@
                   "jsonrpc": "2.0",
                   "result": {
                     "address_family": "ipv4",
-                    "commit_nonce": "c5a65922f6e4b2be8cea96ca2dc4e9e1",
-                    "database_id": "eafe274c4cab49db86c10f0d84211fa1",
+                    "commit_nonce": "5b1de11a8bbc4dedcee0a4ef6e597b52",
+                    "database_id": "44e64569e2e0191d603ec5240f2dadae",
                     "directory_identity": {
-                      "file": "16044073673072803",
+                      "file": "19140298416890020",
                       "volume": "8264173776665448027"
                     },
                     "housekeeping": {
@@ -10755,15 +10755,15 @@
                     },
                     "main_basename": "live.iprange",
                     "main_identity": {
-                      "file": "13792273859387621",
+                      "file": "24206847997681908",
                       "volume": "8264173776665448027"
                     },
                     "method": "iprange.v1.database.create",
                     "reader_capacity": 8,
                     "residue_possible": false,
-                    "sidecar_id": "092ae68e7f78ae6073c967f57276f03c",
+                    "sidecar_id": "934fce6b9a170b30155cfea8099ec6a0",
                     "sidecar_identity": {
-                      "file": "56576470319407327",
+                      "file": "14073748836098277",
                       "volume": "8264173776665448027"
                     },
                     "state": "created",
@@ -10801,18 +10801,18 @@
                   "jsonrpc": "2.0",
                   "result": {
                     "commit": {
-                      "attempted_commit_nonce": "8a1ca337e6403154c7b7586d27df80d3",
-                      "attempted_database_id": "eafe274c4cab49db86c10f0d84211fa1",
+                      "attempted_commit_nonce": "1bc42503a410ea3b9fd308090af96fe5",
+                      "attempted_database_id": "44e64569e2e0191d603ec5240f2dadae",
                       "attempted_transaction_id": "2",
                       "cleanup": {},
                       "coordination_cleanup": {},
                       "directory_identity": {
-                        "file": "16044073673072803",
+                        "file": "19140298416890020",
                         "volume": "8264173776665448027"
                       },
                       "durability": "committed",
                       "main_identity": {
-                        "file": "13792273859387621",
+                        "file": "24206847997681908",
                         "volume": "8264173776665448027"
                       }
                     },
@@ -10862,8 +10862,8 @@
                     "info": {
                       "active_feed_count": "0",
                       "address_family": "ipv4",
-                      "commit_nonce": "8a1ca337e6403154c7b7586d27df80d3",
-                      "database_id": "eafe274c4cab49db86c10f0d84211fa1",
+                      "commit_nonce": "1bc42503a410ea3b9fd308090af96fe5",
+                      "database_id": "44e64569e2e0191d603ec5240f2dadae",
                       "meta_selection": "proven_current",
                       "page_count": "8",
                       "range_record_count": "200",
@@ -10875,7 +10875,7 @@
                       }
                     },
                     "method": "iprange.v1.reader.open",
-                    "reader": "b7da534c29822990dde32823c6c7a48f"
+                    "reader": "b105fe28822785877eb171e292a1e228"
                   }
                 }
               },
@@ -10922,28 +10922,28 @@
                     "method": "iprange.v1.current.publish",
                     "publication": {
                       "attempt": {
-                        "commit_nonce": "9307b42b6fa9c7ac80925e80da83e7ab",
+                        "commit_nonce": "fb93c5766d982a551ae1acbc9161ab1e",
                         "creation_security": {
                           "commitment": "0000000000000000000000000000000000000000000000000000000000000000",
                           "kind": 2
                         },
-                        "database_id": "7a0ce1b4843e945d97f0d0fb21e02ccf",
+                        "database_id": "b94c984f6d00795cc149212888d4f807",
                         "destination_basename": "YwBvAHYAZQByAGEAZwBlAC4AaQBwAHIAYQBuAGcAZQA=",
                         "destination_basename_encoding": 2,
                         "directory_identity": {
-                          "file": "16044073673072803",
+                          "file": "19140298416890020",
                           "volume": "8264173776665448027"
                         },
                         "output_byte_length": "40960",
                         "output_identity": {
-                          "file": "23925373020971252",
+                          "file": "11540474045702394",
                           "volume": "8264173776665448027"
                         },
-                        "output_sha512": "d9b2882fe9855123e0e1f5990c068f033b9748d42fb301676f72e6c0a0fd3141fd0008c0e78ce50de81b21850c4e65eb954a252198ebea121dff1defafce775e",
-                        "publication_attempt_id": "70d7cca920ecc0ca3084aeb3f6bd2713",
+                        "output_sha512": "0653c23a4796a4c09f57bc2b252018df34aae3020b267fe5bf26242a5c455654fc3043acb30132f95c8bc80571dc3507fb412e1f203bd4e0c085b9e5ef912c74",
+                        "publication_attempt_id": "2b54d3a9b956ac17f5b0765510def8bf",
                         "publication_policy": "fail_if_exists",
                         "reservation_identity": {
-                          "file": "11821949022412990",
+                          "file": "14918173766230207",
                           "volume": "8264173776665448027"
                         },
                         "transaction_id": "1"
@@ -11010,23 +11010,23 @@
                       "details": {
                         "removals_publication_failure": {
                           "code": "name_exists",
-                          "message": "publish removal output: link C:/msys64/tmp/qualsvc-w192627-W10/whouse/abort-publish-go\\.5c09b86371d36a8e7f0b3c775c7cfaaf.removals.tmp C:/msys64/tmp/qualsvc-w192627-W10/whouse/abort-publish-go/removals.jsonl: Cannot create a file when that file already exists.",
+                          "message": "publish removal output: link C:/msys64/tmp/qualsvc-w192627-W10/whouse/abort-publish-go\\.a0fb4d853e7e2f5c6d7787cac08c36ed.removals.tmp C:/msys64/tmp/qualsvc-w192627-W10/whouse/abort-publish-go/removals.jsonl: Cannot create a file when that file already exists.",
                           "outcome": "not_started"
                         },
                         "result": {
                           "commit": {
-                            "attempted_commit_nonce": "4841bb4abcb7ffb86dca36ef508b7561",
-                            "attempted_database_id": "eafe274c4cab49db86c10f0d84211fa1",
+                            "attempted_commit_nonce": "6856cb182a568ecbd38f525e5ceca229",
+                            "attempted_database_id": "44e64569e2e0191d603ec5240f2dadae",
                             "attempted_transaction_id": "3",
                             "cleanup": {},
                             "coordination_cleanup": {},
                             "directory_identity": {
-                              "file": "16044073673072803",
+                              "file": "19140298416890020",
                               "volume": "8264173776665448027"
                             },
                             "durability": "committed",
                             "main_identity": {
-                              "file": "13792273859387621",
+                              "file": "24206847997681908",
                               "volume": "8264173776665448027"
                             }
                           },
@@ -11118,7 +11118,7 @@
               "live.iprange",
               "live.iprange.readers"
             ],
-            "reader": "292b08078476eff2cae7cc53aad11357",
+            "reader": "28a4bc9bbb284bddd3b405967b45e4ae",
             "step_error": "iprange.v1.retention.first_seen.refresh",
             "steps": [
               {
@@ -11139,10 +11139,10 @@
                   "jsonrpc": "2.0",
                   "result": {
                     "address_family": "ipv4",
-                    "commit_nonce": "67854cd6a916a6c5ef0e8720aa18c795",
-                    "database_id": "57464f4550c8d729591711f574b61092",
+                    "commit_nonce": "6358bbecf42f611771635f64afe8fc14",
+                    "database_id": "6b906e37465506c2a44b4446cfaa7fe2",
                     "directory_identity": {
-                      "file": "18014398510047396",
+                      "file": "13510798882676901",
                       "volume": "8264173776665448027"
                     },
                     "housekeeping": {
@@ -11150,15 +11150,15 @@
                     },
                     "main_basename": "live.iprange",
                     "main_identity": {
-                      "file": "13510798882676922",
+                      "file": "13229323905966269",
                       "volume": "8264173776665448027"
                     },
                     "method": "iprange.v1.database.create",
                     "reader_capacity": 8,
                     "residue_possible": false,
-                    "sidecar_id": "cf1e219c0cd8a5f470601ee310e16b4d",
+                    "sidecar_id": "583021aae3646ee4baef164119ac3fb8",
                     "sidecar_identity": {
-                      "file": "14355223812808886",
+                      "file": "13792273859387578",
                       "volume": "8264173776665448027"
                     },
                     "state": "created",
@@ -11196,18 +11196,18 @@
                   "jsonrpc": "2.0",
                   "result": {
                     "commit": {
-                      "attempted_commit_nonce": "a9a2c0f5778a98d65f66c1fe8302d743",
-                      "attempted_database_id": "57464f4550c8d729591711f574b61092",
+                      "attempted_commit_nonce": "9d659fe56a40571e445a30f756973c55",
+                      "attempted_database_id": "6b906e37465506c2a44b4446cfaa7fe2",
                       "attempted_transaction_id": "2",
                       "cleanup": {},
                       "coordination_cleanup": {},
                       "directory_identity": {
-                        "file": "18014398510047396",
+                        "file": "13510798882676901",
                         "volume": "8264173776665448027"
                       },
                       "durability": "committed",
                       "main_identity": {
-                        "file": "13510798882676922",
+                        "file": "13229323905966269",
                         "volume": "8264173776665448027"
                       }
                     },
@@ -11257,8 +11257,8 @@
                     "info": {
                       "active_feed_count": "0",
                       "address_family": "ipv4",
-                      "commit_nonce": "a9a2c0f5778a98d65f66c1fe8302d743",
-                      "database_id": "57464f4550c8d729591711f574b61092",
+                      "commit_nonce": "9d659fe56a40571e445a30f756973c55",
+                      "database_id": "6b906e37465506c2a44b4446cfaa7fe2",
                       "meta_selection": "proven_current",
                       "page_count": "8",
                       "range_record_count": "200",
@@ -11270,7 +11270,7 @@
                       }
                     },
                     "method": "iprange.v1.reader.open",
-                    "reader": "292b08078476eff2cae7cc53aad11357"
+                    "reader": "28a4bc9bbb284bddd3b405967b45e4ae"
                   }
                 }
               },
@@ -11317,28 +11317,28 @@
                     "method": "iprange.v1.current.publish",
                     "publication": {
                       "attempt": {
-                        "commit_nonce": "4e2976eb469f7d76bd9b8c226c783d91",
+                        "commit_nonce": "a755c50d9eea2a0f17918650561e49da",
                         "creation_security": {
                           "commitment": "0000000000000000000000000000000000000000000000000000000000000000",
                           "kind": 2
                         },
-                        "database_id": "ce9e20da4142fa4af819c5a0a2cb48aa",
+                        "database_id": "369324415be2c0d58e8956a22a4800bc",
                         "destination_basename": "YwBvAHYAZQByAGEAZwBlAC4AaQBwAHIAYQBuAGcAZQA=",
                         "destination_basename_encoding": 2,
                         "directory_identity": {
-                          "file": "18014398510047396",
+                          "file": "13510798882676901",
                           "volume": "8264173776665448027"
                         },
                         "output_byte_length": "40960",
                         "output_identity": {
-                          "file": "12947848929255613",
+                          "file": "12666373952544958",
                           "volume": "8264173776665448027"
                         },
-                        "output_sha512": "43f51ed220b229b88b96dc335cb3472399a8f63fe297cc873ca3c838c0a05570e507c06d6090249965f9c990f715e5497c7488eb06fe8f63d6b465bc968b109e",
-                        "publication_attempt_id": "a0fc0da7437caa4d982fa8a405caa832",
+                        "output_sha512": "a5954558dfe2aa9b059242253b72205a2b64e43fb0d9745e30c625ab58cf1aea11688fa65235172188b092c1bced3a35760e3f70b69fdc86f8749399ec0c35bd",
+                        "publication_attempt_id": "79882059ddf0815a1160fd86530f59cf",
                         "publication_policy": "fail_if_exists",
                         "reservation_identity": {
-                          "file": "15481123719651491",
+                          "file": "18577348463468708",
                           "volume": "8264173776665448027"
                         },
                         "transaction_id": "1"
@@ -11843,46 +11843,46 @@
           },
           "row": {
             "artifact": {
-              "attempt_id": "70429d5a430bb089d876ba2fd272151e",
+              "attempt_id": "25e6894c2c058b152475abbc2a5af7fc",
               "basename_encoding": 2,
               "creation_security": {
                 "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
                 "kind": 2
               },
               "directory_identity": {
-                "file": "12384898975834302",
+                "file": "15481123719651519",
                 "volume": "8264173776665448027"
               },
               "directory_role": "destination",
-              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "envelope_identity": {
-                "file": "30680772462027007",
+                "file": "9007199255306497",
                 "volume": "8264173776665448027"
               },
-              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "inert_identity": {
-                "file": "32088147345580286",
+                "file": "19140298416890112",
                 "volume": "8264173776665448027"
               },
               "inert_presence": "present",
               "kind": "private_output",
               "ordinal": 1,
               "selected_envelope_sequence": "1",
-              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000.\u0000t\u0000m\u0000p\u0000",
+              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000.\u0000t\u0000m\u0000p\u0000",
               "source_presence": "absent",
               "state": "inert"
             },
-            "attempt_id": "70429d5a430bb089d876ba2fd272151e",
-            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQA3ADAANAAyADkAZAA1AGEANAAzADAAYgBiADAAOAA5AGQAOAA3ADYAYgBhADIAZgBkADIANwAyADEANQAxAGUALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
+            "attempt_id": "25e6894c2c058b152475abbc2a5af7fc",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQAyADUAZQA2ADgAOQA0AGMAMgBjADAANQA4AGIAMQA1ADIANAA3ADUAYQBiAGIAYwAyAGEANQBhAGYANwBmAGMALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
             "basename_encoding": 2,
             "candidate_kind": "envelope",
             "directory": "C:/msys64/tmp/qualsvc-w192627-W10/whouse/gc-go",
             "directory_identity": {
-              "file": "12384898975834302",
+              "file": "15481123719651519",
               "volume": "8264173776665448027"
             },
             "identity": {
-              "file": "30680772462027007",
+              "file": "9007199255306497",
               "volume": "8264173776665448027"
             },
             "kind": "windows_housekeeping",
@@ -11892,46 +11892,46 @@
       ],
       "row_used": {
         "artifact": {
-          "attempt_id": "70429d5a430bb089d876ba2fd272151e",
+          "attempt_id": "25e6894c2c058b152475abbc2a5af7fc",
           "basename_encoding": 2,
           "creation_security": {
             "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
             "kind": 2
           },
           "directory_identity": {
-            "file": "12384898975834302",
+            "file": "15481123719651519",
             "volume": "8264173776665448027"
           },
           "directory_role": "destination",
-          "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+          "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
           "envelope_identity": {
-            "file": "30680772462027007",
+            "file": "9007199255306497",
             "volume": "8264173776665448027"
           },
-          "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+          "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
           "inert_identity": {
-            "file": "32088147345580286",
+            "file": "19140298416890112",
             "volume": "8264173776665448027"
           },
           "inert_presence": "present",
           "kind": "private_output",
           "ordinal": 1,
           "selected_envelope_sequence": "1",
-          "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000.\u0000t\u0000m\u0000p\u0000",
+          "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000.\u0000t\u0000m\u0000p\u0000",
           "source_presence": "absent",
           "state": "inert"
         },
-        "attempt_id": "70429d5a430bb089d876ba2fd272151e",
-        "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQA3ADAANAAyADkAZAA1AGEANAAzADAAYgBiADAAOAA5AGQAOAA3ADYAYgBhADIAZgBkADIANwAyADEANQAxAGUALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
+        "attempt_id": "25e6894c2c058b152475abbc2a5af7fc",
+        "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQAyADUAZQA2ADgAOQA0AGMAMgBjADAANQA4AGIAMQA1ADIANAA3ADUAYQBiAGIAYwAyAGEANQBhAGYANwBmAGMALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
         "basename_encoding": 2,
         "candidate_kind": "envelope",
         "directory": "C:/msys64/tmp/qualsvc-w192627-W10/whouse/gc-go",
         "directory_identity": {
-          "file": "12384898975834302",
+          "file": "15481123719651519",
           "volume": "8264173776665448027"
         },
         "identity": {
-          "file": "30680772462027007",
+          "file": "9007199255306497",
           "volume": "8264173776665448027"
         },
         "kind": "windows_housekeeping",
@@ -11939,42 +11939,42 @@
       },
       "synth": {
         "artifact_identity": {
-          "inode": 32088147345580286,
+          "inode": 19140298416890112,
           "kind": 2,
-          "payload": "5b0e3eb0433eb072fea008000000720000000000000000000000000000000000",
+          "payload": "5b0e3eb0433eb07200a108000000440000000000000000000000000000000000",
           "volume": 8264173776665448027
         },
-        "attempt": "70429d5a430bb089d876ba2fd272151e",
+        "attempt": "25e6894c2c058b152475abbc2a5af7fc",
         "commitment_matches": true,
         "creation_security": {
           "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
           "kind": 2
         },
         "directory_identity": {
-          "inode": 12384898975834302,
+          "inode": 15481123719651519,
           "kind": 2,
-          "payload": "5b0e3eb0433eb072bea0080000002c0000000000000000000000000000000000",
+          "payload": "5b0e3eb0433eb072bfa008000000370000000000000000000000000000000000",
           "volume": 8264173776665448027
         },
         "directory_role": "destination",
         "envelope_identity": {
-          "inode": 30680772462027007,
+          "inode": 9007199255306497,
           "kind": 2,
-          "payload": "5b0e3eb0433eb072ffa0080000006d0000000000000000000000000000000000",
+          "payload": "5b0e3eb0433eb07201a108000000200000000000000000000000000000000000",
           "volume": 8264173776665448027
         },
-        "envelope_name": ".iprange-gcauth-70429d5a430bb089d876ba2fd272151e-00000001.tmp",
-        "envelope_sha256": "1871c723e428ff79c7c24d9d6a09b2458204568aa51028e6f127b4e0a31833ea",
-        "inert_name": ".iprange-gc-70429d5a430bb089d876ba2fd272151e-00000001.tmp",
+        "envelope_name": ".iprange-gcauth-25e6894c2c058b152475abbc2a5af7fc-00000001.tmp",
+        "envelope_sha256": "36e403da610f92f78f71c3ab9fe2d870c97363fff76c1a8bd56518f4374672b0",
+        "inert_name": ".iprange-gc-25e6894c2c058b152475abbc2a5af7fc-00000001.tmp",
         "inert_presence": "present",
         "kind": "private_output",
         "ordinal": 1,
         "selected_envelope_sequence": "1",
-        "source_name": ".iprange-publish-70429d5a430bb089d876ba2fd272151e.tmp",
+        "source_name": ".iprange-publish-25e6894c2c058b152475abbc2a5af7fc.tmp",
         "source_presence": "absent"
       },
       "windows_directory_identity": {
-        "file": "12384898975834302",
+        "file": "15481123719651519",
         "volume": "8264173776665448027"
       },
       "windows_listing": {
@@ -11982,46 +11982,46 @@
         "rows": [
           {
             "artifact": {
-              "attempt_id": "70429d5a430bb089d876ba2fd272151e",
+              "attempt_id": "25e6894c2c058b152475abbc2a5af7fc",
               "basename_encoding": 2,
               "creation_security": {
                 "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
                 "kind": 2
               },
               "directory_identity": {
-                "file": "12384898975834302",
+                "file": "15481123719651519",
                 "volume": "8264173776665448027"
               },
               "directory_role": "destination",
-              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "envelope_identity": {
-                "file": "30680772462027007",
+                "file": "9007199255306497",
                 "volume": "8264173776665448027"
               },
-              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "inert_identity": {
-                "file": "32088147345580286",
+                "file": "19140298416890112",
                 "volume": "8264173776665448027"
               },
               "inert_presence": "present",
               "kind": "private_output",
               "ordinal": 1,
               "selected_envelope_sequence": "1",
-              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000.\u0000t\u0000m\u0000p\u0000",
+              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000.\u0000t\u0000m\u0000p\u0000",
               "source_presence": "absent",
               "state": "inert"
             },
-            "attempt_id": "70429d5a430bb089d876ba2fd272151e",
-            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAC0ANwAwADQAMgA5AGQANQBhADQAMwAwAGIAYgAwADgAOQBkADgANwA2AGIAYQAyAGYAZAAyADcAMgAxADUAMQBlAC0AMAAwADAAMAAwADAAMAAxAC4AdABtAHAA",
+            "attempt_id": "25e6894c2c058b152475abbc2a5af7fc",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAC0AMgA1AGUANgA4ADkANABjADIAYwAwADUAOABiADEANQAyADQANwA1AGEAYgBiAGMAMgBhADUAYQBmADcAZgBjAC0AMAAwADAAMAAwADAAMAAxAC4AdABtAHAA",
             "basename_encoding": 2,
             "candidate_kind": "inert_payload",
             "directory": "C:/msys64/tmp/qualsvc-w192627-W10/whouse/gc-go",
             "directory_identity": {
-              "file": "12384898975834302",
+              "file": "15481123719651519",
               "volume": "8264173776665448027"
             },
             "identity": {
-              "file": "32088147345580286",
+              "file": "19140298416890112",
               "volume": "8264173776665448027"
             },
             "kind": "windows_housekeeping",
@@ -12029,46 +12029,46 @@
           },
           {
             "artifact": {
-              "attempt_id": "70429d5a430bb089d876ba2fd272151e",
+              "attempt_id": "25e6894c2c058b152475abbc2a5af7fc",
               "basename_encoding": 2,
               "creation_security": {
                 "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
                 "kind": 2
               },
               "directory_identity": {
-                "file": "12384898975834302",
+                "file": "15481123719651519",
                 "volume": "8264173776665448027"
               },
               "directory_role": "destination",
-              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "envelope_identity": {
-                "file": "30680772462027007",
+                "file": "9007199255306497",
                 "volume": "8264173776665448027"
               },
-              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "inert_identity": {
-                "file": "32088147345580286",
+                "file": "19140298416890112",
                 "volume": "8264173776665448027"
               },
               "inert_presence": "present",
               "kind": "private_output",
               "ordinal": 1,
               "selected_envelope_sequence": "1",
-              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00007\u00000\u00004\u00002\u00009\u0000d\u00005\u0000a\u00004\u00003\u00000\u0000b\u0000b\u00000\u00008\u00009\u0000d\u00008\u00007\u00006\u0000b\u0000a\u00002\u0000f\u0000d\u00002\u00007\u00002\u00001\u00005\u00001\u0000e\u0000.\u0000t\u0000m\u0000p\u0000",
+              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00002\u00005\u0000e\u00006\u00008\u00009\u00004\u0000c\u00002\u0000c\u00000\u00005\u00008\u0000b\u00001\u00005\u00002\u00004\u00007\u00005\u0000a\u0000b\u0000b\u0000c\u00002\u0000a\u00005\u0000a\u0000f\u00007\u0000f\u0000c\u0000.\u0000t\u0000m\u0000p\u0000",
               "source_presence": "absent",
               "state": "inert"
             },
-            "attempt_id": "70429d5a430bb089d876ba2fd272151e",
-            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQA3ADAANAAyADkAZAA1AGEANAAzADAAYgBiADAAOAA5AGQAOAA3ADYAYgBhADIAZgBkADIANwAyADEANQAxAGUALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
+            "attempt_id": "25e6894c2c058b152475abbc2a5af7fc",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQAyADUAZQA2ADgAOQA0AGMAMgBjADAANQA4AGIAMQA1ADIANAA3ADUAYQBiAGIAYwAyAGEANQBhAGYANwBmAGMALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
             "basename_encoding": 2,
             "candidate_kind": "envelope",
             "directory": "C:/msys64/tmp/qualsvc-w192627-W10/whouse/gc-go",
             "directory_identity": {
-              "file": "12384898975834302",
+              "file": "15481123719651519",
               "volume": "8264173776665448027"
             },
             "identity": {
-              "file": "30680772462027007",
+              "file": "9007199255306497",
               "volume": "8264173776665448027"
             },
             "kind": "windows_housekeeping",
@@ -12087,7 +12087,7 @@
       "cross_listing": {
         "binary": "go",
         "directory_identity": {
-          "file": "44473046320904252",
+          "file": "12666373952600129",
           "volume": "8264173776665448027"
         },
         "entries": "2",
@@ -12100,46 +12100,46 @@
         "rows": [
           {
             "artifact": {
-              "attempt_id": "8aa1aaf1c6c0acb6c638c6fe587860ce",
+              "attempt_id": "0faf833490e361f2c8a8c5d377f8bb02",
               "basename_encoding": 2,
               "creation_security": {
                 "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
                 "kind": 2
               },
               "directory_identity": {
-                "file": "44473046320904252",
+                "file": "12666373952600129",
                 "volume": "8264173776665448027"
               },
               "directory_role": "destination",
-              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "envelope_identity": {
-                "file": "11540474045757505",
+                "file": "6755399441700619",
                 "volume": "8264173776665448027"
               },
-              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "inert_identity": {
-                "file": "42784196460640317",
+                "file": "18014398510102596",
                 "volume": "8264173776665448027"
               },
               "inert_presence": "present",
               "kind": "private_output",
               "ordinal": 1,
               "selected_envelope_sequence": "1",
-              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000.\u0000t\u0000m\u0000p\u0000",
+              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000.\u0000t\u0000m\u0000p\u0000",
               "source_presence": "absent",
               "state": "inert"
             },
-            "attempt_id": "8aa1aaf1c6c0acb6c638c6fe587860ce",
-            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAC0AOABhAGEAMQBhAGEAZgAxAGMANgBjADAAYQBjAGIANgBjADYAMwA4AGMANgBmAGUANQA4ADcAOAA2ADAAYwBlAC0AMAAwADAAMAAwADAAMAAxAC4AdABtAHAA",
+            "attempt_id": "0faf833490e361f2c8a8c5d377f8bb02",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAC0AMABmAGEAZgA4ADMAMwA0ADkAMABlADMANgAxAGYAMgBjADgAYQA4AGMANQBkADMANwA3AGYAOABiAGIAMAAyAC0AMAAwADAAMAAwADAAMAAxAC4AdABtAHAA",
             "basename_encoding": 2,
             "candidate_kind": "inert_payload",
             "directory": "C:/msys64/tmp/qualsvc-w192627-W10/whouse/gc-rust",
             "directory_identity": {
-              "file": "44473046320904252",
+              "file": "12666373952600129",
               "volume": "8264173776665448027"
             },
             "identity": {
-              "file": "42784196460640317",
+              "file": "18014398510102596",
               "volume": "8264173776665448027"
             },
             "kind": "windows_housekeeping",
@@ -12147,46 +12147,46 @@
           },
           {
             "artifact": {
-              "attempt_id": "8aa1aaf1c6c0acb6c638c6fe587860ce",
+              "attempt_id": "0faf833490e361f2c8a8c5d377f8bb02",
               "basename_encoding": 2,
               "creation_security": {
                 "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
                 "kind": 2
               },
               "directory_identity": {
-                "file": "44473046320904252",
+                "file": "12666373952600129",
                 "volume": "8264173776665448027"
               },
               "directory_role": "destination",
-              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "envelope_identity": {
-                "file": "11540474045757505",
+                "file": "6755399441700619",
                 "volume": "8264173776665448027"
               },
-              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "inert_identity": {
-                "file": "42784196460640317",
+                "file": "18014398510102596",
                 "volume": "8264173776665448027"
               },
               "inert_presence": "present",
               "kind": "private_output",
               "ordinal": 1,
               "selected_envelope_sequence": "1",
-              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000.\u0000t\u0000m\u0000p\u0000",
+              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000.\u0000t\u0000m\u0000p\u0000",
               "source_presence": "absent",
               "state": "inert"
             },
-            "attempt_id": "8aa1aaf1c6c0acb6c638c6fe587860ce",
-            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQA4AGEAYQAxAGEAYQBmADEAYwA2AGMAMABhAGMAYgA2AGMANgAzADgAYwA2AGYAZQA1ADgANwA4ADYAMABjAGUALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
+            "attempt_id": "0faf833490e361f2c8a8c5d377f8bb02",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQAwAGYAYQBmADgAMwAzADQAOQAwAGUAMwA2ADEAZgAyAGMAOABhADgAYwA1AGQAMwA3ADcAZgA4AGIAYgAwADIALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
             "basename_encoding": 2,
             "candidate_kind": "envelope",
             "directory": "C:/msys64/tmp/qualsvc-w192627-W10/whouse/gc-rust",
             "directory_identity": {
-              "file": "44473046320904252",
+              "file": "12666373952600129",
               "volume": "8264173776665448027"
             },
             "identity": {
-              "file": "11540474045757505",
+              "file": "6755399441700619",
               "volume": "8264173776665448027"
             },
             "kind": "windows_housekeeping",
@@ -12220,7 +12220,7 @@
           "live.iprange.readers",
           "removals.jsonl"
         ],
-        "reader": "0ea631432eefd9de84383c7e1fada6e8",
+        "reader": "f1a5d339c90956c7fc06676eedfe12f3",
         "step_error": null,
         "steps": [
           {
@@ -12241,10 +12241,10 @@
               "jsonrpc": "2.0",
               "result": {
                 "address_family": "ipv4",
-                "commit_nonce": "14866450e1549117146f3985b2cf812b",
-                "database_id": "ed1fe34e84c4304e9a2580e3294bcef1",
+                "commit_nonce": "5d9f5b1aa20c5041bb1a206eb08d8ede",
+                "database_id": "d2245a6939d4968ddb6a1883df017746",
                 "directory_identity": {
-                  "file": "32932572275712254",
+                  "file": "19984723347022080",
                   "volume": "8264173776665448027"
                 },
                 "housekeeping": {
@@ -12252,15 +12252,15 @@
                 },
                 "main_basename": "live.iprange",
                 "main_identity": {
-                  "file": "25895697857945886",
+                  "file": "36591746972950824",
                   "volume": "8264173776665448027"
                 },
                 "method": "iprange.v1.database.create",
                 "reader_capacity": 8,
                 "residue_possible": false,
-                "sidecar_id": "b97f4eca3b31f7c69798239d5ccab932",
+                "sidecar_id": "45bdee3ca61e8f8c61a1e5c260ad717f",
                 "sidecar_identity": {
-                  "file": "21110623253864711",
+                  "file": "19703248370311463",
                   "volume": "8264173776665448027"
                 },
                 "state": "created",
@@ -12298,18 +12298,18 @@
               "jsonrpc": "2.0",
               "result": {
                 "commit": {
-                  "attempted_commit_nonce": "930cf8329864819a526ed623e364f3ac",
-                  "attempted_database_id": "ed1fe34e84c4304e9a2580e3294bcef1",
+                  "attempted_commit_nonce": "a86a4adcf23ec1dc57cf4e51ab228fef",
+                  "attempted_database_id": "d2245a6939d4968ddb6a1883df017746",
                   "attempted_transaction_id": "2",
                   "cleanup": {},
                   "coordination_cleanup": {},
                   "directory_identity": {
-                    "file": "32932572275712254",
+                    "file": "19984723347022080",
                     "volume": "8264173776665448027"
                   },
                   "durability": "committed",
                   "main_identity": {
-                    "file": "25895697857945886",
+                    "file": "36591746972950824",
                     "volume": "8264173776665448027"
                   }
                 },
@@ -12359,8 +12359,8 @@
                 "info": {
                   "active_feed_count": "0",
                   "address_family": "ipv4",
-                  "commit_nonce": "930cf8329864819a526ed623e364f3ac",
-                  "database_id": "ed1fe34e84c4304e9a2580e3294bcef1",
+                  "commit_nonce": "a86a4adcf23ec1dc57cf4e51ab228fef",
+                  "database_id": "d2245a6939d4968ddb6a1883df017746",
                   "meta_selection": "proven_current",
                   "page_count": "8",
                   "range_record_count": "200",
@@ -12372,7 +12372,7 @@
                   }
                 },
                 "method": "iprange.v1.reader.open",
-                "reader": "0ea631432eefd9de84383c7e1fada6e8"
+                "reader": "f1a5d339c90956c7fc06676eedfe12f3"
               }
             }
           },
@@ -12419,28 +12419,28 @@
                 "method": "iprange.v1.current.publish",
                 "publication": {
                   "attempt": {
-                    "commit_nonce": "d7f76c0ca7132b3be1fae00ae0414281",
+                    "commit_nonce": "78ddd771118140b02ad039af2942fcba",
                     "creation_security": {
                       "commitment": "0000000000000000000000000000000000000000000000000000000000000000",
                       "kind": 2
                     },
-                    "database_id": "19175dbda62b5cf184d290558bc84cb2",
+                    "database_id": "ca69fe1e3528aa56a7da72ed2c50a4ba",
                     "destination_basename": "YwBvAHYAZQByAGEAZwBlAC4AaQBwAHIAYQBuAGcAZQA=",
                     "destination_basename_encoding": 2,
                     "directory_identity": {
-                      "file": "32932572275712254",
+                      "file": "19984723347022080",
                       "volume": "8264173776665448027"
                     },
                     "output_byte_length": "40960",
                     "output_identity": {
-                      "file": "19421773393600807",
+                      "file": "19421773393600812",
                       "volume": "8264173776665448027"
                     },
-                    "output_sha512": "4c0b9da9d54e90a2c5f75d1a9ce7b34ee050d5cdc86f2f5817e15564a686e75f03d614dd828182fe7b93de78a626d3caaba6db20ce8abb918b7ffa0386d845c8",
-                    "publication_attempt_id": "beaf55e07882a0a812c388aa0840e6f8",
+                    "output_sha512": "55fa591de8005a0f9d7912951e4552a4320c28fa4f2b86b7f6356f8ba17024697d7dbff5bfe201d2c28d2e75af84b5de386fad333211a78a791d5cf49bdaa277",
+                    "publication_attempt_id": "7839220bed5c5c6cee809d911002c53d",
                     "publication_policy": "fail_if_exists",
                     "reservation_identity": {
-                      "file": "36028797019529512",
+                      "file": "49258120924930350",
                       "volume": "8264173776665448027"
                     },
                     "transaction_id": "1"
@@ -12504,18 +12504,18 @@
               "jsonrpc": "2.0",
               "result": {
                 "commit": {
-                  "attempted_commit_nonce": "a069618f9d73d5f1130fe8f656d6ae6f",
-                  "attempted_database_id": "ed1fe34e84c4304e9a2580e3294bcef1",
+                  "attempted_commit_nonce": "74f334edd8851785b9d1f64ea397b6d4",
+                  "attempted_database_id": "d2245a6939d4968ddb6a1883df017746",
                   "attempted_transaction_id": "3",
                   "cleanup": {},
                   "coordination_cleanup": {},
                   "directory_identity": {
-                    "file": "32932572275712254",
+                    "file": "19984723347022080",
                     "volume": "8264173776665448027"
                   },
                   "durability": "committed",
                   "main_identity": {
-                    "file": "25895697857945886",
+                    "file": "36591746972950824",
                     "volume": "8264173776665448027"
                   }
                 },
@@ -12657,10 +12657,10 @@
           "product_version": "0.0.0"
         },
         "implementation": "rust",
-        "mtime": "2026-10-11T14:29:48.577760+00:00",
+        "mtime": "2026-10-11T15:18:56.875860+00:00",
         "path": "C:/msys64/tmp/qualsvc-w192627-W10/win/rust/iprange.exe",
-        "sha256": "2a620282617f5ef5f87632a6c300959441edcb3919ac58d3e40e3cddd1e6a11f",
-        "size": 6350336
+        "sha256": "1c9c19306f0729ff264bcb3d782e9700e669a9bde3214accc90aff5f181c22d6",
+        "size": 6351360
       },
       "pass": true,
       "path": "C:/msys64/tmp/qualsvc-w192627-W10/win/rust/iprange.exe",
@@ -12678,18 +12678,18 @@
               },
               "result": {
                 "commit": {
-                  "attempted_commit_nonce": "0019197a31fa3077f6c34d93c13406e0",
-                  "attempted_database_id": "fa6ea45632f347c0aa16a97933027700",
+                  "attempted_commit_nonce": "d17279babee9a06aa9178ee9b074c6b8",
+                  "attempted_database_id": "5883b4d57cebe801960999036918cacc",
                   "attempted_transaction_id": "3",
                   "cleanup": {},
                   "coordination_cleanup": {},
                   "directory_identity": {
-                    "file": "13229323905966397",
+                    "file": "14355223812809035",
                     "volume": "8264173776665448027"
                   },
                   "durability": "committed",
                   "main_identity": {
-                    "file": "83035118130209585",
+                    "file": "44754521297614908",
                     "volume": "8264173776665448027"
                   }
                 },
@@ -12745,7 +12745,7 @@
               "live.iprange.readers",
               "removals.jsonl"
             ],
-            "reader": "b9f793c425cf2e6dc0571d5056da016a",
+            "reader": "6b4d9e760fd728c6e431f3d642636c68",
             "step_error": "iprange.v1.retention.first_seen.refresh",
             "steps": [
               {
@@ -12766,10 +12766,10 @@
                   "jsonrpc": "2.0",
                   "result": {
                     "address_family": "ipv4",
-                    "commit_nonce": "bf13c1c8b0c7e4092a3d4974c1dccf53",
-                    "database_id": "fa6ea45632f347c0aa16a97933027700",
+                    "commit_nonce": "d8ca4ef4b9ef9880ab80cc5832194c97",
+                    "database_id": "5883b4d57cebe801960999036918cacc",
                     "directory_identity": {
-                      "file": "13229323905966397",
+                      "file": "14355223812809035",
                       "volume": "8264173776665448027"
                     },
                     "housekeeping": {
@@ -12777,15 +12777,15 @@
                     },
                     "main_basename": "live.iprange",
                     "main_identity": {
-                      "file": "83035118130209585",
+                      "file": "44754521297614908",
                       "volume": "8264173776665448027"
                     },
                     "method": "iprange.v1.database.create",
                     "reader_capacity": 8,
                     "residue_possible": false,
-                    "sidecar_id": "4802aa3d5a69658b72d07ec65e79db19",
+                    "sidecar_id": "bd5044e1b8ce4b0616f240419f470a2c",
                     "sidecar_identity": {
-                      "file": "61080069946778404",
+                      "file": "41376821577032505",
                       "volume": "8264173776665448027"
                     },
                     "state": "created",
@@ -12823,18 +12823,18 @@
                   "jsonrpc": "2.0",
                   "result": {
                     "commit": {
-                      "attempted_commit_nonce": "d6ebc52b01fabd904e56949981f993e6",
-                      "attempted_database_id": "fa6ea45632f347c0aa16a97933027700",
+                      "attempted_commit_nonce": "804836d5f495bed2eb2205d9c074b56e",
+                      "attempted_database_id": "5883b4d57cebe801960999036918cacc",
                       "attempted_transaction_id": "2",
                       "cleanup": {},
                       "coordination_cleanup": {},
                       "directory_identity": {
-                        "file": "13229323905966397",
+                        "file": "14355223812809035",
                         "volume": "8264173776665448027"
                       },
                       "durability": "committed",
                       "main_identity": {
-                        "file": "83035118130209585",
+                        "file": "44754521297614908",
                         "volume": "8264173776665448027"
                       }
                     },
@@ -12884,8 +12884,8 @@
                     "info": {
                       "active_feed_count": "0",
                       "address_family": "ipv4",
-                      "commit_nonce": "d6ebc52b01fabd904e56949981f993e6",
-                      "database_id": "fa6ea45632f347c0aa16a97933027700",
+                      "commit_nonce": "804836d5f495bed2eb2205d9c074b56e",
+                      "database_id": "5883b4d57cebe801960999036918cacc",
                       "meta_selection": "proven_current",
                       "page_count": "8",
                       "range_record_count": "200",
@@ -12897,7 +12897,7 @@
                       }
                     },
                     "method": "iprange.v1.reader.open",
-                    "reader": "b9f793c425cf2e6dc0571d5056da016a"
+                    "reader": "6b4d9e760fd728c6e431f3d642636c68"
                   }
                 }
               },
@@ -12944,28 +12944,28 @@
                     "method": "iprange.v1.current.publish",
                     "publication": {
                       "attempt": {
-                        "commit_nonce": "178fb98080c85981725e865f8e3e5fe2",
+                        "commit_nonce": "717452d60c20053112f9b9de0583cf92",
                         "creation_security": {
                           "commitment": "0000000000000000000000000000000000000000000000000000000000000000",
                           "kind": 2
                         },
-                        "database_id": "c8841476109129a423dba769cca4aebc",
+                        "database_id": "72613b8f1fde6321707c8bb6a51da406",
                         "destination_basename": "YwBvAHYAZQByAGEAZwBlAC4AaQBwAHIAYQBuAGcAZQA=",
                         "destination_basename_encoding": 2,
                         "directory_identity": {
-                          "file": "13229323905966397",
+                          "file": "14355223812809035",
                           "volume": "8264173776665448027"
                         },
                         "output_byte_length": "40960",
                         "output_identity": {
-                          "file": "41095346600321849",
+                          "file": "43628621390772285",
                           "volume": "8264173776665448027"
                         },
-                        "output_sha512": "c588be58dc523bd0b48e0252794d2ffc890282cb0713a155aba4b6aff1c46f0a88da98afbb3afe43c08a43dcb35b6c409b20c139b3099684397a23e427e4fa60",
-                        "publication_attempt_id": "a4fc06b6d5031944bbf6be21c4476617",
+                        "output_sha512": "36db4bd6205f48199216dbf7d6e83a465f3f3beca97e4c93d3b8c137a67d65c560b25f6074d6d8c62e2da54a8072cd490993999bd72a905dc909f110767061eb",
+                        "publication_attempt_id": "70749d5808333ceddb0d15325dfa2151",
                         "publication_policy": "fail_if_exists",
                         "reservation_identity": {
-                          "file": "43910096367482940",
+                          "file": "12103423999178817",
                           "volume": "8264173776665448027"
                         },
                         "transaction_id": "1"
@@ -13037,18 +13037,18 @@
                         },
                         "result": {
                           "commit": {
-                            "attempted_commit_nonce": "0019197a31fa3077f6c34d93c13406e0",
-                            "attempted_database_id": "fa6ea45632f347c0aa16a97933027700",
+                            "attempted_commit_nonce": "d17279babee9a06aa9178ee9b074c6b8",
+                            "attempted_database_id": "5883b4d57cebe801960999036918cacc",
                             "attempted_transaction_id": "3",
                             "cleanup": {},
                             "coordination_cleanup": {},
                             "directory_identity": {
-                              "file": "13229323905966397",
+                              "file": "14355223812809035",
                               "volume": "8264173776665448027"
                             },
                             "durability": "committed",
                             "main_identity": {
-                              "file": "83035118130209585",
+                              "file": "44754521297614908",
                               "volume": "8264173776665448027"
                             }
                           },
@@ -13139,7 +13139,7 @@
               "live.iprange",
               "live.iprange.readers"
             ],
-            "reader": "9dc861acd2dabe2cd3714fde85bb2ddf",
+            "reader": "d3d61620987123564303ac24109494b4",
             "step_error": "iprange.v1.retention.first_seen.refresh",
             "steps": [
               {
@@ -13160,10 +13160,10 @@
                   "jsonrpc": "2.0",
                   "result": {
                     "address_family": "ipv4",
-                    "commit_nonce": "471575fa63aeea1c9a8ac8b70eb3c0cc",
-                    "database_id": "86e57ff9788868b6244648a106db843c",
+                    "commit_nonce": "c24df6f7f7893d19b1d5050cb8d3667e",
+                    "database_id": "fcc42858c0c88e99145ce6a4aa72226d",
                     "directory_identity": {
-                      "file": "19140298416890156",
+                      "file": "55450570412564783",
                       "volume": "8264173776665448027"
                     },
                     "housekeeping": {
@@ -13171,15 +13171,15 @@
                     },
                     "main_basename": "live.iprange",
                     "main_identity": {
-                      "file": "29554872555184439",
+                      "file": "13510798882677053",
                       "volume": "8264173776665448027"
                     },
                     "method": "iprange.v1.database.create",
                     "reader_capacity": 8,
                     "residue_possible": false,
-                    "sidecar_id": "28c0638061215a493ffae0555c64f149",
+                    "sidecar_id": "65998c82e60340cdc1eae46c29eb72e9",
                     "sidecar_identity": {
-                      "file": "28710447625052465",
+                      "file": "50665495808483641",
                       "volume": "8264173776665448027"
                     },
                     "state": "created",
@@ -13217,18 +13217,18 @@
                   "jsonrpc": "2.0",
                   "result": {
                     "commit": {
-                      "attempted_commit_nonce": "0b26fb3770b8e32cd7c6ff0494582192",
-                      "attempted_database_id": "86e57ff9788868b6244648a106db843c",
+                      "attempted_commit_nonce": "3a3f2593ee35d5c856e53d5f26ff85dc",
+                      "attempted_database_id": "fcc42858c0c88e99145ce6a4aa72226d",
                       "attempted_transaction_id": "2",
                       "cleanup": {},
                       "coordination_cleanup": {},
                       "directory_identity": {
-                        "file": "19140298416890156",
+                        "file": "55450570412564783",
                         "volume": "8264173776665448027"
                       },
                       "durability": "committed",
                       "main_identity": {
-                        "file": "29554872555184439",
+                        "file": "13510798882677053",
                         "volume": "8264173776665448027"
                       }
                     },
@@ -13278,8 +13278,8 @@
                     "info": {
                       "active_feed_count": "0",
                       "address_family": "ipv4",
-                      "commit_nonce": "0b26fb3770b8e32cd7c6ff0494582192",
-                      "database_id": "86e57ff9788868b6244648a106db843c",
+                      "commit_nonce": "3a3f2593ee35d5c856e53d5f26ff85dc",
+                      "database_id": "fcc42858c0c88e99145ce6a4aa72226d",
                       "meta_selection": "proven_current",
                       "page_count": "8",
                       "range_record_count": "200",
@@ -13291,7 +13291,7 @@
                       }
                     },
                     "method": "iprange.v1.reader.open",
-                    "reader": "9dc861acd2dabe2cd3714fde85bb2ddf"
+                    "reader": "d3d61620987123564303ac24109494b4"
                   }
                 }
               },
@@ -13338,28 +13338,28 @@
                     "method": "iprange.v1.current.publish",
                     "publication": {
                       "attempt": {
-                        "commit_nonce": "43aa261aa8c1a919541da0b4d3553747",
+                        "commit_nonce": "8b4522cbe135116856004188d9e6522c",
                         "creation_security": {
                           "commitment": "0000000000000000000000000000000000000000000000000000000000000000",
                           "kind": 2
                         },
-                        "database_id": "8e0b2ff9e41d1e39388df74e6dd75181",
+                        "database_id": "f8058f104fd9191d3f86cf78c1309f88",
                         "destination_basename": "YwBvAHYAZQByAGEAZwBlAC4AaQBwAHIAYQBuAGcAZQA=",
                         "destination_basename_encoding": 2,
                         "directory_identity": {
-                          "file": "19140298416890156",
+                          "file": "55450570412564783",
                           "volume": "8264173776665448027"
                         },
                         "output_byte_length": "40960",
                         "output_identity": {
-                          "file": "50384020831772985",
+                          "file": "12666373952545090",
                           "volume": "8264173776665448027"
                         },
-                        "output_sha512": "857a8f1c2a3f0332dba4b6fa1be667d9ad904ddfff0c8e6c1f4073701af5700b14abe0838cff3a1125f259c59b866985e7aab80b65672016635b05525967879e",
-                        "publication_attempt_id": "3ec4dc02b372a87b09fd14d1c6ce37fe",
+                        "output_sha512": "b8b2fc116615c726d1fff231d0c70167dc2e09d7e2740e607154e8aed45dc9457aa631daeb7570477c74d30170a29ccff8737104f2a4cbad638b999f9ff8d42d",
+                        "publication_attempt_id": "10ec960a21744eb2a141968756fa59ba",
                         "publication_policy": "fail_if_exists",
                         "reservation_identity": {
-                          "file": "12666373952545085",
+                          "file": "13792273859387723",
                           "volume": "8264173776665448027"
                         },
                         "transaction_id": "1"
@@ -13863,46 +13863,46 @@
           },
           "row": {
             "artifact": {
-              "attempt_id": "8aa1aaf1c6c0acb6c638c6fe587860ce",
+              "attempt_id": "0faf833490e361f2c8a8c5d377f8bb02",
               "basename_encoding": 2,
               "creation_security": {
                 "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
                 "kind": 2
               },
               "directory_identity": {
-                "file": "44473046320904252",
+                "file": "12666373952600129",
                 "volume": "8264173776665448027"
               },
               "directory_role": "destination",
-              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "envelope_identity": {
-                "file": "11540474045757505",
+                "file": "6755399441700619",
                 "volume": "8264173776665448027"
               },
-              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "inert_identity": {
-                "file": "42784196460640317",
+                "file": "18014398510102596",
                 "volume": "8264173776665448027"
               },
               "inert_presence": "present",
               "kind": "private_output",
               "ordinal": 1,
               "selected_envelope_sequence": "1",
-              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000.\u0000t\u0000m\u0000p\u0000",
+              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000.\u0000t\u0000m\u0000p\u0000",
               "source_presence": "absent",
               "state": "inert"
             },
-            "attempt_id": "8aa1aaf1c6c0acb6c638c6fe587860ce",
-            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQA4AGEAYQAxAGEAYQBmADEAYwA2AGMAMABhAGMAYgA2AGMANgAzADgAYwA2AGYAZQA1ADgANwA4ADYAMABjAGUALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
+            "attempt_id": "0faf833490e361f2c8a8c5d377f8bb02",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQAwAGYAYQBmADgAMwAzADQAOQAwAGUAMwA2ADEAZgAyAGMAOABhADgAYwA1AGQAMwA3ADcAZgA4AGIAYgAwADIALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
             "basename_encoding": 2,
             "candidate_kind": "envelope",
             "directory": "C:/msys64/tmp/qualsvc-w192627-W10/whouse/gc-rust",
             "directory_identity": {
-              "file": "44473046320904252",
+              "file": "12666373952600129",
               "volume": "8264173776665448027"
             },
             "identity": {
-              "file": "11540474045757505",
+              "file": "6755399441700619",
               "volume": "8264173776665448027"
             },
             "kind": "windows_housekeeping",
@@ -13912,46 +13912,46 @@
       ],
       "row_used": {
         "artifact": {
-          "attempt_id": "8aa1aaf1c6c0acb6c638c6fe587860ce",
+          "attempt_id": "0faf833490e361f2c8a8c5d377f8bb02",
           "basename_encoding": 2,
           "creation_security": {
             "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
             "kind": 2
           },
           "directory_identity": {
-            "file": "44473046320904252",
+            "file": "12666373952600129",
             "volume": "8264173776665448027"
           },
           "directory_role": "destination",
-          "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+          "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
           "envelope_identity": {
-            "file": "11540474045757505",
+            "file": "6755399441700619",
             "volume": "8264173776665448027"
           },
-          "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+          "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
           "inert_identity": {
-            "file": "42784196460640317",
+            "file": "18014398510102596",
             "volume": "8264173776665448027"
           },
           "inert_presence": "present",
           "kind": "private_output",
           "ordinal": 1,
           "selected_envelope_sequence": "1",
-          "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000.\u0000t\u0000m\u0000p\u0000",
+          "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000.\u0000t\u0000m\u0000p\u0000",
           "source_presence": "absent",
           "state": "inert"
         },
-        "attempt_id": "8aa1aaf1c6c0acb6c638c6fe587860ce",
-        "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQA4AGEAYQAxAGEAYQBmADEAYwA2AGMAMABhAGMAYgA2AGMANgAzADgAYwA2AGYAZQA1ADgANwA4ADYAMABjAGUALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
+        "attempt_id": "0faf833490e361f2c8a8c5d377f8bb02",
+        "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQAwAGYAYQBmADgAMwAzADQAOQAwAGUAMwA2ADEAZgAyAGMAOABhADgAYwA1AGQAMwA3ADcAZgA4AGIAYgAwADIALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
         "basename_encoding": 2,
         "candidate_kind": "envelope",
         "directory": "C:/msys64/tmp/qualsvc-w192627-W10/whouse/gc-rust",
         "directory_identity": {
-          "file": "44473046320904252",
+          "file": "12666373952600129",
           "volume": "8264173776665448027"
         },
         "identity": {
-          "file": "11540474045757505",
+          "file": "6755399441700619",
           "volume": "8264173776665448027"
         },
         "kind": "windows_housekeeping",
@@ -13959,42 +13959,42 @@
       },
       "synth": {
         "artifact_identity": {
-          "inode": 42784196460640317,
+          "inode": 18014398510102596,
           "kind": 2,
-          "payload": "5b0e3eb0433eb0723d7809000000980000000000000000000000000000000000",
+          "payload": "5b0e3eb0433eb072447809000000400000000000000000000000000000000000",
           "volume": 8264173776665448027
         },
-        "attempt": "8aa1aaf1c6c0acb6c638c6fe587860ce",
+        "attempt": "0faf833490e361f2c8a8c5d377f8bb02",
         "commitment_matches": true,
         "creation_security": {
           "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
           "kind": 2
         },
         "directory_identity": {
-          "inode": 44473046320904252,
+          "inode": 12666373952600129,
           "kind": 2,
-          "payload": "5b0e3eb0433eb0723c78090000009e0000000000000000000000000000000000",
+          "payload": "5b0e3eb0433eb0724178090000002d0000000000000000000000000000000000",
           "volume": 8264173776665448027
         },
         "directory_role": "destination",
         "envelope_identity": {
-          "inode": 11540474045757505,
+          "inode": 6755399441700619,
           "kind": 2,
-          "payload": "5b0e3eb0433eb072417809000000290000000000000000000000000000000000",
+          "payload": "5b0e3eb0433eb0720bd709000000180000000000000000000000000000000000",
           "volume": 8264173776665448027
         },
-        "envelope_name": ".iprange-gcauth-8aa1aaf1c6c0acb6c638c6fe587860ce-00000001.tmp",
-        "envelope_sha256": "e5ff0351aaa615bc99c55a2dcd4f55e6c2c907ab22a400b42d7783faabae835b",
-        "inert_name": ".iprange-gc-8aa1aaf1c6c0acb6c638c6fe587860ce-00000001.tmp",
+        "envelope_name": ".iprange-gcauth-0faf833490e361f2c8a8c5d377f8bb02-00000001.tmp",
+        "envelope_sha256": "5ce2a27c326e33c44cd18c382d1bfca11d33489e9ebe8ca2b14ca14c77715ae7",
+        "inert_name": ".iprange-gc-0faf833490e361f2c8a8c5d377f8bb02-00000001.tmp",
         "inert_presence": "present",
         "kind": "private_output",
         "ordinal": 1,
         "selected_envelope_sequence": "1",
-        "source_name": ".iprange-publish-8aa1aaf1c6c0acb6c638c6fe587860ce.tmp",
+        "source_name": ".iprange-publish-0faf833490e361f2c8a8c5d377f8bb02.tmp",
         "source_presence": "absent"
       },
       "windows_directory_identity": {
-        "file": "44473046320904252",
+        "file": "12666373952600129",
         "volume": "8264173776665448027"
       },
       "windows_listing": {
@@ -14002,46 +14002,46 @@
         "rows": [
           {
             "artifact": {
-              "attempt_id": "8aa1aaf1c6c0acb6c638c6fe587860ce",
+              "attempt_id": "0faf833490e361f2c8a8c5d377f8bb02",
               "basename_encoding": 2,
               "creation_security": {
                 "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
                 "kind": 2
               },
               "directory_identity": {
-                "file": "44473046320904252",
+                "file": "12666373952600129",
                 "volume": "8264173776665448027"
               },
               "directory_role": "destination",
-              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "envelope_identity": {
-                "file": "11540474045757505",
+                "file": "6755399441700619",
                 "volume": "8264173776665448027"
               },
-              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "inert_identity": {
-                "file": "42784196460640317",
+                "file": "18014398510102596",
                 "volume": "8264173776665448027"
               },
               "inert_presence": "present",
               "kind": "private_output",
               "ordinal": 1,
               "selected_envelope_sequence": "1",
-              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000.\u0000t\u0000m\u0000p\u0000",
+              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000.\u0000t\u0000m\u0000p\u0000",
               "source_presence": "absent",
               "state": "inert"
             },
-            "attempt_id": "8aa1aaf1c6c0acb6c638c6fe587860ce",
-            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAC0AOABhAGEAMQBhAGEAZgAxAGMANgBjADAAYQBjAGIANgBjADYAMwA4AGMANgBmAGUANQA4ADcAOAA2ADAAYwBlAC0AMAAwADAAMAAwADAAMAAxAC4AdABtAHAA",
+            "attempt_id": "0faf833490e361f2c8a8c5d377f8bb02",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAC0AMABmAGEAZgA4ADMAMwA0ADkAMABlADMANgAxAGYAMgBjADgAYQA4AGMANQBkADMANwA3AGYAOABiAGIAMAAyAC0AMAAwADAAMAAwADAAMAAxAC4AdABtAHAA",
             "basename_encoding": 2,
             "candidate_kind": "inert_payload",
             "directory": "C:/msys64/tmp/qualsvc-w192627-W10/whouse/gc-rust",
             "directory_identity": {
-              "file": "44473046320904252",
+              "file": "12666373952600129",
               "volume": "8264173776665448027"
             },
             "identity": {
-              "file": "42784196460640317",
+              "file": "18014398510102596",
               "volume": "8264173776665448027"
             },
             "kind": "windows_housekeeping",
@@ -14049,46 +14049,46 @@
           },
           {
             "artifact": {
-              "attempt_id": "8aa1aaf1c6c0acb6c638c6fe587860ce",
+              "attempt_id": "0faf833490e361f2c8a8c5d377f8bb02",
               "basename_encoding": 2,
               "creation_security": {
                 "commitment": "15c3a566151190405156c68e16d210a566ef09b4c258154e12ece7ca87be9e03",
                 "kind": 2
               },
               "directory_identity": {
-                "file": "44473046320904252",
+                "file": "12666373952600129",
                 "volume": "8264173776665448027"
               },
               "directory_role": "destination",
-              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "envelope_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000a\u0000u\u0000t\u0000h\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "envelope_identity": {
-                "file": "11540474045757505",
+                "file": "6755399441700619",
                 "volume": "8264173776665448027"
               },
-              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
+              "inert_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000g\u0000c\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000-\u00000\u00000\u00000\u00000\u00000\u00000\u00000\u00001\u0000.\u0000t\u0000m\u0000p\u0000",
               "inert_identity": {
-                "file": "42784196460640317",
+                "file": "18014398510102596",
                 "volume": "8264173776665448027"
               },
               "inert_presence": "present",
               "kind": "private_output",
               "ordinal": 1,
               "selected_envelope_sequence": "1",
-              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00008\u0000a\u0000a\u00001\u0000a\u0000a\u0000f\u00001\u0000c\u00006\u0000c\u00000\u0000a\u0000c\u0000b\u00006\u0000c\u00006\u00003\u00008\u0000c\u00006\u0000f\u0000e\u00005\u00008\u00007\u00008\u00006\u00000\u0000c\u0000e\u0000.\u0000t\u0000m\u0000p\u0000",
+              "source_basename": ".\u0000i\u0000p\u0000r\u0000a\u0000n\u0000g\u0000e\u0000-\u0000p\u0000u\u0000b\u0000l\u0000i\u0000s\u0000h\u0000-\u00000\u0000f\u0000a\u0000f\u00008\u00003\u00003\u00004\u00009\u00000\u0000e\u00003\u00006\u00001\u0000f\u00002\u0000c\u00008\u0000a\u00008\u0000c\u00005\u0000d\u00003\u00007\u00007\u0000f\u00008\u0000b\u0000b\u00000\u00002\u0000.\u0000t\u0000m\u0000p\u0000",
               "source_presence": "absent",
               "state": "inert"
             },
-            "attempt_id": "8aa1aaf1c6c0acb6c638c6fe587860ce",
-            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQA4AGEAYQAxAGEAYQBmADEAYwA2AGMAMABhAGMAYgA2AGMANgAzADgAYwA2AGYAZQA1ADgANwA4ADYAMABjAGUALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
+            "attempt_id": "0faf833490e361f2c8a8c5d377f8bb02",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQAwAGYAYQBmADgAMwAzADQAOQAwAGUAMwA2ADEAZgAyAGMAOABhADgAYwA1AGQAMwA3ADcAZgA4AGIAYgAwADIALQAwADAAMAAwADAAMAAwADEALgB0AG0AcAA=",
             "basename_encoding": 2,
             "candidate_kind": "envelope",
             "directory": "C:/msys64/tmp/qualsvc-w192627-W10/whouse/gc-rust",
             "directory_identity": {
-              "file": "44473046320904252",
+              "file": "12666373952600129",
               "volume": "8264173776665448027"
             },
             "identity": {
-              "file": "11540474045757505",
+              "file": "6755399441700619",
               "volume": "8264173776665448027"
             },
             "kind": "windows_housekeeping",
