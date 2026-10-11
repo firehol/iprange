@@ -10,27 +10,27 @@
  "command": [
   "v4/cli/command_sanitize.py",
   "--emit-build-ids",
-  "/tmp/opencode/iprange-sow35/battery-gate57/reports/build-ids.json",
+  "/tmp/opencode/iprange-sow35/battery-gate59/reports/build-ids.json",
   "--built-cli",
-  "/tmp/opencode/iprange-sow35/battery-gate57/rust-target/release/iprange",
+  "/tmp/opencode/iprange-sow35/battery-gate59/rust-target/release/iprange",
   "--built-worker",
-  "/tmp/opencode/iprange-sow35/battery-gate57/rust-target/release/iprange-v4-worker"
+  "/tmp/opencode/iprange-sow35/battery-gate59/rust-target/release/iprange-v4-worker"
  ],
  "expected_build_id": {
-  "darwin": "5989f5782348215b624b50721b99ade41ade615430af8b725fe2b1a81ac1a037",
-  "freebsd": "5989f5782348215b624b50721b99ade41ade615430af8b725fe2b1a81ac1a037",
-  "linux": "5989f5782348215b624b50721b99ade41ade615430af8b725fe2b1a81ac1a037",
-  "windows": "5989f5782348215b624b50721b99ade41ade615430af8b725fe2b1a81ac1a037"
+  "darwin": "89bbbbd700c6ee08555b488fcb53e37ba116c1a6283575f8bb1a73c2b83cfbb6",
+  "freebsd": "89bbbbd700c6ee08555b488fcb53e37ba116c1a6283575f8bb1a73c2b83cfbb6",
+  "linux": "89bbbbd700c6ee08555b488fcb53e37ba116c1a6283575f8bb1a73c2b83cfbb6",
+  "windows": "89bbbbd700c6ee08555b488fcb53e37ba116c1a6283575f8bb1a73c2b83cfbb6"
  },
- "git_head": "dabde34e6bf1b80ec0950d564b4f7a2413c7d251",
+ "git_head": "2cd7ef09800a0af7ee38b912e1f768ad3a437c88",
  "inputs": {
   "manifest": "Cargo.toml",
   "source_files": 357
  },
  "measured_without_the_normalizer": {
   "note": "the two digests below are what the pre-normalizer build.rs produces from this same source state: equal on a POSIX host and different for a Windows host, which is the defect this record guards against",
-  "posix_host": "5989f5782348215b624b50721b99ade41ade615430af8b725fe2b1a81ac1a037",
-  "windows_host": "1878f7979fd5ad7ae9c99f417c00b93a55fb9e93a5645f86f0f449075ed88142"
+  "posix_host": "89bbbbd700c6ee08555b488fcb53e37ba116c1a6283575f8bb1a73c2b83cfbb6",
+  "windows_host": "80467e0650375f24473c11967b4672c97342ba189c1fe302d649835b0adcd691"
  },
  "package": "iprange-livedb",
  "privacy": {
@@ -50,7 +50,7 @@
  "schema": "iprange-cli-build-ids-v1",
  "source_state": {
   "note": "the value is a pure function of iprange-livedb's Cargo.toml and src/**.rs content; any change under that package regenerates it. Regenerate this file whenever the package changes and never hand-edit a digest.",
-  "revision": "dabde34e6bf1b80ec0950d564b4f7a2413c7d251"
+  "revision": "2cd7ef09800a0af7ee38b912e1f768ad3a437c88"
  },
  "verified_against_built_products": {
   "cli_contains_expected": true,
