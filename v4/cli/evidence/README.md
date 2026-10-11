@@ -1,13 +1,16 @@
-Current rotation: the SOW-0035 sol-gate close chain at `a691ab8c`
-(`ed4b98d1`..`a691ab8c`, all pushed; the round-6 fix batch is the
-source change — the CLI output creators route through the engine's
-creator-only security authority, with default-ACL detectors on both
-sides, and the umask fixture window owns both halves of its swap).
+Current rotation: the SOW-0035 sol-gate close chain at `b7134ac9`
+(`ed4b98d1`..`b7134ac9`, all pushed; the round-6/7 fix batches are the
+source changes — the CLI output creators route through the engine's
+creator-only security authority with default-ACL detectors on both
+sides, the output-protection helpers are platform-neutral through the
+real authority on every platform with a negative detector that runs in
+the Windows cargo suite, and the parity export inventory detects
+grouped declarations).
 Every measurement report in this directory records its own provenance,
 and reading that provenance is the only way to know what a committed
-artifact measures.  This set is the gate-67 rotation: eighteen reports
+artifact measures.  This set is the gate-69 rotation: eighteen reports
 authored by the closing gate battery at `git_head`
-`a691ab8cd717a6098d05bee554020625147dd2f1` — the revision under test —
+`b7134ac976812ff38bd9f681c29be7a21dec802f` — the revision under test —
 plus the two Windows reports authored natively on the authorized
 validation host at the same revision from a detached, tree-verified
 checkout, plus `build-ids.json`, `battery-manifest.json`, and
