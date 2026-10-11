@@ -66,6 +66,25 @@ ROOT=$(cd ../.. && pwd)
 IPRANGE="$ROOT/iprange"
 REFERENCE=${IPRANGE_REFERENCE:-/usr/bin/iprange}
 
+# glibc's answer order for localhost -- and therefore the C's insertion
+# order, which the engines reproduce byte for byte -- differs across
+# releases (the reply list is a stack, so the insertion order is the
+# reverse of the answer order; see the header note). The single-host
+# localhost cases pin BOTH shapes: when the mapped v4 answer lands
+# first the reorder prints the NON-OPTIMIZED bookkeeping, when ::1
+# lands first it prints nothing here. The variant is probed once with
+# the binary under test -- the measured-resolver convention the engine
+# unit pins use (resolverNeeds) applied to the shell suite. The pinned
+# text stays literal in both variants, and the C reference comparison
+# above still cross-checks the engine on whichever host runs this.
+V6_LOCALHOST_REORDER=''
+if printf 'localhost\n' > "$tmpdir/order-probe.txt" && \
+   timeout 20 "$IPRANGE" -6 -v "$tmpdir/order-probe.txt" \
+       >/dev/null 2>"$tmpdir/order-probe.err" && \
+   grep -q 'NON-OPTIMIZED' "$tmpdir/order-probe.err"; then
+    V6_LOCALHOST_REORDER="iprange: NON-OPTIMIZED l1.txt at line 2, entry 1, last was ::ffff:127.0.0.1 - ::ffff:127.0.0.1, new is ::1 - ::1\niprange: Optimizing combined ipset (IPv6)\n"
+fi
+
 fail=0
 
 # mask_wallclock <file>: rewrite a whole line of the exact C timing shape.
@@ -484,7 +503,7 @@ check 'dns two files one host each' 0 \
 
 check 'dns one host v6 localhost' 0 \
       '::1\n::ffff:127.0.0.1\n' \
-      'iprange: Loading from l1.txt (IPv6 mode)\niprange: DNS resolution for hostname '\''localhost'\'' from line 1 of file l1.txt (IPv6 mode).\niprange: Printing combined ipset (IPv6) with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /128 counts 2 entries\n\ntotals: 2 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n' \
+      "iprange: Loading from l1.txt (IPv6 mode)\niprange: DNS resolution for hostname 'localhost' from line 1 of file l1.txt (IPv6 mode).\n${V6_LOCALHOST_REORDER}iprange: Printing combined ipset (IPv6) with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /128 counts 2 entries\n\ntotals: 2 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n" \
       $'-6' $'-v' $'l1.txt'
 
 check_dns_interleaved_batch 'dns same host twice v6' 0 \
@@ -538,7 +557,7 @@ check 'dns host merged with file' 0 \
       $'-v' $'h1.txt' $'m1.txt'
 check 'dns one host v6 binary header' 0 \
       'iprange binary format v2.0\nipv6\noptimized\nrecord size 32\nrecords 2\nbytes 68\nlines 2\nunique ips 2\nM<+\032\001\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\001\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\001\000\000\177\377\377\000\000\000\000\000\000\000\000\000\000\001\000\000\177\377\377\000\000\000\000\000\000\000\000\000\000' \
-      'iprange: Loading from l1.txt (IPv6 mode)\niprange: DNS resolution for hostname '\''localhost'\'' from line 1 of file l1.txt (IPv6 mode).\n' \
+      "iprange: Loading from l1.txt (IPv6 mode)\niprange: DNS resolution for hostname 'localhost' from line 1 of file l1.txt (IPv6 mode).\n${V6_LOCALHOST_REORDER}" \
       $'-6' $'-v' $'--print-binary' $'l1.txt'
 
 check_dns_interleaved_batch 'dns two names one thread' 0 \
