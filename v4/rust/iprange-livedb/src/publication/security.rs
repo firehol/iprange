@@ -76,3 +76,41 @@ pub use platform::create_private_artifact;
 /// round 8 came from two hand-typed literals).
 pub(crate) const CREATOR_MODE: u32 = 0o600;
 pub(crate) use platform::{creator_only_commitment, secure_creator_only, Profile};
+
+/// Apply the creator-only security authority to one freshly created
+/// CLI output: exact mode 0600, inherited access-ACL entries removed
+/// (a default ACL on the parent directory survives a plain chmod),
+/// then the single-link ownership proof. This is the same authority
+/// the live and publication artifacts go through
+/// (`platform::secure_creator_only`); outputs follow it so a protected
+/// output is proven, not just opened at a mode. Windows applies the
+/// DACL at create instead (sol round-6 P1).
+pub fn secure_output_file(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let fail = |error| std::io::Error::other(format!("{error:?}"));
+        let profile = platform::Profile::capture().map_err(fail)?;
+        platform::secure_creator_only(file, &profile).map_err(fail)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        Ok(())
+    }
+}
+
+/// Proof-only observation of one artifact's protected contract: exact
+/// 0600, trivial access ACL, single link, regular file. The detector
+/// half of `secure_output_file` — it observes, never repairs, so a
+/// creator that leaves an inherited ACL entry in place reads false.
+pub fn output_protection_holds(file: &std::fs::File) -> bool {
+    #[cfg(unix)]
+    {
+        creator_only_commitment(file).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        true
+    }
+}

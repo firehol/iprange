@@ -31,6 +31,7 @@ pub mod file_identity;
 pub use file_identity::identity;
 pub use path::sidecar_path;
 pub use live_sidecar::source_creator_only;
+pub use publication::security::{output_protection_holds, secure_output_file};
 mod fault;
 mod feed;
 mod feed_catalog;

@@ -46,9 +46,11 @@ pub(crate) fn source_is_creator_only(source: &Path) -> bool {
 /// source's creator-only choice. POSIX creates a creator-only output
 /// with exactly 0600 at creation (no 0666 window precedes the chmod,
 /// and no umask can widen it: 0600 sets no group or other bits) and
-/// then re-asserts 0600 so a hostile umask stripping owner bits cannot
-/// leave the output unwritable; an unprotected output keeps the
-/// process default. Windows cannot apply the protection after the
+/// then applies the engine's creator-only security authority — the
+/// inherited-ACL removal and the single-link ownership proof beside
+/// the 0600 re-assert, so a default ACL on the parent directory cannot
+/// leave named entries a bare chmod keeps; an unprotected output keeps
+/// the process default. Windows cannot apply the protection after the
 /// fact, so a creator-only output is created through the engine's
 /// protected single-user DACL path instead of a plain descriptor.
 pub(crate) fn create_output_file(
@@ -65,8 +67,12 @@ pub(crate) fn create_output_file(
         }
         let file = options.open(temporary)?;
         if creator_only {
-            use std::os::unix::fs::PermissionsExt as _;
-            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+            // The security authority, not a bare chmod: a default ACL on
+            // the parent directory leaves named entries on the new file
+            // that chmod cannot remove, and the protected contract is a
+            // proven trivial ACL, not just mode bits (sol round-6 P1).
+            // Windows takes the DACL branch below instead.
+            iprange_livedb::secure_output_file(&file)?;
         }
         Ok(file)
     }
@@ -806,10 +812,50 @@ mod tests {
         );
     }
 
+    // sol round-6 P1: a default ACL on the parent directory leaves
+    // named entries on a newly created output that a chmod cannot
+    // remove (chmod changes the mask, not the entry list). The
+    // protected contract is a proven trivial ACL, so the creator routes
+    // through the engine's security authority; this detector observes
+    // the artifact, never repairs it, so a creator regression reads
+    // false here.
+    #[cfg(all(unix, target_os = "linux"))]
+    #[test]
+    fn protected_output_removes_inherited_default_acl_entries() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "iprange-export-acl-{unique}-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let status = std::process::Command::new("setfacl")
+            .args(["-d", "-m", "u:65534:---", &directory.to_string_lossy()])
+            .status();
+        match status {
+            Ok(status) if status.success() => {}
+            _ => {
+                eprintln!("setfacl unavailable; skipping");
+                let _ = fs::remove_dir_all(&directory);
+                return;
+            }
+        }
+        let path = directory.join("acl.out");
+        let file = create_output_file(&path, true).unwrap();
+        assert!(
+            iprange_livedb::output_protection_holds(&file),
+            "creator-only output created under a default ACL must prove the \
+             protected contract: no inherited named entries, exact 0600"
+        );
+        drop(file);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
     #[cfg(unix)]
     #[test]
-    fn protected_output_hostile_umask_inner() {
-        if std::env::var_os("IPRANGE_PROTECTED_HOSTILE_INNER").is_none() {
+    fn protected_output_hostile_umask_inner() {        if std::env::var_os("IPRANGE_PROTECTED_HOSTILE_INNER").is_none() {
             return; // driven by protected_output_is_exact_0600_under_a_hostile_umask
         }
         let unique = std::time::SystemTime::now()

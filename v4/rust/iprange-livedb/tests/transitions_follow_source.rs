@@ -53,8 +53,13 @@ impl UmaskWindow {
         extern "C" {
             fn umask(mask: u32) -> u32;
         }
-        // The static's borrow is 'static, so the guard can be a field.
-        UmaskWindow(unsafe { umask(mask) }, Some(UMASK_LOCK.lock().unwrap()))
+        // Acquire the mutex BEFORE touching the mask (sol round-6 P2):
+        // the window must own both halves of the swap. Evaluating
+        // umask() first let a concurrent constructor install its mask
+        // outside any protected window — and a constructor that waited
+        // then ran under whatever the holder restored.
+        let guard = UMASK_LOCK.lock().unwrap();
+        UmaskWindow(unsafe { umask(mask) }, Some(guard))
     }
 }
 #[cfg(unix)]
