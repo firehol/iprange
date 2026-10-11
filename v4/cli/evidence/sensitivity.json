@@ -3,10 +3,10 @@
  "command": [
   "v4/cli/sensitivity_gate.py",
   "--json-report",
-  "/tmp/opencode/iprange-sow35/battery-gate74/reports/sensitivity.json"
+  "/tmp/opencode/iprange-sow35/battery-gate75/reports/sensitivity.json"
  ],
  "failures": [],
- "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+ "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
  "mode_count": 14,
  "modes": [
   {

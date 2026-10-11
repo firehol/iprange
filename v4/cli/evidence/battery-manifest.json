@@ -3,53 +3,53 @@
  "command": [
   "v4/cli/command_sanitize.py",
   "--commit-report",
-  "/tmp/opencode/iprange-sow35/battery-gate74/reports/battery-manifest.json",
+  "/tmp/opencode/iprange-sow35/battery-gate75/reports/battery-manifest.json",
   "--commit-report-to",
   "v4/cli/evidence/battery-manifest.json"
  ],
  "generated_by": "v4/cli/check_kind_coverage.py",
- "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+ "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
  "ledger": {
   "entries": {
-   "01c36f1d06e55bb0ae7007f0a64f5a02dfdcb964a09314f51f2cb4ca307daf08": [
-    "win/v4-fixture.exe"
-   ],
-   "199434e78c0940c5769a97dd1fc67e992cd1cd9b3ad0fb64ca3550901c6037ed": [
-    "win/SHASUMS-win.txt"
-   ],
    "2ef6f3fb106b306a3c970ac7a6b61ef9651660a10d5c5e3a356317104911c346": [
     "win/go/iprange-v4-worker.exe"
+   ],
+   "30dd828530bd750fcfda27c208b93d7ecef1ee51e5b8b7788cfc61a817031ff3": [
+    "win/fixture-w1924b.iprange"
    ],
    "4c7d2f79675825093d1f7838656cc7739f7ae5c9d7e9f344c158cc52117c935f": [
     "win/go/iprange.exe"
    ],
+   "4ffa54c3b3da67552b3c22320728221863c2361378dc54b690fea173e51cc175": [
+    "win/v4-fixture.exe"
+   ],
    "599577cbead1b164acb6e64326467e9aa229f9733a37cc08a406e576e47163b0": [
     "go/iprange"
+   ],
+   "5b332675ddc52825b9107b4f4a9de5f28ef4c41726ffb19d783197be7625393b": [
+    "win/SHASUMS-win.txt"
    ],
    "721df14492d4292624c904e09f77d49e9181aea5e30bbb5cc327283b4d4f064a": [
     "go/iprange-v4-worker"
    ],
-   "780beec46aeb38b2d2a16369256ebb5397dfc77d8c2b973cf10b45d5c91b567e": [
-    "win/rust/iprange-v4-worker.exe"
-   ],
-   "83cfd7779770facd1aa74ecd6eeaf1163aa7b0116395b3bee85b212bf15c0d6d": [
+   "7ef7c7632679f263054434ac8c73e07b57e8d2fd208b7991589ed02bb3583e0e": [
     "win/rust/iprange.exe"
    ],
    "97902426f57e345eac1e19e536ad9592c9d240c45fef756a9561f3c79442d552": [
     "rust/v4-fixture"
    ],
+   "a93d0c6d3755e7eaa7d9015a68dd1cb83caf40edf402c4f47110bf81cf20beb7": [
+    "win/rust/iprange-v4-worker.exe"
+   ],
    "ae02a3deafc4d3715e0a3b9b6cbdb5d21794114e41412ddbf829a8a05d3efca5": [
     "rust/iprange-v4-worker"
-   ],
-   "c06106b7a63b455ada25ad30858691e5e19abc8643c8aec095fe5dd8e90f0a22": [
-    "win/fixture-w1924b.iprange"
    ],
    "faea7ebc9bd3ddda23f4c12129d882db1552ffab8754cbe45751b9c5a161a9f4": [
     "rust/iprange"
    ]
   },
   "entry_count": 12,
-  "sha256": "b3c99a5fd072a245c4e989284c56a3f4875f7a686c48740c21ad95a8a476417f"
+  "sha256": "89827c86711cf68caff41dc0d32a6e5307a23be202856f87ed6f5cea9bfc417d"
  },
  "privacy": {
   "checked_inputs": [
@@ -66,147 +66,147 @@
  "reports": [
   {
    "bytes": 15872,
-   "content_sha256": "c1d5cf36cb408b7b78b13580284b776b0975b4eafcd0e1f12d1f4c140ad2b382",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "db9694e921084cfd48b295bf0e7309e8b5edf2f2aa7c79ef64e3a267d4ed98be",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "coverage-go.json",
    "role": "coverage-go"
   },
   {
    "bytes": 72242,
-   "content_sha256": "8353bc6443646de0d4d27e09ae24afc750ce6af1ee06a1bf01ef73124bb4e4cf",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "ea364b88f28ef9e31767b7d78907f5680c25d134bf9d3e41ac7c7ce2c1043766",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "crash-rust_to_go.json",
    "role": "crash"
   },
   {
-   "bytes": 72243,
-   "content_sha256": "41136ec7b0e644fd2e7e6963130320b39315b060863c589295bafedb16116083",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "bytes": 72242,
+   "content_sha256": "0ca3a551bfae34b97b589ecc667fcb6bce3e13645b59469b51101c407a2e5b1d",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "crash-go_to_rust.json",
    "role": "crash"
   },
   {
    "bytes": 35050,
-   "content_sha256": "ee7ca421c9b9bd869c94514c414f3f90c39578e54fd1e8a1603245f344342a25",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "060d99e76198ce7eca0e3b556d212d1631cb8386398d455f0a1114ec9b4f85ea",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "crash-negative-producer-false.json",
    "role": "crash-negative"
   },
   {
    "bytes": 35122,
-   "content_sha256": "f7570bff4ed82e99f39ab887f925c1722395b0522df4d643952b582559fadb08",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "baec891755a458d4e82058c5c99c4f87af2841ca94fc16b1afe1e543d9f84495",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "crash-negative-consumer-false.json",
    "role": "crash-negative"
   },
   {
    "bytes": 5065,
-   "content_sha256": "24854bb5792d99a6c7b02e2dd3bbee5ecb01727c962f2e36c95bffa030f4fd14",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "055c206917906575a9b88d39b7b9ee2f1000ede46ae0c90bbed98bd1d6aa6873",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "create-mode.json",
    "role": "create-mode"
   },
   {
-   "bytes": 31116,
-   "content_sha256": "76b6ba865745772aad7a0172d4d3fb59c26bec03fbe03a92aecdf6d02bb6ac8e",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "bytes": 31117,
+   "content_sha256": "9bdedfd416edfbe80cb6756ff372ea3d7c221b1520a08e0f239a62478fbcbd46",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "fifo-surface.json",
    "role": "fifo-surface"
   },
   {
    "bytes": 2346,
-   "content_sha256": "ec7f863ae3ddeec211b7812cb15e795f621827282e8163135a2ccf7dfe28047f",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "c708cbb9c9959e841fc57b628a6f723aafc9458668a428b7ca956cefe747c8ec",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "golden.json",
    "role": "golden"
   },
   {
-   "bytes": 8725,
-   "content_sha256": "9eaa63aa5f7a643d71af6aed004aea5302b8aa6eea968b2fb6f2660f375b716a",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "bytes": 8724,
+   "content_sha256": "588eae6660ead54ef9487867b0d2553ef6ade306a6f7b47d059a8a2ac67d08cb",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "guard-posix.json",
    "role": "guard-posix"
   },
   {
    "bytes": 179592,
-   "content_sha256": "4ddcceaf8573a84901424208d1a00d1e115fc188c1925f2b4d1a053c614a5d0f",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "94926382135e68787798a767971fa4dd6eca04d6d728a4f1183c9c06bd60217a",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "matrix-rust.json",
    "role": "matrix"
   },
   {
    "bytes": 178370,
-   "content_sha256": "dbaf71f085804c697ccaaa9436d10c3e84b2772a364344f34cf88f026a7d8d52",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "e5f2fa8f9ad8f5dfbf1565bb49b8f11e91d225b513388a50f6c698e2344cd09e",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "matrix-go.json",
    "role": "matrix"
   },
   {
    "bytes": 148514,
-   "content_sha256": "2a4079bcde5c252a996ad3d6d97cdeb1dbee6d2974c0b837442b70e6937e2f12",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "4d3c213069d39517da8e100295c60bb3499d57e899c74b3fe5eec92300a8f57b",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "matrix-rust_to_go.json",
    "role": "matrix"
   },
   {
    "bytes": 148514,
-   "content_sha256": "1f45a504107b8193c468d6c2c2654942240a84887480187edbf8a117e07678a4",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "d5a181c83f53eca4283e482988ddc87cc16b830385ccb07b119aa312138be1eb",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "matrix-go_to_rust.json",
    "role": "matrix"
   },
   {
-   "bytes": 35573,
-   "content_sha256": "31211fdb0fec7dad8e8d95e4a681660da0fa4d0c3795983dc2e44d374581b073",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "bytes": 35448,
+   "content_sha256": "6157f6e1a7e5501c658221947d32dca6cb1483c417655cc06874be9fdecdf0af",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "race-battery.json",
    "role": "race-battery"
   },
   {
-   "bytes": 1040744,
-   "content_sha256": "8d58414402bbb8a58741ba4d47f6aecbbcb0ac5ea39fc4c73e6fe834f8cf74ac",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "bytes": 1040752,
+   "content_sha256": "c87d9de55075a16c793fbb915b3afdb8e1de748547b4ebcaa8f4757cf651bf11",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "refusal-class-parity.json",
    "role": "refusal-class-parity"
   },
   {
    "bytes": 11585,
-   "content_sha256": "b98ff2c5de6042928ef3f4887c264383717333086854e3ca9eaa3dd9534dd4e1",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "e28e17b29b10009eb78afddcca575111a96d91dabf58c50ea637bceec6e80cd9",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "resource.json",
    "role": "resource"
   },
   {
    "bytes": 3693,
-   "content_sha256": "b01fe1dc81563df15ff467101c0dacad684d67045ac9a97808dd498e427cb364",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "09b38b085062904e486569281e0ea171f5d62f649a784d8968a007b50b1b1a5f",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "sensitivity.json",
    "role": "sensitivity"
   },
   {
    "bytes": 3520,
-   "content_sha256": "61adca6170ebe71af5fa3690f623a9bffa00a6f02cd71035b78eeb94465b5dc5",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "content_sha256": "7a27f990b707e0f4bf4cbdd796b55fcb5efd9ea1f448172cba6c46c5e9d013d4",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "throughput.json",
    "role": "throughput"
   },
   {
-   "bytes": 918136,
-   "content_sha256": "88fba8f31b73101e9c9e2c67079d01048700a2a207cfeba5483d7e84e38f2c75",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "bytes": 918155,
+   "content_sha256": "91ede6346a18385926fe0902f14d55b33c6a1849d79cb851da7477cefcc782d1",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "windows-guard.json",
    "role": "windows-guard"
   },
   {
-   "bytes": 595888,
-   "content_sha256": "edcbcc4e92f49aaf8f3349cf12204b0bb6ae59a7f7b7bf83d3c8cc9bf072f4cc",
-   "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
+   "bytes": 595894,
+   "content_sha256": "6bba984cc6442c02545f96e9993a88ee0895a43d6171b0dfd5d406fd0170ffa5",
+   "git_head": "4497da3fc5c4adc373ad091d40daa4108ebcfe60",
    "name": "windows-housekeeping.json",
    "role": "windows-housekeeping"
   }
  ],
  "revisions": [
-  "b0c731fb1e5b35ea4f525432be27525622649da4"
+  "4497da3fc5c4adc373ad091d40daa4108ebcfe60"
  ],
  "schema": "iprange-cli-battery-manifest-v1"
 }
