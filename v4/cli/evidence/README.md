@@ -1,19 +1,20 @@
-Current rotation: the SOW-0035 sol-gate close chain at `57313c65`
-(`ed4b98d1`..`57313c65`, all pushed; the round-6/7/8 fix batches are
+Current rotation: the SOW-0035 sol-gate close chain at `ef46f1ad`
+(`ed4b98d1`..`ef46f1ad`, all pushed; the round-6/7/8 fix batches are
 the source changes — the CLI output creators route through the
 engine's creator-only security authority with default-ACL detectors
 on both sides, the public output proof composes the structural
 single-link check beside the descriptor proof with hard-link and
 unprotected-file negative detectors that run in the Windows cargo
-suite — and the rounds 9-13 parity-walker fixes are gate-test-only:
+suite — and the rounds 9-14 parity-walker fixes are gate-test-only:
 semicolon chunking, attribute stripping, a context-aware lexer for
-comments, strings, and literals, public-item inventory, and
-fail-closed remnants — the engine source unchanged since 165f9a2a).
+comments, strings, and literals, public-item inventory, combined-
+chunk refusal, and fail-closed remnants — the engine source
+unchanged since 165f9a2a).
 Every measurement report in this directory records its own provenance,
 and reading that provenance is the only way to know what a committed
-artifact measures.  This set is the gate-76 rotation: eighteen reports
+artifact measures.  This set is the gate-77 rotation: eighteen reports
 authored by the closing gate battery at `git_head`
-`57313c653719d552d1f444e7bd4be1578c1f7583` — the revision under test —
+`ef46f1ad8fdf7233b5efd5ca21dfc21f3b0f41d2` — the revision under test —
 plus the two Windows reports authored natively on the authorized
 validation host at the same revision from a detached, tree-verified
 checkout, plus `build-ids.json`, `battery-manifest.json`, and
