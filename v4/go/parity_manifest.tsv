@@ -836,6 +836,8 @@ go-surface	-	AccessPolicyAbsent	present	Go surface type/constant with no same-na
 go-surface	-	AccessPolicyCreatorOnly	present	Go surface type/constant with no same-name Rust export (adapted shape)
 go-surface	LiveReader::creator_only	LiveReader.CreatorOnly	present	recorded creator-only choice on an open live reader
 go-surface	creator_only_requested	OpenLiveReaderPolicy	present	process switch reader; Go opens through OpenLiveReaderPolicy when the caller names the check
+go-surface	output_protection_holds		missing	Internal twin internal/security.CreatorOnlyCommitment (the proof-only authority both platforms answer through); the Rust root export is the CLI output detector's observation half, no Go root symbol
+go-surface	secure_output_file		missing	Internal twin internal/security.SecureCreatorOnly (the applying authority); the Rust root export routes the CLI output creators through the engine authority, no Go root symbol
 go-surface	source_creator_only	SourceCreatorOnly	present	sidecar policy read for output creation; recovery and snapshot outputs consult it instead of opening the source database
 go-surface	-	AccessPolicyChangedOrUnproven	present	Go surface type/constant with no same-name Rust export (adapted shape)
 go-surface	-	AccessPolicyUnclassified	present	Go surface type/constant with no same-name Rust export (adapted shape)

@@ -812,6 +812,42 @@ mod tests {
         );
     }
 
+    // sol round-7 P1: the proof-only observer must answer FALSE for an
+    // unprotected artifact on every platform it compiles on (the
+    // round-6 shape had a non-Unix arm that returned true without
+    // inspecting the file). A plain-created file — mode 0644 on POSIX,
+    // a non-protected DACL on Windows — must not read as protected.
+    // This detector runs in the Windows leg's cargo suite too.
+    #[test]
+    fn output_protection_holds_refuses_an_unprotected_file() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "iprange-export-unprotected-{unique}-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("plain.out");
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            file.set_permissions(fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        assert!(
+            !iprange_livedb::output_protection_holds(&file),
+            "a plain-created file (no authority applied) must not read as protected"
+        );
+        drop(file);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
     // sol round-6 P1: a default ACL on the parent directory leaves
     // named entries on a newly created output that a chmod cannot
     // remove (chmod changes the mask, not the entry list). The

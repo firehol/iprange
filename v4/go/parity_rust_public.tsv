@@ -85,6 +85,8 @@ LastSeenRefresh	LastSeenRefresh::finish_input
 LiveReader	LiveReader::creator_only
 LiveReader	LiveReader::close
 lib-reexport	source_creator_only
+lib-reexport	output_protection_holds
+lib-reexport	secure_output_file
 LiveReader	LiveReader::direct_cursor_v4
 LiveReader	LiveReader::direct_cursor_v6
 LiveReader	LiveReader::direct_range_source_v4

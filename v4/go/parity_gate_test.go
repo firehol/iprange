@@ -304,6 +304,8 @@ func TestParityLedgerMatchesTheGoSurface(t *testing.T) {
 		"scratch_maintenance remove_checkpointed_scratch":    "public scratch-removal export; the internal machine exists in internal/recovery",
 		"binary-format-v4.md:3155+ version-matched worker":   "worker containment implemented (m5 slice E + regression 2026-08-29 fail-closed) as an internal routing mechanism with no root symbol; the row stays missing-by-symbol with the implementation evidence in its note",
 		"publication/security/apple.rs filesec creator-only": "darwin creator-only publication machine is internal (implemented and proven in the authorized arm64 round)",
+		"output_protection_holds":                           "Rust CLI-output proof-only observer (sol round-6/7); the Go twin is the internal security.CreatorOnlyCommitment authority — no Go root symbol by design",
+		"secure_output_file":                                "Rust CLI-output applying authority export (sol round-6/7); the Go twin is the internal security.SecureCreatorOnly — no Go root symbol by design",
 	}
 	for ref, note := range requiredMissing {
 		if _, listed := missingRefs[ref]; !listed {
@@ -644,6 +646,84 @@ var rustSourceExportsRecorded = map[string]bool{
 	"validation":    true,
 }
 
+// exportedNames extracts every public name one lib.rs export line
+// publishes. Single-line declarations carry one path; grouped
+// re-exports (``pub use path::{a, b as c};``) carry one name per
+// group member, the alias when ``as`` renames it. A grouped
+// declaration is exactly the shape that escaped the inventory scan
+// once (sol round-7 P2), so the extraction is shared with its own
+// detector test rather than living inline in the gate loop.
+func exportedNames(line string) []string {
+	line = strings.TrimSpace(line)
+	var prefix string
+	switch {
+	case strings.HasPrefix(line, "pub use "):
+		prefix = "pub use "
+	case strings.HasPrefix(line, "pub mod "):
+		prefix = "pub mod "
+	default:
+		return nil
+	}
+	if !strings.HasSuffix(line, ";") {
+		return nil
+	}
+	single := func(name string) string {
+		if space := strings.LastIndex(name, " "); space >= 0 {
+			name = name[space+1:]
+		}
+		if colon := strings.LastIndex(name, "::"); colon >= 0 {
+			name = name[colon+2:]
+		}
+		return name
+	}
+	if open := strings.Index(line, "{"); open >= 0 {
+		close := strings.LastIndex(line, "}")
+		if close < open {
+			return nil
+		}
+		var names []string
+		for _, part := range strings.Split(line[open+1:close], ",") {
+			name := strings.TrimSpace(part)
+			if as := strings.LastIndex(name, " as "); as >= 0 {
+				name = strings.TrimSpace(name[as+len(" as "):])
+			}
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		return names
+	}
+	if name := single(strings.TrimSuffix(strings.TrimPrefix(line, prefix), ";")); name != "" {
+		return []string{name}
+	}
+	return nil
+}
+
+// TestGroupedExportDeclarationsYieldTheirNames is the detector for the
+// extraction above: a grouped re-export must yield every name in the
+// group (the alias for ``as`` members), because the round-7 finding
+// was exactly a grouped declaration the inventory scan skipped by
+// skipping every line containing a brace.
+func TestGroupedExportDeclarationsYieldTheirNames(t *testing.T) {
+	names := exportedNames("pub use publication::security::{output_protection_holds, secure_output_file};")
+	want := []string{"output_protection_holds", "secure_output_file"}
+	if len(names) != len(want) {
+		t.Fatalf("grouped export yielded %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("grouped export yielded %v, want %v", names, want)
+		}
+	}
+	aliased := exportedNames("pub use example::{alpha as beta, gamma};")
+	if len(aliased) != 2 || aliased[0] != "beta" || aliased[1] != "gamma" {
+		t.Fatalf("aliased group yielded %v, want [beta gamma]", aliased)
+	}
+	if got := exportedNames("pub use path::name;"); len(got) != 1 || got[0] != "name" {
+		t.Fatalf("single export yielded %v, want [name]", got)
+	}
+}
+
 // TestParityRustSourceExportsAreInventoried fails when lib.rs publishes a
 // name the frozen inventory does not record. The inventory is not regenerated
 // by the test; a missing row is the signal to regenerate it and record the
@@ -663,30 +743,12 @@ func TestParityRustSourceExportsAreInventoried(t *testing.T) {
 	}
 	var missing []string
 	for _, line := range strings.Split(string(source), "\n") {
-		line = strings.TrimSpace(line)
-		var prefix string
-		switch {
-		case strings.HasPrefix(line, "pub use "):
-			prefix = "pub use "
-		case strings.HasPrefix(line, "pub mod "):
-			prefix = "pub mod "
-		default:
-			continue
+		for _, name := range exportedNames(line) {
+			if recorded[name] || rustSourceExportsRecorded[name] {
+				continue
+			}
+			missing = append(missing, name)
 		}
-		if !strings.HasSuffix(line, ";") || strings.Contains(line, "{") {
-			continue
-		}
-		name := strings.TrimSuffix(strings.TrimPrefix(line, prefix), ";")
-		if space := strings.LastIndex(name, " "); space >= 0 {
-			name = name[space+1:]
-		}
-		if colon := strings.LastIndex(name, "::"); colon >= 0 {
-			name = name[colon+2:]
-		}
-		if name == "" || recorded[name] || rustSourceExportsRecorded[name] {
-			continue
-		}
-		missing = append(missing, name)
 	}
 	if len(missing) > 0 {
 		t.Errorf("Rust public exports missing from parity_rust_public.tsv: %s", strings.Join(missing, ", "))
