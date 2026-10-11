@@ -2467,6 +2467,12 @@ cp "$R/reports/build-ids.json" "$CLI/evidence/build-ids.json"
 # reader diffing two waves' steps.tsv must not see one label carry two steps
 # (operations round-9 P3-3).
 record "[16h] build-ids rotated" $? zero
+# The binaries ledger rotates with the reports: the committed copy is the
+# forgery battery's default digest authority, so C2/C2w run on a clean
+# checkout without the private kit; the gate tier still overrides it with
+# the live staged ledger via --sha256-ledger (sol round-4/5 P2).
+cp "$SHASUMS" "$CLI/evidence/SHASUMS.txt"
+record "[16i] committed binaries ledger rotated" $? zero
 # Recorded, not echoed: this copy used to be silent, so a race battery that
 # wrote nothing simply left the previous wave's report in place and the step
 # still looked clean.  race-battery.json is committed evidence: the battery

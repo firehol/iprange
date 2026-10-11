@@ -48,10 +48,12 @@ the accepted crash evidence the gate consumes, and
 handing it to the gate would make every run red for a reason this battery
 does not test.  ``--fifo-surface`` and ``--throughput`` are required by
 the gate because their verdicts are consumed evidence: omitting either is
-a gate usage error, not a weaker check.  ``--sha256-ledger`` is off by
-default so the battery stays runnable standalone against the committed
-evidence; supply the staged ledger to bind every recorded binary digest
-to it.
+a gate usage error, not a weaker check.  ``--sha256-ledger`` selects the
+binaries ledger the mutators source digests from and the gate binds
+recorded binary digests to; the default is the committed
+``evidence/SHASUMS.txt`` (rotated with the reports), so the battery runs
+standalone on a clean checkout — pass the live staged ledger to judge the
+staged binaries of a running gate instead.
 
 The gate's own doctored-report self-test is not run here: it is the
 gate's ``--self-test`` step, which the wave battery runs separately with
@@ -558,11 +560,12 @@ def c2c(bundle):
 # The staged binaries' worker digests, resolved LAZILY from the
 # selected ledger (the sol-gate fix: the module-init load raised
 # before argument parsing, so --help and a clean checkout's self-test
-# failed before they could report the missing kit). The C2 class fails
-# loud at RUN time when no complete authority exists.
+# failed before they could report the missing kit). The default
+# authority is the COMMITTED evidence ledger (rotated with the reports
+# by battery step [16i]), so C2/C2w run on a clean checkout; the gate
+# tier overrides it with the live staged ledger via --sha256-ledger.
 _WORKER_DIGESTS = {}
-_LEDGER = os.path.join(EVIDENCE, "..", "..", "..", ".local", "shared",
-                       "binaries", "SHASUMS.txt")
+_LEDGER = os.path.join(EVIDENCE, "SHASUMS.txt")
 
 
 # The ledger the caller selected (--sha256-ledger), set by main()
@@ -948,9 +951,7 @@ def c2w(bundle):
             if role == "matrix" and not entries:
                 entry["name"] = 7  # the hostile shape under test
             entries.append(entry)
-    ledger_path = _SELECTED_LEDGER or os.path.join(
-        EVIDENCE, "..", "..", "..", ".local", "shared", "binaries",
-        "SHASUMS.txt")
+    ledger_path = _SELECTED_LEDGER or _LEDGER
     from check_kind_coverage import _sha256_ledger, _sha256_file
     entries_map = _sha256_ledger(ledger_path)
     ledger_document = {

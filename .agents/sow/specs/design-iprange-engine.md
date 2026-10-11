@@ -507,8 +507,10 @@ Every artifact the engines create carries the process default mode
 (`0666` before umask) unless creator-only is requested. Creator-only is
 an opt-in of the creating process (the `IPRANGE_CREATOR_ONLY=1`
 environment switch for the CLIs; the `creator_only:u8` argument on the
-C ABI's `create_live`): every artifact the engine creates keeps at
-least owner read and write — a `0600` floor under any umask.
+C ABI's `create_live`): every artifact the database or its adapters
+create keeps owner read and write under any umask — `0600` for
+protected artifacts, an exact mode rather than a floor (the next
+paragraph pins it).
 
 The switch is advisory for the database's durable artifacts. A
 database that recorded a creator-only choice at creation governs its
