@@ -1,11 +1,11 @@
 {
   "binaries": {
     "go": {
-      "path": "/tmp/opencode/iprange-sow35/battery-gate73/bin/go/iprange",
+      "path": "/tmp/opencode/iprange-sow35/battery-gate74/bin/go/iprange",
       "sha256": "599577cbead1b164acb6e64326467e9aa229f9733a37cc08a406e576e47163b0"
     },
     "rust": {
-      "path": "/tmp/opencode/iprange-sow35/battery-gate73/bin/rust/iprange",
+      "path": "/tmp/opencode/iprange-sow35/battery-gate74/bin/rust/iprange",
       "sha256": "faea7ebc9bd3ddda23f4c12129d882db1552ffab8754cbe45751b9c5a161a9f4"
     }
   },
@@ -13,15 +13,15 @@
   "command": [
     "v4/cli/resource_harness.py",
     "--binaries",
-    "rust=/tmp/opencode/iprange-sow35/battery-gate73/bin/rust/iprange",
-    "go=/tmp/opencode/iprange-sow35/battery-gate73/bin/go/iprange",
+    "rust=/tmp/opencode/iprange-sow35/battery-gate74/bin/rust/iprange",
+    "go=/tmp/opencode/iprange-sow35/battery-gate74/bin/go/iprange",
     "--work-dir",
-    "/tmp/opencode/iprange-sow35/battery-gate73/W-res",
+    "/tmp/opencode/iprange-sow35/battery-gate74/W-res",
     "--json-report",
-    "/tmp/opencode/iprange-sow35/battery-gate73/reports/resource.json"
+    "/tmp/opencode/iprange-sow35/battery-gate74/reports/resource.json"
   ],
   "failed": 0,
-  "git_head": "820ca4b79b28914afad7d804f60a97532fd68438",
+  "git_head": "b0c731fb1e5b35ea4f525432be27525622649da4",
   "leftover_processes": [],
   "platform": {
     "machine": "x86_64",
@@ -41,13 +41,13 @@
   "proofs": [
     {
       "binary": "go",
-      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate73/bin/go/iprange",
+      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate74/bin/go/iprange",
       "busy_ids": [
         "18",
         "19",
         "20"
       ],
-      "elapsed_ms": 2214.5,
+      "elapsed_ms": 2181.4,
       "exit_code": 0,
       "export_code": -32010,
       "export_ids": [
@@ -87,20 +87,20 @@
         "17"
       ],
       "pass": true,
-      "pid": 4126465,
+      "pid": 207382,
       "proof": "a",
       "responses": 20,
-      "source_sha256": "34368ff004d74a2cc7f8040a2a070e3485daf6ff192ad51cf68defb7486e72cd"
+      "source_sha256": "086e7317c0659822a7050d6cccdd3dbd573d075b3e8e56757edb75d6c8619b83"
     },
     {
       "binary": "go",
-      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate73/bin/go/iprange",
+      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate74/bin/go/iprange",
       "drained_bytes": 0,
-      "elapsed_ms": 66.3,
+      "elapsed_ms": 67.5,
       "exit_code": 1,
       "failures": [],
       "pass": true,
-      "pid": 4126700,
+      "pid": 207467,
       "proof": "b",
       "response": {
         "error": {
@@ -116,37 +116,37 @@
     },
     {
       "binary": "go",
-      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate73/bin/go/iprange",
+      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate74/bin/go/iprange",
       "directory_identity": {
-        "file": "30410208",
+        "file": "30439197",
         "volume": "64512"
       },
-      "elapsed_ms": 102.2,
+      "elapsed_ms": 96.6,
       "evidence_phase": "prepared",
       "failures": [],
       "listed_row": {
         "artifact_identity": {
-          "file": "30410211",
+          "file": "30439200",
           "volume": "64512"
         },
-        "directory": "/tmp/opencode/iprange-sow35/battery-gate73/W-res/resource-e152c71e/c-go",
+        "directory": "/tmp/opencode/iprange-sow35/battery-gate74/W-res/resource-25f792b5/c-go",
         "directory_identity": {
-          "file": "30410208",
+          "file": "30439197",
           "volume": "64512"
         },
         "evidence": {
           "output": {
             "digest": {
               "byte_length": "114688",
-              "sha512": "fdf66dbcf92eabd728908cfa832a0b6ae086bce6d9e23b75a91b7deb6a9898f3583527e6a5fba8cee6c0fb3e63b857ea7eb8214f209206f27f5eaddbe2c6a1f4"
+              "sha512": "b04fea140300d9237020cb01433bc1588471ff1a5456b3620927edf17a039b8bc33fbdc510dc22d345cc2a534f86908fa3ab630561f54c9af9eef2d3e1e9df04"
             },
             "identity": {
-              "file": "30410210",
+              "file": "30439199",
               "volume": "64512"
             },
             "tuple": {
-              "commit_nonce": "aaadf355a7454984e0a50220c74e0e93",
-              "database_id": "59c348e528eb2c5a00424f650fbb64ad",
+              "commit_nonce": "aff200cd2c4482ced35b487d29d5bb12",
+              "database_id": "5a2718fed7b56d3f39a807eec6e94b53",
               "transaction_id": "1"
             }
           },
@@ -154,15 +154,15 @@
           "policy": "fail_if_exists"
         },
         "kind": "reservation",
-        "publication_attempt_id": "211d41ec7f369ef8827015c6e4c91ff5"
+        "publication_attempt_id": "d061bccb0587c6be44b0cf88d46249c3"
       },
       "listed_rows": 1,
-      "marker_seen_ms": 20.82707099907566,
+      "marker_seen_ms": 19.001624998054467,
       "pass": true,
       "policy": "fail_if_exists",
       "proof": "c",
       "publish_temp_after": [
-        ".iprange-publish-211d41ec7f369ef8827015c6e4c91ff5.tmp"
+        ".iprange-publish-d061bccb0587c6be44b0cf88d46249c3.tmp"
       ],
       "remove": "ok",
       "reports": [
@@ -175,27 +175,27 @@
       "row_passed_unchanged": true,
       "row_used": {
         "artifact_identity": {
-          "file": "30410211",
+          "file": "30439200",
           "volume": "64512"
         },
-        "directory": "/tmp/opencode/iprange-sow35/battery-gate73/W-res/resource-e152c71e/c-go",
+        "directory": "/tmp/opencode/iprange-sow35/battery-gate74/W-res/resource-25f792b5/c-go",
         "directory_identity": {
-          "file": "30410208",
+          "file": "30439197",
           "volume": "64512"
         },
         "evidence": {
           "output": {
             "digest": {
               "byte_length": "114688",
-              "sha512": "fdf66dbcf92eabd728908cfa832a0b6ae086bce6d9e23b75a91b7deb6a9898f3583527e6a5fba8cee6c0fb3e63b857ea7eb8214f209206f27f5eaddbe2c6a1f4"
+              "sha512": "b04fea140300d9237020cb01433bc1588471ff1a5456b3620927edf17a039b8bc33fbdc510dc22d345cc2a534f86908fa3ab630561f54c9af9eef2d3e1e9df04"
             },
             "identity": {
-              "file": "30410210",
+              "file": "30439199",
               "volume": "64512"
             },
             "tuple": {
-              "commit_nonce": "aaadf355a7454984e0a50220c74e0e93",
-              "database_id": "59c348e528eb2c5a00424f650fbb64ad",
+              "commit_nonce": "aff200cd2c4482ced35b487d29d5bb12",
+              "database_id": "5a2718fed7b56d3f39a807eec6e94b53",
               "transaction_id": "1"
             }
           },
@@ -203,14 +203,14 @@
           "policy": "fail_if_exists"
         },
         "kind": "reservation",
-        "publication_attempt_id": "211d41ec7f369ef8827015c6e4c91ff5"
+        "publication_attempt_id": "d061bccb0587c6be44b0cf88d46249c3"
       }
     },
     {
       "binary": "go",
-      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate73/bin/go/iprange",
+      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate74/bin/go/iprange",
       "describe_answered": true,
-      "elapsed_ms": 1978.8,
+      "elapsed_ms": 2075.2,
       "exit_code": 0,
       "export_answered": false,
       "export_code": null,
@@ -218,20 +218,20 @@
       "feed_lines": 500000,
       "killed": false,
       "pass": true,
-      "pid": 4127984,
+      "pid": 207804,
       "proof": "d",
       "responses": 1,
-      "source_sha256": "7fbd3113301888ee4f321ea2a3c74371fa4c554a3581379371aea4c9dfe0be5a"
+      "source_sha256": "0840601a9a698a3ffd80044b4ebfa62c1daf3e3300cb3236bc0d3f587ddb188e"
     },
     {
       "binary": "rust",
-      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate73/bin/rust/iprange",
+      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate74/bin/rust/iprange",
       "busy_ids": [
         "18",
         "19",
         "20"
       ],
-      "elapsed_ms": 1700.9,
+      "elapsed_ms": 1802.7,
       "exit_code": 0,
       "export_code": -32010,
       "export_ids": [
@@ -271,20 +271,20 @@
         "17"
       ],
       "pass": true,
-      "pid": 4128117,
+      "pid": 212078,
       "proof": "a",
       "responses": 20,
-      "source_sha256": "aa6ccd09b6edc7f634454e7400f57870d9e544150b53149af1363383a8fea1cb"
+      "source_sha256": "557fc29d8590c922659c866a28cedb002812ff556825faabbaa7246ce7e1a9a1"
     },
     {
       "binary": "rust",
-      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate73/bin/rust/iprange",
+      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate74/bin/rust/iprange",
       "drained_bytes": 0,
-      "elapsed_ms": 55.6,
+      "elapsed_ms": 57.1,
       "exit_code": 1,
       "failures": [],
       "pass": true,
-      "pid": 4128153,
+      "pid": 212106,
       "proof": "b",
       "response": {
         "error": {
@@ -300,37 +300,37 @@
     },
     {
       "binary": "rust",
-      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate73/bin/rust/iprange",
+      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate74/bin/rust/iprange",
       "directory_identity": {
-        "file": "30410225",
+        "file": "30439221",
         "volume": "64512"
       },
-      "elapsed_ms": 82.0,
+      "elapsed_ms": 96.6,
       "evidence_phase": "prepared",
       "failures": [],
       "listed_row": {
         "artifact_identity": {
-          "file": "30410228",
+          "file": "30439224",
           "volume": "64512"
         },
-        "directory": "/tmp/opencode/iprange-sow35/battery-gate73/W-res/resource-e152c71e/c-rust",
+        "directory": "/tmp/opencode/iprange-sow35/battery-gate74/W-res/resource-25f792b5/c-rust",
         "directory_identity": {
-          "file": "30410225",
+          "file": "30439221",
           "volume": "64512"
         },
         "evidence": {
           "output": {
             "digest": {
               "byte_length": "114688",
-              "sha512": "4bf94a2f7e26216a2e1f1cbd4f8335e147fa75cadb3d116fa373372bfd91f6da7e35729f4195bc56435f02264ab6793d330df6d2248dfe1d7d159d6f7e92ee70"
+              "sha512": "958ab8f5e5ea98797f0aa21d1c55c5769dcac380af35222458deaba65b35238c964f0d3df45eb195759504920d4d937300f425a7acf715e3c9a5f47d3139228c"
             },
             "identity": {
-              "file": "30410227",
+              "file": "30439223",
               "volume": "64512"
             },
             "tuple": {
-              "commit_nonce": "9c99aa9eea3ceb90fd2de44149f850e0",
-              "database_id": "4ccbb256da029c617d6b8ba6ac3dd849",
+              "commit_nonce": "3e7199fca00dffd99826ec3170baded9",
+              "database_id": "9a3bd78313d3841371c892d14fb3d1d2",
               "transaction_id": "1"
             }
           },
@@ -338,15 +338,15 @@
           "policy": "fail_if_exists"
         },
         "kind": "reservation",
-        "publication_attempt_id": "407ac4872bbeb00782ece0720c2a7d5b"
+        "publication_attempt_id": "c500e4dd193a80c90355905f412af8ef"
       },
       "listed_rows": 1,
-      "marker_seen_ms": 11.170420999405906,
+      "marker_seen_ms": 11.367200000677258,
       "pass": true,
       "policy": "fail_if_exists",
       "proof": "c",
       "publish_temp_after": [
-        ".iprange-publish-407ac4872bbeb00782ece0720c2a7d5b.tmp"
+        ".iprange-publish-c500e4dd193a80c90355905f412af8ef.tmp"
       ],
       "remove": "ok",
       "reports": [
@@ -359,27 +359,27 @@
       "row_passed_unchanged": true,
       "row_used": {
         "artifact_identity": {
-          "file": "30410228",
+          "file": "30439224",
           "volume": "64512"
         },
-        "directory": "/tmp/opencode/iprange-sow35/battery-gate73/W-res/resource-e152c71e/c-rust",
+        "directory": "/tmp/opencode/iprange-sow35/battery-gate74/W-res/resource-25f792b5/c-rust",
         "directory_identity": {
-          "file": "30410225",
+          "file": "30439221",
           "volume": "64512"
         },
         "evidence": {
           "output": {
             "digest": {
               "byte_length": "114688",
-              "sha512": "4bf94a2f7e26216a2e1f1cbd4f8335e147fa75cadb3d116fa373372bfd91f6da7e35729f4195bc56435f02264ab6793d330df6d2248dfe1d7d159d6f7e92ee70"
+              "sha512": "958ab8f5e5ea98797f0aa21d1c55c5769dcac380af35222458deaba65b35238c964f0d3df45eb195759504920d4d937300f425a7acf715e3c9a5f47d3139228c"
             },
             "identity": {
-              "file": "30410227",
+              "file": "30439223",
               "volume": "64512"
             },
             "tuple": {
-              "commit_nonce": "9c99aa9eea3ceb90fd2de44149f850e0",
-              "database_id": "4ccbb256da029c617d6b8ba6ac3dd849",
+              "commit_nonce": "3e7199fca00dffd99826ec3170baded9",
+              "database_id": "9a3bd78313d3841371c892d14fb3d1d2",
               "transaction_id": "1"
             }
           },
@@ -387,14 +387,14 @@
           "policy": "fail_if_exists"
         },
         "kind": "reservation",
-        "publication_attempt_id": "407ac4872bbeb00782ece0720c2a7d5b"
+        "publication_attempt_id": "c500e4dd193a80c90355905f412af8ef"
       }
     },
     {
       "binary": "rust",
-      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate73/bin/rust/iprange",
+      "binary_path": "/tmp/opencode/iprange-sow35/battery-gate74/bin/rust/iprange",
       "describe_answered": true,
-      "elapsed_ms": 1674.4,
+      "elapsed_ms": 1688.9,
       "exit_code": 0,
       "export_answered": false,
       "export_code": null,
@@ -402,10 +402,10 @@
       "feed_lines": 500000,
       "killed": false,
       "pass": true,
-      "pid": 4128260,
+      "pid": 212474,
       "proof": "d",
       "responses": 1,
-      "source_sha256": "63f7328507788725bda732945016bd0b26cc0f1c17e4d55db70c9a37ea1e7eec"
+      "source_sha256": "7352c43ada1878b395d059151cbf0a728e6d65e827627137a9076ea741ee743b"
     }
   ],
   "schema": "iprange-cli-resource-report-v1"
