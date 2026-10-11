@@ -1,35 +1,39 @@
-Current rotation: the SOW-0035 sol-gate close chain at `1330c0b3`
-(`ed4b98d1`..`1330c0b3`, all pushed).  Every measurement report in this
-directory records its own provenance, and reading that provenance is the
-only way to know what a committed artifact measures.  This set is the
-gate-65 rotation: eighteen reports authored by the closing gate battery
-at `git_head` `1330c0b30f9624596bb4628ebd4ed53847124e44` — the revision
-under test — plus the two Windows reports authored natively on the
-authorized validation host at the same revision from a detached,
-tree-verified checkout, plus `build-ids.json`, `battery-manifest.json`,
-and `SHASUMS.txt` (the staged-binary ledger's committed copy, rotated
-with the reports by battery step `[16i]`).  The closing battery
-recorded 323 checked steps, 0 mismatches, 4 deferrals (the two Windows
-reports the native leg owns, plus the two retired duplicate
-pressure-axis steps), 489.3 s wall at pooled 4 jobs.  Both kind-gate
-passes (fresh and committed, after rotation) returned rc 0; the kind
-self-test executed 134 rejection controls (the new
-`windows-capi-steps-missing` feeder among them); the forgery battery's
-verdict is PASS — every class rejected on its own distinct reason,
-genuine evidence accepted — and it now runs standalone on a clean
+Current rotation: the SOW-0035 sol-gate close chain at `a691ab8c`
+(`ed4b98d1`..`a691ab8c`, all pushed; the round-6 fix batch is the
+source change — the CLI output creators route through the engine's
+creator-only security authority, with default-ACL detectors on both
+sides, and the umask fixture window owns both halves of its swap).
+Every measurement report in this directory records its own provenance,
+and reading that provenance is the only way to know what a committed
+artifact measures.  This set is the gate-67 rotation: eighteen reports
+authored by the closing gate battery at `git_head`
+`a691ab8cd717a6098d05bee554020625147dd2f1` — the revision under test —
+plus the two Windows reports authored natively on the authorized
+validation host at the same revision from a detached, tree-verified
+checkout, plus `build-ids.json`, `battery-manifest.json`, and
+`SHASUMS.txt` (the staged-binary ledger's committed copy, rotated with
+the reports by battery step `[16i]`).  The closing battery recorded 323
+checked steps, 0 mismatches, 4 deferrals (the operations race probes,
+the two retired duplicate pressure-axis steps, and the Windows-reports
+rotation step the native leg owns), all at the one revision.  Both
+kind-gate passes (fresh and committed, after rotation) returned rc 0;
+the kind self-test executed 134 rejection controls; the forgery
+battery's verdict is PASS — every class rejected on its own distinct
+reason, genuine evidence accepted — and it runs standalone on a clean
 checkout against the committed ledger.  The refusal-class parity gate
-executed 483/483 cells with 0 divergences, 0 hangs, 36/36 pins, and the
-routine pressure subset 90/90; the hostile `/dev/null`-substitution
+executed 483/483 cells with 0 divergences, 0 hangs, 36/36 pins, and
+the routine pressure subset 90/90; the hostile `/dev/null`-substitution
 cells are DISABLED by recorded user decision (2026-10-11 — the code,
 grading, and the 378-entry pinned law are retained;
 `IPRANGE_HOSTILE_NULL=1` re-enables them on a host that permits
 unprivileged user namespaces; the disabled state is recorded in every
-pressure report).  Recorded commands spell the toolchain as its version
-identity (`go1.27.1`), not an absolute path (user decision 2026-10-11).
-The Windows reports' provenance now records the C-boundary steps — the
-capi library build, the gendef/dlltool import library, and the capi
-native tests, each with its scored attempt and rc — which the committed
-kind-gate detector requires and whose removal redds the self-test.
+pressure report).  Recorded commands spell the toolchain as its
+version identity (`go1.27.1`), not an absolute path (user decision
+2026-10-11).  The Windows reports' provenance records the C-boundary
+steps — the capi library build, the gendef/dlltool import library, and
+the capi native tests, each with its scored attempt and rc — which the
+committed kind-gate detector requires and whose removal redds the
+self-test.
 
 Toolchains this rotation: `go version go1.27.1 linux/amd64`, `rustc
 1.97.1 (8bab26f4f 2026-07-14)` host `x86_64-unknown-linux-gnu` LLVM
