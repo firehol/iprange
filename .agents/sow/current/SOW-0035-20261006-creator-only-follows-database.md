@@ -5,7 +5,7 @@
 Status: in-progress
 
 Sub-state: final external-gate iteration. All 28 internal review rounds
-converged; the sol milestone gate is at rounds 6-11 fixed (round 12
+converged; the sol milestone gate is at rounds 6-12 fixed (round 13
 pending after the leg re-stamp and the one-stamp closing battery).
 
 ## Requirements
@@ -380,6 +380,8 @@ Windows evidence leg (cleared): `windows-guard.json` and `windows-housekeeping.j
 - THE FIX CHAIN (`2f27ff1f`..`411ba02c` + the rotation): all four transition call sites resolve from the recorded source choice; six detectors (both engines) prove the unprotected transitions; the C fixture + Rust wrapper assert the artifact modes for 0 and 2; the manifests are per-invocation-private; the ledger is lazy; the read is selector-bounded; the Windows battery runs the C tests (the gendef/dlltool import-library generation bridging the MSVC DLL to the cygwin linker; the __CYGWIN__ path widening; the fixture-directory -I); the specs and wiki document the contract.
 - The Windows leg ran green at the fix HEAD (29 steps, the reports stamping `411ba02c`, the ledger verified 6/6) after ten attempts, each fixing exactly one first-run-on-Windows gap (the platform-aware reset policy, the committed-tree manifest, the full disk — 56 GB of prior-session debris pruned, the debug worker placement, the import library, the gendef stdout redirection, the header path, the path-kind guard).
 - The closing gate battery (gate-52): ALLDONE, 465 s, zero mismatches; the forgery verdict PASS — every class rejected on its own distinct reason, genuine evidence accepted.
+- SOL ROUND 12 (gpt-6.1-sol at `62104eb0`, effort xhigh, continuation): NEEDS CHANGES — the round-11 fixes verified fixed; one P2:
+  - P2 block_comment_stripper_erases_exports_from_noncode_delimiters — VERIFIED and FIXED (this batch): the stripper recognized `/*` regardless of lexical context, so `// /*` inside a line comment (or `#[doc = "/*"]` inside a string) opened a phantom block comment that swallowed real exports with balanced delimiters and no remnant. Four consecutive one-token-at-a-time fixes (line comments, whitespace, block comments, context) converged on the correct bounded solution: a single-pass context-aware lexer (code / line-comment / block-comment / string states; strings and comments become single spaces; char lifetimes stay code; unterminated block comments leave a fail-closed marker). The detector covers both round-12 counterexamples beside every earlier shape. Mutation-verified: `// /*`-wrapped exports with the inventory rows removed fails the gate naming both.
 - SOL ROUND 11 (gpt-6.1-sol at `ecf587b4`, effort xhigh, continuation): NEEDS CHANGES — the round-10 fixes verified fixed (gate-73's qualification verified line by line in the review); one P2 and one P3:
   - P2 block_comment_keyword_separator_bypasses_surface_gate — VERIFIED and FIXED (this batch): block comments are lexical whitespace; the walker now strips them from the whole source first (nested as Rust lexes them; an unterminated comment leaves a marker) and reports any chunk still carrying a comment remnant as unhandled. The first draft of the fix had its own defect the detector caught BEFORE commit — the stripper did not track nesting and the residual text then skipped silently; both fixed. Mutation-verified with the finding's exact counterexample.
   - P3 status_body_still_describes_round_9 — FIXED: the full status body is rewritten per round (the earlier header-only patch was the laziness the P3 named).

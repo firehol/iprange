@@ -706,34 +706,67 @@ func exportNamesOf(declaration string) ([]string, bool) {
 	return nil, name == ""
 }
 
-// stripBlockComments removes /* ... */ sequences (nested, as Rust
-// lexes them) from the whole source, leaving a space: a block comment
-// between keywords is ordinary whitespace (sol round-11 P2 — "pub
-// /* note */ use" bypassed every prefix check). An unterminated block
-// comment leaves a trailing "/*" marker in the text, which the walker
-// then reports as unhandled: fail closed, never silent.
-func stripBlockComments(source string) string {
+// stripLexicalNoise removes comments and string-literal contents from
+// the source in ONE context-aware scan (sol rounds 9-12: line
+// comments gluing declarations, block comments as whitespace, and the
+// round-12 pair — a "/*" inside a line comment or a string must not
+// open a block comment that swallows real code). Comments and strings
+// become single spaces; code text is preserved. Char lifetimes stay
+// code (their quotes never delimit these states); an unterminated
+// block comment leaves a "/*" marker so the walker fails closed.
+func stripLexicalNoise(source string) string {
+	const (
+		stCode = iota
+		stLine
+		stBlock
+		stString
+	)
 	var out strings.Builder
-	depth := 0
+	state, depth := stCode, 0
 	for i := 0; i < len(source); i++ {
-		if i+1 < len(source) && source[i] == '/' && source[i+1] == '*' {
-			depth++
-			i++
-			if depth == 1 {
+		c := source[i]
+		switch state {
+		case stCode:
+			switch {
+			case c == '/' && i+1 < len(source) && source[i+1] == '/':
+				state = stLine
+				i++
 				out.WriteByte(' ')
+			case c == '/' && i+1 < len(source) && source[i+1] == '*':
+				state, depth = stBlock, 1
+				i++
+				out.WriteByte(' ')
+			case c == '"':
+				state = stString
+				out.WriteByte(' ')
+			default:
+				out.WriteByte(c)
 			}
-			continue
-		}
-		if depth > 0 {
-			if i+1 < len(source) && source[i] == '*' && source[i+1] == '/' {
+		case stLine:
+			if c == '\n' {
+				state = stCode
+				out.WriteByte('\n')
+			}
+		case stBlock:
+			if c == '/' && i+1 < len(source) && source[i+1] == '*' {
+				depth++
+				i++
+			} else if c == '*' && i+1 < len(source) && source[i+1] == '/' {
 				depth--
 				i++
+				if depth == 0 {
+					state = stCode
+				}
 			}
-			continue
+		case stString:
+			if c == '\\' {
+				i++
+			} else if c == '"' {
+				state = stCode
+			}
 		}
-		out.WriteByte(source[i])
 	}
-	if depth > 0 {
+	if state == stBlock {
 		out.WriteString(" /*")
 	}
 	return out.String()
@@ -751,7 +784,7 @@ func stripBlockComments(source string) string {
 // is any export declaration whose syntax the walker cannot parse: the
 // gate fails closed instead of silently skipping.
 func exportNamesIn(source string) (names, unhandled []string) {
-	source = stripBlockComments(source)
+	source = stripLexicalNoise(source)
 	var pending strings.Builder
 	flush := func(chunk string) {
 		// Whitespace normalization first: Rust keywords may be
@@ -812,9 +845,8 @@ func exportNamesIn(source string) (names, unhandled []string) {
 		}
 	}
 	for _, line := range strings.Split(source, "\n") {
-		if slash := strings.Index(line, "//"); slash >= 0 {
-			line = line[:slash]
-		}
+		// Line comments were already removed by the lexer with full
+		// lexical context; no per-line stripping remains.
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -926,6 +958,28 @@ func TestGroupedExportDeclarationsYieldTheirNames(t *testing.T) {
 	}
 	// A block comment is lexical whitespace (sol round-11 P2), nested
 	// per the Rust Reference, and may span lines.
+	// A block comment is lexical whitespace (sol round-11 P2), nested
+	// per the Rust Reference, and may span lines — but a "/*" inside a
+	// LINE COMMENT or a STRING must not open one (sol round-12 P2):
+	// the lexer honors context in one scan.
+	contexted, unhandled := exportNamesIn(strings.Join([]string{
+		"// /*",
+		"pub use theta::{nine, ten};",
+		"// */",
+		"#[doc = \"/*\"]",
+		"pub use iota::eleven;",
+		"#[doc = \"*/\"]",
+		"pub mod fault;",
+	}, "\n"))
+	wantContexted := []string{"nine", "ten", "eleven", "fault"}
+	if len(unhandled) != 0 || len(contexted) != len(wantContexted) {
+		t.Fatalf("context-lexed exports yielded %v (unhandled %v), want %v", contexted, unhandled, wantContexted)
+	}
+	for i := range wantContexted {
+		if contexted[i] != wantContexted[i] {
+			t.Fatalf("context-lexed exports yielded %v, want %v", contexted, wantContexted)
+		}
+	}
 	blocked, unhandled := exportNamesIn(strings.Join([]string{
 		"pub /* audit */ use zeta::{six, seven};",
 		"pub /* multi",
