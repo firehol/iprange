@@ -646,26 +646,28 @@ var rustSourceExportsRecorded = map[string]bool{
 	"validation":    true,
 }
 
-// exportedNames extracts every public name one lib.rs export line
-// publishes. Single-line declarations carry one path; grouped
-// re-exports (``pub use path::{a, b as c};``) carry one name per
-// group member, the alias when ``as`` renames it. A grouped
-// declaration is exactly the shape that escaped the inventory scan
-// once (sol round-7 P2), so the extraction is shared with its own
-// detector test rather than living inline in the gate loop.
-func exportedNames(line string) []string {
-	line = strings.TrimSpace(line)
+// exportNamesOf extracts every public name one COMPLETE lib.rs export
+// declaration publishes and reports whether the declaration's syntax
+// was handled. Single-line declarations carry one path; grouped
+// re-exports (``pub use path::{a, b as c};``) carry one name per group
+// member, the alias when ``as`` renames it. Wildcard stars and braces
+// without a closing brace are unhandled — the caller fails closed on
+// them instead of skipping (sol rounds 7-8: both the grouped and the
+// multiline grouped shapes escaped a scan that looked at physical
+// lines only).
+func exportNamesOf(declaration string) ([]string, bool) {
+	declaration = strings.TrimSpace(declaration)
 	var prefix string
 	switch {
-	case strings.HasPrefix(line, "pub use "):
+	case strings.HasPrefix(declaration, "pub use "):
 		prefix = "pub use "
-	case strings.HasPrefix(line, "pub mod "):
+	case strings.HasPrefix(declaration, "pub mod "):
 		prefix = "pub mod "
 	default:
-		return nil
+		return nil, true // not an export declaration; nothing to extract
 	}
-	if !strings.HasSuffix(line, ";") {
-		return nil
+	if !strings.HasSuffix(declaration, ";") {
+		return nil, false
 	}
 	single := func(name string) string {
 		if space := strings.LastIndex(name, " "); space >= 0 {
@@ -676,50 +678,115 @@ func exportedNames(line string) []string {
 		}
 		return name
 	}
-	if open := strings.Index(line, "{"); open >= 0 {
-		close := strings.LastIndex(line, "}")
+	if open := strings.Index(declaration, "{"); open >= 0 {
+		close := strings.LastIndex(declaration, "}")
 		if close < open {
-			return nil
+			return nil, false
 		}
 		var names []string
-		for _, part := range strings.Split(line[open+1:close], ",") {
+		for _, part := range strings.Split(declaration[open+1:close], ",") {
 			name := strings.TrimSpace(part)
 			if as := strings.LastIndex(name, " as "); as >= 0 {
 				name = strings.TrimSpace(name[as+len(" as "):])
 			}
-			if name != "" {
-				names = append(names, name)
+			if name == "" {
+				continue // a trailing comma is legal Rust formatting
+			}
+			if name == "*" {
+				return nil, false
+			}
+			names = append(names, name)
+		}
+		return names, true
+	}
+	name := single(strings.TrimSuffix(strings.TrimPrefix(declaration, prefix), ";"))
+	if name != "" && name != "*" {
+		return []string{name}, true
+	}
+	return nil, name == ""
+}
+
+// exportNamesIn walks the COMPLETE export declarations of a lib.rs
+// source: a declaration spans lines until its terminating semicolon
+// (the repository's own formatting uses multiline groups), and any
+// export declaration whose syntax the walker cannot parse is returned
+// in unhandled so the gate fails closed instead of silently skipping
+// it (sol round-8 P2: the single-line scan let multiline groups
+// escape).
+func exportNamesIn(source string) (names, unhandled []string) {
+	var declaration string
+	flush := func() {
+		if declaration == "" {
+			return
+		}
+		if found, ok := exportNamesOf(declaration); ok {
+			names = append(names, found...)
+		} else {
+			unhandled = append(unhandled, declaration)
+		}
+		declaration = ""
+	}
+	for _, line := range strings.Split(source, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if declaration != "" {
+			declaration += " " + trimmed
+			if strings.HasSuffix(trimmed, ";") {
+				flush()
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "pub use ") || strings.HasPrefix(trimmed, "pub mod ") {
+			declaration = trimmed
+			if strings.HasSuffix(trimmed, ";") {
+				flush()
 			}
 		}
-		return names
 	}
-	if name := single(strings.TrimSuffix(strings.TrimPrefix(line, prefix), ";")); name != "" {
-		return []string{name}
-	}
-	return nil
+	flush() // an unterminated declaration is unhandled syntax, not silence
+	return names, unhandled
 }
 
 // TestGroupedExportDeclarationsYieldTheirNames is the detector for the
 // extraction above: a grouped re-export must yield every name in the
-// group (the alias for ``as`` members), because the round-7 finding
-// was exactly a grouped declaration the inventory scan skipped by
-// skipping every line containing a brace.
+// group (the alias for ``as`` members), in the single-line form AND
+// the multiline form the repository itself uses, because the round-7
+// finding was a grouped declaration the scan skipped and the round-8
+// finding was the same escape for the multiline spelling. Malformed
+// and wildcard declarations must report unhandled so the gate fails
+// closed.
 func TestGroupedExportDeclarationsYieldTheirNames(t *testing.T) {
-	names := exportedNames("pub use publication::security::{output_protection_holds, secure_output_file};")
+	names, unhandled := exportNamesIn(strings.Join([]string{
+		"pub use publication::security::{output_protection_holds, secure_output_file};",
+	}, "\n"))
 	want := []string{"output_protection_holds", "secure_output_file"}
-	if len(names) != len(want) {
-		t.Fatalf("grouped export yielded %v, want %v", names, want)
+	if len(unhandled) != 0 || len(names) != len(want) {
+		t.Fatalf("grouped export yielded %v (unhandled %v), want %v", names, unhandled, want)
 	}
 	for i := range want {
 		if names[i] != want[i] {
 			t.Fatalf("grouped export yielded %v, want %v", names, want)
 		}
 	}
-	aliased := exportedNames("pub use example::{alpha as beta, gamma};")
-	if len(aliased) != 2 || aliased[0] != "beta" || aliased[1] != "gamma" {
-		t.Fatalf("aliased group yielded %v, want [beta gamma]", aliased)
+	multiline, unhandled := exportNamesIn(strings.Join([]string{
+		"pub use commit_resolution::{",
+		"    CommitOutcome, CommitResolution as Resolved,",
+		"    InterruptedOutcome,",
+		"};",
+	}, "\n"))
+	if len(unhandled) != 0 || len(multiline) != 3 ||
+		multiline[0] != "CommitOutcome" || multiline[1] != "Resolved" || multiline[2] != "InterruptedOutcome" {
+		t.Fatalf("multiline group yielded %v (unhandled %v)", multiline, unhandled)
 	}
-	if got := exportedNames("pub use path::name;"); len(got) != 1 || got[0] != "name" {
+	if _, unhandled := exportNamesIn("pub use example::*;"); len(unhandled) != 1 {
+		t.Fatalf("wildcard export must be unhandled, got %v", unhandled)
+	}
+	if _, unhandled := exportNamesIn(strings.Join([]string{
+		"pub use example::{",
+		"    Alpha,",
+	}, "\n")); len(unhandled) != 1 {
+		t.Fatalf("unterminated group must be unhandled, got %v", unhandled)
+	}
+	if got, _ := exportNamesIn("pub use path::name;"); len(got) != 1 || got[0] != "name" {
 		t.Fatalf("single export yielded %v, want [name]", got)
 	}
 }
@@ -741,14 +808,16 @@ func TestParityRustSourceExportsAreInventoried(t *testing.T) {
 			recorded[row.ref[slash+2:]] = true
 		}
 	}
+	names, unhandled := exportNamesIn(string(source))
+	for _, declaration := range unhandled {
+		t.Errorf("unhandled export syntax (fail closed): %s", declaration)
+	}
 	var missing []string
-	for _, line := range strings.Split(string(source), "\n") {
-		for _, name := range exportedNames(line) {
-			if recorded[name] || rustSourceExportsRecorded[name] {
-				continue
-			}
-			missing = append(missing, name)
+	for _, name := range names {
+		if recorded[name] || rustSourceExportsRecorded[name] {
+			continue
 		}
+		missing = append(missing, name)
 	}
 	if len(missing) > 0 {
 		t.Errorf("Rust public exports missing from parity_rust_public.tsv: %s", strings.Join(missing, ", "))

@@ -812,6 +812,37 @@ mod tests {
         );
     }
 
+    // sol round-8 P1: the proof must compose the structural check — a
+    // protected artifact with a SECOND HARD LINK reads false on every
+    // platform (the round-7 Windows arm verified only the descriptor
+    // and accepted a multilink file). The detector creates through the
+    // authority, adds a link with std::fs::hard_link, and requires the
+    // refusal; it runs in the Windows leg's cargo suite too.
+    #[test]
+    fn output_protection_holds_refuses_a_hardlinked_artifact() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "iprange-export-hardlink-{unique}-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("linked.out");
+        let file = create_output_file(&path, true).unwrap();
+        drop(file);
+        std::fs::hard_link(&path, directory.join("linked-2.out")).unwrap();
+        let file = OpenOptions::new().write(true).open(&path).unwrap();
+        assert!(
+            !iprange_livedb::output_protection_holds(&file),
+            "a hard-linked artifact must not read as protected: the single-link \
+             structural condition is part of the public proof"
+        );
+        drop(file);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
     // sol round-7 P1: the proof-only observer must answer FALSE for an
     // unprotected artifact on every platform it compiles on (the
     // round-6 shape had a non-Unix arm that returned true without

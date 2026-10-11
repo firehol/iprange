@@ -84,22 +84,35 @@ pub(crate) use platform::{creator_only_commitment, secure_creator_only, Profile}
 /// authority the live and publication artifacts go through
 /// (`platform::secure_creator_only`) on every platform that supports
 /// it — POSIX proves the mode and trivial ACL, Windows the protected
-/// DACL — so outputs follow it and a protected output is proven, not
-/// just opened at a mode (sol round-6 P1; round-7 P1 closed the
-/// cfg-split that made the Windows arm a no-op).
+/// DACL — and the structural proof (regular file, single link) is
+/// composed beside it, so outputs follow it and a protected output is
+/// proven, not just opened at a mode (sol round-6 P1; rounds 7-8
+/// closed the cfg-split no-op and the multilink hole).
 pub fn secure_output_file(file: &std::fs::File) -> std::io::Result<()> {
     let fail = |error| std::io::Error::other(format!("{error:?}"));
     let profile = platform::Profile::capture().map_err(fail)?;
-    platform::secure_creator_only(file, &profile).map_err(fail)
+    platform::secure_creator_only(file, &profile).map_err(fail)?;
+    structural_proof(file).map_err(fail)
 }
 
 /// Proof-only observation of one artifact's protected contract: exact
 /// 0600 with a trivial access ACL on POSIX, the protected single-user
-/// DACL on Windows, single link, regular file — the platform's own
-/// `creator_only_commitment`, with no cfg arm that could answer for a
-/// file it never inspected. The detector half of `secure_output_file`:
-/// it observes, never repairs, so a creator that leaves the artifact
-/// unprotected reads false.
+/// DACL on Windows — and, on every platform, the structural proof of
+/// a regular single-link file composed through the namespace's
+/// retained-identity check (sol round-8 P1: the descriptor proof alone
+/// accepted a hard-linked artifact). The detector half of
+/// `secure_output_file`: it observes, never repairs, so a creator that
+/// leaves the artifact unprotected — or a caller that adds a link
+/// after the fact — reads false.
 pub fn output_protection_holds(file: &std::fs::File) -> bool {
-    creator_only_commitment(file).is_ok()
+    creator_only_commitment(file).is_ok() && structural_proof(file).is_ok()
+}
+
+/// The structural half of the public output proof: a regular file with
+/// exactly one link, through the same retained-identity check the
+/// publication namespace applies to its own artifacts.
+fn structural_proof(
+    file: &std::fs::File,
+) -> Result<(), crate::publication::namespace::NamespaceError> {
+    crate::publication::namespace::retained_regular_identity(file, true).map(|_| ())
 }
