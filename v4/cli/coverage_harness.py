@@ -545,7 +545,8 @@ def measure_unit(module_dir, coverdir, go):
                          f"expected at least {MIN_COVER_FILES_PER_RUN}")
     return {"coverdir": sanitized_path_value(coverdir), "cover_files": files,
             "rc": rc, "covermode": COVERMODE,
-            "command": sanitized_command(command)}
+            "command": sanitized_command(
+                [_tool_identity(go)] + list(command[1:]))}
 
 
 def measure_integration(module_dir, coverdir, staging, matrices, work_root,
@@ -752,6 +753,20 @@ def live_run(args):
 def _go_version(go):
     rc, out, _err = run([go, "version"])
     return out.strip() if rc == 0 else None
+
+
+def _tool_identity(go):
+    """The toolchain's version identity for recorded commands.
+
+    The absolute toolchain path is a workstation shape, not evidence: a
+    reader reproduces the measurement from the version, and the Windows
+    provenance already records version strings. Recorded commands spell
+    the tool word as the version identity (user decision 2026-10-11);
+    the executed command keeps the resolved path the kernel needs.
+    """
+    version = _go_version(go) or "go-unknown"
+    parts = version.split()
+    return parts[2] if len(parts) >= 3 else version
 
 
 # Executed-control count of ``_self_test``, as a literal.  The line used to
