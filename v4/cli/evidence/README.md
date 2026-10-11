@@ -9,7 +9,7 @@ suite, and the parity export walker scans complete declarations,
 failing closed on unhandled syntax).
 Every measurement report in this directory records its own provenance,
 and reading that provenance is the only way to know what a committed
-artifact measures.  This set is the gate-71 rotation: eighteen reports
+artifact measures.  This set is the gate-72 rotation: eighteen reports
 authored by the closing gate battery at `git_head`
 `165f9a2a807ec4693eaa9c4aef78dcd67c19737f` — the revision under test —
 plus the two Windows reports authored natively on the authorized
