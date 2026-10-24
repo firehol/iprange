@@ -18,7 +18,7 @@
 //!   address `::ffff:A.B.C.D`; anything else is a hostname-class token
 //!   and fails with C's `Cannot parse address: %s`. C's own loader
 //!   routes hostname-class tokens to DNS before address parsing; the
-//!   parse worker must do the same (see [`super::parse`]).
+//!   parse worker must do the same (see the caller).
 //! * Errors are exactly the C stderr texts:
 //!   - `iprange: Invalid IPv6 address %s` (v6 parse failure)
 //!   - `iprange: Invalid address %s.` (v4 parse failure, trailing dot)

@@ -186,6 +186,7 @@ version = "0.0.0"
 dependencies = [
  "getrandom",
  "iprange-livedb",
+ "iprange-text",
  "libc",
  "serde",
  "serde_json",
@@ -206,6 +207,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "windows-sys",
+]
+
+[[package]]
+name = "iprange-text"
+version = "0.0.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

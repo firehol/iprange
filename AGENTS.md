@@ -535,3 +535,11 @@ Go: `nice go -C v4/go test ./...`. Shared cross-language artifacts live in
   evidence only.
 
 Project SOW status: initialized
+
+### Shared legacy text parsing
+
+`v4/rust/iprange-text` owns the C-compatible record grammar, numeric parsing,
+range/family primitives and DNS resolver. It has no SDK dependency. The CLI
+retains file loading and exit policy and supplies a `DiagnosticSink`; parser
+warnings are returned unchanged in `LineOutcome`. Split raw records before
+NUL truncation. SOW-0038 tracks extraction and validation.

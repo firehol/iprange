@@ -30,13 +30,9 @@
 //! (`src/ipset_load.c:418`, `src/ipset_optimize.c:47`).
 //!
 //! C model differences that are unobservable in the output:
-//! - C spawns workers lazily as the pending count grows (`pending >
-//!   threads && threads < max`) and its load phase never blocks on
-//!   replies, so multi-host files routinely reach the maximum; this
-//!   port uses the same growth condition but parse.rs's per-host
-//!   blocking resolve() keeps the queue nearly empty, so in practice
-//!   one worker serves the whole run and the `-v` summary reports
-//!   "threads used 1 of N".
+//! - Workers grow lazily with pending requests, up to the configured
+//!   maximum and the hard resource ceiling. Callers can queue a whole file
+//!   before draining; the CLI drains once per file and resets batch counters.
 //! - The C getnameinfo -> str2netaddr round-trip (IPv4 worker) is a
 //!   lossless identity for the AF_INET sockaddrs getaddrinfo
 //!   returns; this port reads `sin_addr.s_addr` directly. The C
@@ -44,13 +40,19 @@
 //!   unreachable without a libc bug and are not ported.
 //! - C malloc failures ("out of memory...") cannot be reproduced in
 //!   Rust; the allocator aborts instead.
-//! - parse.rs owns one Resolver per run and calls finish() once,
-//!   while C calls dns_done() per file and resets the counters, so
-//!   the `-v` summary aggregates the whole run.
 
 use super::family::{Family, FamilyImpl};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
+
+/// Receives a complete diagnostic line without its terminating newline.
+///
+/// Calls occur synchronously on resolver workers or the draining caller, at
+/// the original diagnostic site. Implementations must support concurrent
+/// calls and must not panic. Batch summaries arrive when the batch is dropped.
+pub trait DiagnosticSink: Send + Sync {
+    fn line(&self, text: &str);
+}
 
 /// C `MAX_INPUT_ELEMENT` (`src/ipset_load.c`): the maximum hostname
 /// length accepted in IPv4 mode.
@@ -133,6 +135,7 @@ pub struct ReplyRecord {
 pub struct Batch {
     records: std::vec::IntoIter<ReplyRecord>,
     summary: Option<String>,
+    diagnostics: Arc<dyn DiagnosticSink>,
 }
 
 impl Iterator for Batch {
@@ -146,7 +149,7 @@ impl Iterator for Batch {
 impl Drop for Batch {
     fn drop(&mut self) {
         if let Some(line) = self.summary.take() {
-            crate::legacy::argv::eprint_line(&format!("{line}"));
+            self.diagnostics.line(&format!("{line}"));
         }
     }
 }
@@ -165,6 +168,7 @@ struct Pending {
 /// `dns_requests_retries`, `dns_replies_found`,
 /// `dns_replies_failed`, ...) plus the job queue.
 struct Shared {
+    diagnostics: Arc<dyn DiagnosticSink>,
     family: Family,
     silent: bool,
     progress: bool,
@@ -224,9 +228,11 @@ impl Resolver {
         _progress: bool,
         _family: Family,
         _debug: bool,
+        diagnostics: Arc<dyn DiagnosticSink>,
     ) -> Resolver {
         let (sender, receiver): (Sender<Job>, Receiver<Job>) = channel();
         let shared = Arc::new(Shared {
+            diagnostics,
             family: _family,
             silent: _silent,
             progress: _progress,
@@ -326,7 +332,9 @@ impl Resolver {
                 // C dns_request_add() debug line (IPv4 only; the
                 // IPv6 request_add has no equivalent).
                 if self.shared.debug && self.shared.family == Family::V4 {
-                    crate::legacy::argv::eprint_line(&format!("iprange: Creating new DNS thread"));
+                    self.shared
+                        .diagnostics
+                        .line(&format!("iprange: Creating new DNS thread"));
                 }
                 let shared = self.shared.clone();
                 match std::thread::Builder::new()
@@ -338,7 +346,9 @@ impl Resolver {
                         // C pthread_create failure text (printed once
                         // per run; C prints it per attempt).
                         self.spawn_failed = true;
-                        crate::legacy::argv::eprint_line(&format!("iprange: Cannot create DNS thread."));
+                        self.shared
+                            .diagnostics
+                            .line(&format!("iprange: Cannot create DNS thread."));
                         if self.workers.is_empty() {
                             // C dns_request_add(): with no worker yet
                             // the request is rolled back (pending--,
@@ -411,6 +421,7 @@ impl Resolver {
             return Batch {
                 records: Vec::new().into_iter(),
                 summary: None,
+                diagnostics: Arc::clone(&shared.diagnostics),
             };
         }
 
@@ -426,7 +437,9 @@ impl Resolver {
                 stats.made - stats.finished
             };
             if pending > 0 && shared.debug {
-                crate::legacy::argv::eprint_line(&format!("{}", waiting_line(pending)));
+                shared
+                    .diagnostics
+                    .line(&format!("{}", waiting_line(pending)));
             }
         }
 
@@ -487,6 +500,7 @@ impl Resolver {
         Batch {
             records: records.into_iter(),
             summary,
+            diagnostics: Arc::clone(&shared.diagnostics),
         }
     }
 
@@ -663,7 +677,10 @@ fn resolve_host(shared: &Shared, host: &str) -> Result<Vec<u128>, DnsError> {
             // C dns_request_failed(): the retry happens regardless
             // of --dns-silent; only the message is gated.
             if !shared.silent {
-                crate::legacy::argv::eprint_line(&format!("iprange: DNS: '{host}' will be retried: {}", gai_text(rc)));
+                shared.diagnostics.line(&format!(
+                    "iprange: DNS: '{host}' will be retried: {}",
+                    gai_text(rc)
+                ));
             }
             tries -= 1;
             shared.stats.lock().unwrap().retries += 1;
@@ -784,7 +801,9 @@ fn resolve_host(shared: &Shared, host: &str) -> Result<Vec<u128>, DnsError> {
                 );
                 if retriable && tries > 0 {
                     if !shared.silent {
-                        crate::legacy::argv::eprint_line(&format!("iprange: DNS: '{host}' will be retried: {error}"));
+                        shared
+                            .diagnostics
+                            .line(&format!("iprange: DNS: '{host}' will be retried: {error}"));
                     }
                     tries -= 1;
                     shared.stats.lock().unwrap().retries += 1;
@@ -857,7 +876,11 @@ impl<'a> AddrSink<'a> {
     fn push(&mut self, value: u128) {
         if self.shared.debug && self.shared.family == Family::V4 {
             // C ipset_dns.c:246-249 (no IPv6 equivalent).
-            crate::legacy::argv::eprint_line(&format!("iprange: DNS: '{}' = {}", self.host, fmt_v4(value as u32)));
+            self.shared.diagnostics.line(&format!(
+                "iprange: DNS: '{}' = {}",
+                self.host,
+                fmt_v4(value as u32)
+            ));
         }
         self.addrs.push(value);
     }
@@ -930,10 +953,67 @@ impl DnsError {
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    struct Messages(Mutex<Vec<String>>);
+
+    impl DiagnosticSink for Messages {
+        fn line(&self, text: &str) {
+            self.0.lock().unwrap().push(text.to_owned());
+        }
+    }
+
+    #[test]
+    fn diagnostics_reach_caller_before_batch_summary_on_drop() {
+        for (family, debug, progress, summary_expected) in [
+            (Family::V4, true, false, true),
+            (Family::V4, false, true, true),
+            (Family::V4, false, false, false),
+            (Family::V6, true, true, false),
+        ] {
+            let messages = Arc::new(Messages::default());
+            let mut resolver = Resolver::new(1, true, progress, family, debug, messages.clone());
+            let address = if family == Family::V4 {
+                "127.0.0.1"
+            } else {
+                "::1"
+            };
+            let replies = resolver.resolve(address).unwrap();
+            let mut batch = resolver.drain();
+            let before_drop = messages.0.lock().unwrap().clone();
+            if family == Family::V4 && debug {
+                assert_eq!(before_drop[0], "iprange: Creating new DNS thread");
+                assert!(before_drop
+                    .iter()
+                    .any(|line| line == "iprange: DNS: '127.0.0.1' = 127.0.0.1"));
+            } else {
+                assert!(before_drop.is_empty());
+            }
+            assert_eq!(batch.by_ref().count(), replies.len());
+            assert_eq!(*messages.0.lock().unwrap(), before_drop);
+            drop(batch);
+            let after_drop = messages.0.lock().unwrap().clone();
+            assert_eq!(
+                after_drop.len(),
+                before_drop.len() + usize::from(summary_expected)
+            );
+            if summary_expected {
+                let expected = if debug {
+                    summary_line(1, 0, 0, replies.len() as u64, 1, 1)
+                } else {
+                    progress_bar()
+                };
+                assert_eq!(after_drop.last(), Some(&expected));
+            }
+            resolver.finish().unwrap();
+            assert_eq!(*messages.0.lock().unwrap(), after_drop);
+        }
+    }
+
     /// A test pool state without any worker threads.
     fn test_shared(family: Family, debug: bool) -> Shared {
         let (_tx, rx): (Sender<Job>, Receiver<Job>) = channel();
         Shared {
+            diagnostics: Arc::new(Messages::default()),
             family,
             silent: false,
             progress: false,
@@ -985,7 +1065,14 @@ mod tests {
     /// handed out: dropping either half loses the C `lines` accounting.
     #[test]
     fn drain_hands_out_one_record_per_reply_address() {
-        let mut r = Resolver::new(2, true, false, Family::V4, false);
+        let mut r = Resolver::new(
+            2,
+            true,
+            false,
+            Family::V4,
+            false,
+            Arc::new(Messages::default()),
+        );
         let addrs = r.resolve("localhost").expect("localhost must resolve");
         assert!(!addrs.is_empty(), "the resolver must answer localhost");
         assert!(
@@ -1032,7 +1119,14 @@ mod tests {
     /// the answering platforms instead.
     #[test]
     fn multi_file_batches_drain_independently() {
-        let mut r = Resolver::new(3, true, false, Family::V4, false);
+        let mut r = Resolver::new(
+            3,
+            true,
+            false,
+            Family::V4,
+            false,
+            Arc::new(Messages::default()),
+        );
         for _ in 0..4 {
             r.request("127.0.0.1").expect("queue file 1");
         }
@@ -1083,7 +1177,14 @@ mod tests {
     ))]
     #[test]
     fn hex_numeric_hostnames_answer_locally_where_the_authority_answers() {
-        let mut r = Resolver::new(2, true, false, Family::V4, false);
+        let mut r = Resolver::new(
+            2,
+            true,
+            false,
+            Family::V4,
+            false,
+            Arc::new(Messages::default()),
+        );
         for host in ["0x7f000001", "0x0A000001"] {
             r.request(host)
                 .unwrap_or_else(|e| panic!("{host} must be answered: {e}"));
@@ -1119,7 +1220,14 @@ mod tests {
 
     #[test]
     fn empty_and_oversized_hostnames_match_c_payloads() {
-        let mut r = Resolver::new(1, false, false, Family::V4, false);
+        let mut r = Resolver::new(
+            1,
+            false,
+            false,
+            Family::V4,
+            false,
+            Arc::new(Messages::default()),
+        );
         assert_eq!(
             r.resolve("").unwrap_err(),
             DnsError::System("iprange: DNS: hostname is empty or too long".to_string())
@@ -1130,7 +1238,14 @@ mod tests {
             DnsError::System("iprange: DNS: hostname is empty or too long".to_string())
         );
         // IPv6 accepts 256 chars (MAX_INPUT_ELEMENT6) but rejects 257.
-        let mut r6 = Resolver::new(1, false, false, Family::V6, false);
+        let mut r6 = Resolver::new(
+            1,
+            false,
+            false,
+            Family::V6,
+            false,
+            Arc::new(Messages::default()),
+        );
         let long6 = "a".repeat(MAX_HOSTNAME_V6 + 1);
         assert_eq!(
             r6.resolve(&long6).unwrap_err(),
@@ -1150,7 +1265,14 @@ mod tests {
         // the ipset, because the C counts a `lines` unit per added
         // entry. The reply count is pinned against the drain instead
         // of a hard-coded number.
-        let mut r = Resolver::new(2, true, false, Family::V4, false);
+        let mut r = Resolver::new(
+            2,
+            true,
+            false,
+            Family::V4,
+            false,
+            Arc::new(Messages::default()),
+        );
         let addrs = r.resolve("localhost").expect("localhost must resolve");
         assert!(addrs.contains(&0x7f00_0001));
         assert_eq!(r.drain_records().len(), addrs.len());
@@ -1159,7 +1281,14 @@ mod tests {
 
     #[test]
     fn localhost_resolves_to_loopback_and_mapped_v4_in_v6() {
-        let mut r = Resolver::new(2, true, false, Family::V6, false);
+        let mut r = Resolver::new(
+            2,
+            true,
+            false,
+            Family::V6,
+            false,
+            Arc::new(Messages::default()),
+        );
         let addrs = r.resolve("localhost").expect("localhost must resolve");
         assert!(addrs.contains(&1), "::1 missing");
         let mapped = mapped6(0x7f00_0001);
@@ -1172,7 +1301,14 @@ mod tests {
     fn invalid_invalid_fails_permanently_with_c_payload() {
         // RFC 2606 reserved TLD: resolvable NXDOMAIN on any resolver
         // with a working upstream; the sandbox answers instantly.
-        let mut r = Resolver::new(2, false, false, Family::V4, false);
+        let mut r = Resolver::new(
+            2,
+            false,
+            false,
+            Family::V4,
+            false,
+            Arc::new(Messages::default()),
+        );
         let err = r.resolve("invalid.invalid").expect_err("must not resolve");
         let DnsError::NotFound(msg) = &err else {
             panic!("NXDOMAIN is the silent-gated class: got {err:?}");
@@ -1193,7 +1329,14 @@ mod tests {
 
     #[test]
     fn v6_never_fails_the_run() {
-        let mut r = Resolver::new(2, false, false, Family::V6, false);
+        let mut r = Resolver::new(
+            2,
+            false,
+            false,
+            Family::V6,
+            false,
+            Arc::new(Messages::default()),
+        );
         let err = r.resolve("invalid.invalid").expect_err("must not resolve");
         let DnsError::NotFound(msg) = &err else {
             panic!("v6 has one failure class: got {err:?}");
@@ -1213,7 +1356,14 @@ mod tests {
         // huge --dns-threads value therefore reserves hundreds of GiB
         // of worker stacks and OOMs the process. The pool must stop
         // at DNS_POOL_HARD_MAX so the run stays bounded.
-        let mut r = Resolver::new(1_000_000, false, false, Family::V4, false);
+        let mut r = Resolver::new(
+            1_000_000,
+            false,
+            false,
+            Family::V4,
+            false,
+            Arc::new(Messages::default()),
+        );
         for _ in 0..DNS_POOL_HARD_MAX * 4 {
             r.request("localhost").expect("queue localhost");
         }
@@ -1243,8 +1393,22 @@ mod tests {
 
     #[test]
     fn silent_does_not_change_payloads() {
-        let mut loud = Resolver::new(2, false, false, Family::V4, false);
-        let mut quiet = Resolver::new(2, true, false, Family::V4, false);
+        let mut loud = Resolver::new(
+            2,
+            false,
+            false,
+            Family::V4,
+            false,
+            Arc::new(Messages::default()),
+        );
+        let mut quiet = Resolver::new(
+            2,
+            true,
+            false,
+            Family::V4,
+            false,
+            Arc::new(Messages::default()),
+        );
         assert_eq!(
             loud.resolve("invalid.invalid").unwrap_err(),
             quiet.resolve("invalid.invalid").unwrap_err(),
@@ -1254,7 +1418,14 @@ mod tests {
 
     #[test]
     fn pool_grows_and_serves_concurrent_hosts() {
-        let mut r = Resolver::new(4, true, false, Family::V4, false);
+        let mut r = Resolver::new(
+            4,
+            true,
+            false,
+            Family::V4,
+            false,
+            Arc::new(Messages::default()),
+        );
         for _ in 0..6 {
             let addrs = r.resolve("localhost").expect("localhost must resolve");
             assert!(addrs.contains(&0x7f00_0001));

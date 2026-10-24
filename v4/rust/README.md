@@ -1,5 +1,10 @@
 # iprange v4 Rust SDK
 
+The `iprange-text` crate provides shared C-compatible text classification,
+numeric range parsing and DNS resolution independently of the database SDK.
+The legacy CLI consumes it and retains file loading, diagnostics output and
+exit policy. Library callers supply a thread-safe DNS `DiagnosticSink`.
+
 This workspace contains the Rust implementation of the exact unsigned Phase-1
 v4 database and its Rust-provided C ABI. It remains unreleased, but its proven
 result has been accepted as the reference for the authorized pure-Go port under
@@ -13,6 +18,8 @@ Phase-2 work.
 
 - `iprange-livedb` is the native Rust SDK and the one format implementation.
 - `iprange-capi` is a thin C boundary over that Rust engine.
+- `iprange-text` provides shared legacy text grammar and DNS, without SDK dependencies.
+- `iprange-cli` combines legacy commands using `iprange-text` with the SDK JSON-RPC API.
 - [`../conformance/`](../conformance/) contains the current Rust-produced
   semantic corpus.
 - [`binary-format-v4.md`](../../.agents/sow/specs/binary-format-v4.md) defines

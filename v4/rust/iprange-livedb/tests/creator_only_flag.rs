@@ -13,8 +13,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
 use iprange_livedb::{
-    create_live, AddressFamily, CancellationToken, CreationState, LiveReader, StructureKind,
-    ValueKind, ValueTag,
+    create_live, AddressFamily, CancellationToken, CreationState, Error, LiveReader, LiveWriter,
+    StructureKind, TransactionBudget, ValueKind, ValueTag,
 };
 
 #[cfg(unix)]
@@ -103,6 +103,20 @@ fn create(main: &PathBuf, creator_only: bool) {
     assert_eq!(result.state, CreationState::Created);
 }
 
+#[cfg(unix)]
+fn open_writer(main: &PathBuf) -> Result<LiveWriter, Error> {
+    LiveWriter::open(
+        main,
+        TransactionBudget {
+            max_heap_bytes: 2 * 1024 * 1024,
+            max_private_pages: 20_000,
+            max_file_growth_pages: 20_000,
+            max_open_files: 2,
+        },
+        &CancellationToken::new(),
+    )
+}
+
 #[test]
 #[cfg(unix)]
 fn protected_create_is_checked_after_close() {
@@ -111,13 +125,24 @@ fn protected_create_is_checked_after_close() {
     create(&main, true);
     assert_eq!(fs::metadata(&main).unwrap().permissions().mode() & 0o777, 0o600);
     LiveReader::open(&main, &CancellationToken::new()).unwrap();
+    open_writer(&main).unwrap().close().unwrap();
 
     let mut permissions = fs::metadata(&main).unwrap().permissions();
     permissions.set_mode(0o644);
     fs::set_permissions(&main, permissions).unwrap();
-    assert!(LiveReader::open(&main, &CancellationToken::new()).is_err());
+    assert!(matches!(
+        LiveReader::open(&main, &CancellationToken::new()),
+        Err(Error::WrongMode("live file ownership changed"))
+    ));
+    assert!(matches!(
+        open_writer(&main),
+        Err(Error::WrongMode("live file ownership changed"))
+    ));
+    fs::set_permissions(&main, fs::Permissions::from_mode(0o600)).unwrap();
+    LiveReader::open(&main, &CancellationToken::new()).unwrap();
+    open_writer(&main).unwrap().close().unwrap();
     let _ = fs::remove_file(&main);
-    let _ = fs::remove_file(main.with_extension("v4.readers"));
+    let _ = fs::remove_file(iprange_livedb::sidecar_path(&main).unwrap());
 }
 
 #[test]
@@ -147,6 +172,10 @@ fn unprotected_umask_0600_is_not_checked_after_close() {
     );
     LiveReader::open(&main, &CancellationToken::new())
         .expect("umask 0600 must not make an unprotected file fail open");
+    open_writer(&main)
+        .expect("an unprotected writer must accept the umask permissions")
+        .close()
+        .unwrap();
     let _ = fs::remove_file(&main);
     let _ = fs::remove_file(&sidecar);
 }

@@ -15,15 +15,12 @@
 pub(crate) mod argv;
 mod binary;
 mod diag;
-pub mod dns;
-mod family;
-mod ipv4;
-mod ipv6;
+pub use iprange_text::dns;
+use iprange_text::{family, range};
 mod ops;
 mod options;
 mod parse;
 mod print;
-mod range;
 #[cfg(test)]
 mod tests;
 mod usage;

@@ -260,9 +260,10 @@ run scan 'A public SDK workflow owns physical database operations:' \
 run scan 'A structured-value adapter bypasses the common physical manager:' \
     "$structured_adapter_physical_pattern" \
     "${structured_adapters[@]}" || status=1
-run scan 'The legacy CLI module imports the v4 database engine:' \
+run scan 'Legacy text parsing imports the v4 database engine:' \
     'iprange_livedb' \
-    "$script_dir/iprange-cli/src/legacy" || status=1
+    "$script_dir/iprange-cli/src/legacy" \
+    "$script_dir/iprange-text/src" || status=1
 run scan 'The common structure manager contains NetworkEnrichmentV1 fields:' \
     "$structured_manager_field_pattern" \
     "${structured_manager[@]}" || status=1

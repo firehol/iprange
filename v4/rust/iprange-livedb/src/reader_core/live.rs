@@ -65,9 +65,7 @@ impl LiveReaderCore {
         )?;
         let sidecar = Sidecar::open(&main_path, initial.meta.database_id)?;
         if sidecar.requires_creator_only() {
-            let proof = crate::database_file::open_read_only(&main_path)?;
-            crate::publication::security::creator_only_commitment(&proof)
-                .map_err(crate::live_namespace::access_policy_error)?;
+            crate::live_namespace::require_creator_only(&main_path)?;
         }
         sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
         let registration = register(

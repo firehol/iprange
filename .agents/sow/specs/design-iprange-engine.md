@@ -555,3 +555,12 @@ symmetrically; the exact ABI surface is specified in `c-abi-v4.md`.
 - Automatic open-mode detection or direct live-file rename/relink in Phase 1.
 - Snapshot signing, verification, key handling, or authenticated public
   publication during Phase 1; pending SOW-0017 owns that later work.
+
+### Shared text grammar
+
+The Rust workspace `iprange-text` library owns C-compatible text record
+splitting, classification, numeric parsing, range/family primitives and DNS.
+It does not depend on the database SDK. The CLI and ingester share this
+grammar while retaining their own input loading and error policies. DNS
+diagnostics use a caller-supplied sink; classification warnings retain their
+legacy text.

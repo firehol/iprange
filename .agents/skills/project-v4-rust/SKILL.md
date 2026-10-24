@@ -33,7 +33,11 @@ nice ./v4/rust/check-source-graph.sh
 
 The gate uses fresh Cargo dependency files for Linux, Windows, macOS, and
 FreeBSD, denies compiler warnings and dead-code suppression, and compares the
-normalized union with the repository source inventory. Never treat a file's
+normalized union with the repository source inventory. Keep its private
+`TMPDIR` outside `v4/rust/`: generated build outputs inside the workspace are
+otherwise mistaken for repository sources. For native workspace tests, use a
+short private `TMPDIR`; non-regular-file fixtures bind AF_UNIX sockets whose
+full paths must fit the platform socket-path limit. Never treat a file's
 presence, a test name, or an old SOW claim as proof that production compiles or
 calls it. Never delete a file without user approval and a preservation commit.
 

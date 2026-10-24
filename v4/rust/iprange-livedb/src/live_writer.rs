@@ -123,9 +123,7 @@ impl LiveWriter {
         let main = open_main(path.as_ref(), budget, cancellation)?;
         let sidecar = Sidecar::open(&main.path, main.core.base_info().database_id)?;
         if sidecar.requires_creator_only() {
-            let proof = crate::database_file::open_read_only(&main.path)?;
-            crate::publication::security::creator_only_commitment(&proof)
-                .map_err(crate::live_namespace::access_policy_error)?;
+            crate::live_namespace::require_creator_only(&main.path)?;
         }
         sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
         let mut core = main.core;

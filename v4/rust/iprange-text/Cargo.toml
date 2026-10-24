@@ -1,0 +1,11 @@
+[package]
+name = "iprange-text"
+version = "0.0.0"
+description = "C-compatible IP text grammar and DNS resolution"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.186"

@@ -2,7 +2,7 @@
 //! surface as one authoritative interface (the C code duplicated the
 //! whole pipeline per family; the Rust port keeps one generic core).
 
-use crate::legacy::range::{IpNum, Range};
+use crate::range::{IpNum, Range};
 
 /// The address family of one legacy run. `-4` and the default are
 /// identical; `-6` selects the IPv6 semantics (mapped-IPv4 input
@@ -16,7 +16,7 @@ pub enum Family {
 
 /// Family-specific parsing and formatting hooks used by the generic
 /// load/print pipeline. Implemented for `u32` (IPv4) and `u128`
-/// (IPv6) in [`super::ipv4`] and [`super::ipv6`].
+/// (IPv6) by the library's numeric parsers.
 pub trait FamilyImpl: IpNum + 'static {
     /// The family this implementation serves.
     const FAMILY: Family;
@@ -30,6 +30,9 @@ pub trait FamilyImpl: IpNum + 'static {
     /// Parse `ADDR/PREFIX` and return the address range after the
     /// `cidr_use_network` policy (fix-network default, or
     /// dont-fix-network raw host start with prefix broadcast).
+    /// Caller-supplied `prefix` and `default_prefix` must not exceed the
+    /// family width (32 or 128); invalid values may panic. Prefixes in
+    /// `token` itself are validated by the parser.
     fn parse_cidr(
         token: &str,
         prefix: u32,
@@ -56,9 +59,9 @@ pub trait FamilyImpl: IpNum + 'static {
 
     /// The family default prefix for bare addresses (v4:
     /// `--default-prefix`; v6: always 128).
-    fn default_prefix(options: &super::options::Options) -> u32 {
+    fn default_prefix(default_prefix: u32) -> u32 {
         match Self::FAMILY {
-            Family::V4 => options.default_prefix,
+            Family::V4 => default_prefix,
             Family::V6 => 128,
         }
     }

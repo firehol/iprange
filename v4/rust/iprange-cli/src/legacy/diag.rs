@@ -50,15 +50,7 @@ impl Diag {
     }
 }
 
-/// The bytes C `%s` would print for one buffer: everything up to the
-/// first NUL byte. A header line or a file name may hold NUL bytes,
-/// and `fprintf` stops at the first one.
-pub(crate) fn cstr(value: &[u8]) -> &[u8] {
-    match value.iter().position(|&b| b == 0) {
-        Some(i) => &value[..i],
-        None => value,
-    }
-}
+pub(crate) use iprange_text::cstr;
 
 /// C `s ? s : ""` in the "found '%s'" diagnostics: EOF renders as
 /// an empty quoted string.

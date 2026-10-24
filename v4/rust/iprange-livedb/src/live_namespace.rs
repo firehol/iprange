@@ -312,8 +312,15 @@ fn bind_pair(private: &Path, canonical: &Path) -> Result<(Directory, Name, Name)
     Ok((directory, private_name, canonical_name))
 }
 
-pub(crate) fn access_policy_error(error: crate::publication::namespace::NamespaceError) -> Error {
-    namespace_error(error)
+pub(crate) fn require_creator_only(path: &Path) -> Result<()> {
+    let proof = crate::database_file::open_read_only(path)?;
+    require_creator_only_file(&proof)
+}
+
+pub(crate) fn require_creator_only_file(file: &File) -> Result<()> {
+    security::creator_only_commitment(file)
+        .map(|_| ())
+        .map_err(namespace_error)
 }
 
 pub(crate) fn namespace_error(error: NamespaceError) -> Error {
