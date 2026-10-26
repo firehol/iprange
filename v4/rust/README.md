@@ -14,6 +14,9 @@ Only the current v4 contract is supported. There is no v3 compatibility,
 importer, exporter, or alternate v4 layout. Snapshot signing is separate
 Phase-2 work.
 
+The public `iprange_livedb::PAGE_SIZE` constant exposes the frozen 4096-byte
+v4 page size for callers calculating resource budgets.
+
 ## Components
 
 - `iprange-livedb` is the native Rust SDK and the one format implementation.

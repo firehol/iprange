@@ -95,6 +95,7 @@ pub use commit_resolution::{
     resolve_commit, CommitResolution, CommitResolutionMode, CommitResolutionResult,
     LocalFileRelation,
 };
+pub use contract::PAGE_SIZE;
 pub use contract::{
     AddressFamily, DirectSemantic, MembershipOperation, StructureKind, ValueKind, ValueTag,
     MAX_METADATA_UNCOMPRESSED,
