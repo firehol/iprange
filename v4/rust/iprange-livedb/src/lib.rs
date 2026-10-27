@@ -29,11 +29,9 @@ mod draft_store;
 pub mod error;
 pub mod file_identity;
 pub use file_identity::identity;
-pub use path::sidecar_path;
 pub use live_sidecar::source_creator_only;
-pub use publication::security::{
-    output_protection_holds, secure_output_file,
-};
+pub use path::sidecar_path;
+pub use publication::security::{output_protection_holds, secure_output_file};
 mod fault;
 mod feed;
 mod feed_catalog;
@@ -107,7 +105,8 @@ pub use feed_catalog::FeedCursor;
 pub use feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
 pub use history::{HistoryProjectionReport, HistoryWindow, HistoryWindowReport};
 pub use immutable_feed::{
-    create_immutable_feed_v4, create_immutable_feed_v6, ImmutableFeedBudget, ImmutableFeedOutcome,
+    create_immutable_feed_v4, create_immutable_feed_v4_filtered, create_immutable_feed_v6,
+    create_immutable_feed_v6_filtered, ImmutableFeedBudget, ImmutableFeedOutcome,
     ImmutableFeedPreparationFailure, ImmutableFeedReport, ImmutableFeedResult,
 };
 pub use key::{Ipv4Key, Ipv6Key};
@@ -169,8 +168,8 @@ mod live_crash_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod mmap_runtime_tests;
 #[cfg(test)]
+mod necessary_work_tests;
+#[cfg(test)]
 mod test_alloc;
 #[cfg(test)]
 mod test_support_tests;
-#[cfg(test)]
-mod necessary_work_tests;

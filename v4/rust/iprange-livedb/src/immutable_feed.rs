@@ -79,7 +79,7 @@ pub fn create_immutable_feed_v4<S>(
 where
     S: RangeSource<AddressRange<Ipv4Key>>,
 {
-    create::<Ipv4Key, S>(
+    create::<Ipv4Key, S, _>(
         destination.as_ref(),
         value_tag,
         feed_name,
@@ -88,6 +88,7 @@ where
         source,
         budget,
         cancellation,
+        &mut |_| Ok(true),
     )
 }
 
@@ -106,7 +107,7 @@ pub fn create_immutable_feed_v6<S>(
 where
     S: RangeSource<AddressRange<Ipv6Key>>,
 {
-    create::<Ipv6Key, S>(
+    create::<Ipv6Key, S, _>(
         destination.as_ref(),
         value_tag,
         feed_name,
@@ -115,11 +116,80 @@ where
         source,
         budget,
         cancellation,
+        &mut |_| Ok(true),
+    )
+}
+
+/// Normalize IPv4, then retain only ranges accepted by `keep` before publication.
+///
+/// Called once per maximal normalized range, in ascending order. A callback
+/// error aborts preparation; caller side effects are not rolled back. The report
+/// counts retained intervals and addresses, with the original input record count.
+#[allow(clippy::too_many_arguments)]
+pub fn create_immutable_feed_v4_filtered<S, F>(
+    destination: impl AsRef<Path>,
+    value_tag: ValueTag,
+    feed_name: FeedName,
+    metadata_json: Option<&[u8]>,
+    publication_policy: PublicationPolicy,
+    source: &mut S,
+    budget: &ImmutableFeedBudget,
+    cancellation: &CancellationToken,
+    keep: &mut F,
+) -> ImmutableFeedOutcome
+where
+    S: RangeSource<AddressRange<Ipv4Key>>,
+    F: FnMut(&AddressRange<Ipv4Key>) -> crate::Result<bool>,
+{
+    create::<Ipv4Key, S, F>(
+        destination.as_ref(),
+        value_tag,
+        feed_name,
+        metadata_json,
+        publication_policy,
+        source,
+        budget,
+        cancellation,
+        keep,
+    )
+}
+
+/// Normalize IPv6, then retain only ranges accepted by `keep` before publication.
+///
+/// Called once per maximal normalized range, in ascending order. A callback
+/// error aborts preparation; caller side effects are not rolled back. The report
+/// counts retained intervals and addresses, with the original input record count.
+#[allow(clippy::too_many_arguments)]
+pub fn create_immutable_feed_v6_filtered<S, F>(
+    destination: impl AsRef<Path>,
+    value_tag: ValueTag,
+    feed_name: FeedName,
+    metadata_json: Option<&[u8]>,
+    publication_policy: PublicationPolicy,
+    source: &mut S,
+    budget: &ImmutableFeedBudget,
+    cancellation: &CancellationToken,
+    keep: &mut F,
+) -> ImmutableFeedOutcome
+where
+    S: RangeSource<AddressRange<Ipv6Key>>,
+    F: FnMut(&AddressRange<Ipv6Key>) -> crate::Result<bool>,
+{
+    create::<Ipv6Key, S, F>(
+        destination.as_ref(),
+        value_tag,
+        feed_name,
+        metadata_json,
+        publication_policy,
+        source,
+        budget,
+        cancellation,
+        keep,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn create<K, S>(
+fn create<K, S, F>(
     destination: &Path,
     value_tag: ValueTag,
     feed_name: FeedName,
@@ -128,10 +198,12 @@ fn create<K, S>(
     source: &mut S,
     budget: &ImmutableFeedBudget,
     cancellation: &CancellationToken,
+    keep: &mut F,
 ) -> ImmutableFeedOutcome
 where
     K: unordered::FeedKey,
     S: RangeSource<AddressRange<K>>,
+    F: FnMut(&AddressRange<K>) -> crate::Result<bool>,
 {
     let prepared_budget = unordered::prepare_budget(unordered::BudgetInput {
         max_heap_bytes: budget.max_heap_bytes,
@@ -150,8 +222,8 @@ where
         // process switch like every other no-source artifact.
         crate::creator_only_requested(),
     )
-        .map_err(failure_from_early)?;
-    let built = match unordered::build::<K, S>(
+    .map_err(failure_from_early)?;
+    let built = match unordered::build::<K, S, F>(
         file,
         value_tag,
         feed_name,
@@ -159,6 +231,7 @@ where
         source,
         prepared_budget,
         cancellation,
+        keep,
     ) {
         Ok(built) => built,
         Err(failure) => return Err(discard_attempt(attempt, failure.file, failure.cause)),

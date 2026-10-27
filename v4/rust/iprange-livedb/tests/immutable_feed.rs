@@ -339,18 +339,11 @@ fn feed_publish_follows_the_process_switch() {
         &cancellation,
     )
     .unwrap();
-    assert_eq!(
-        result.publication.publication,
-        PublicationStatus::Published
-    );
+    assert_eq!(result.publication.publication, PublicationStatus::Published);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        let mode = fs::metadata(&on_path)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
+        let mode = fs::metadata(&on_path).unwrap().permissions().mode() & 0o777;
         assert_eq!(
             mode, 0o600,
             "switch-on feed mode {mode:o}, want 0600 under umask 0"
@@ -369,25 +362,264 @@ fn feed_publish_follows_the_process_switch() {
         &cancellation,
     )
     .unwrap();
-    assert_eq!(
-        result.publication.publication,
-        PublicationStatus::Published
-    );
+    assert_eq!(result.publication.publication, PublicationStatus::Published);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        let mode = fs::metadata(&off_path)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
+        let mode = fs::metadata(&off_path).unwrap().permissions().mode() & 0o777;
         assert_ne!(mode, 0o600, "switch-off feed forced mode 0600");
     }
 
     #[cfg(unix)]
-    unsafe { feed_test_umask(mask) };
+    unsafe {
+        feed_test_umask(mask)
+    };
     match previous {
         Some(value) => std::env::set_var("IPRANGE_CREATOR_ONLY", value),
         None => std::env::remove_var("IPRANGE_CREATOR_ONLY"),
     }
+}
+
+#[test]
+fn filtered_ipv4_observes_normalized_ranges_and_exact_retained_counts() {
+    use iprange_livedb::create_immutable_feed_v4_filtered;
+    let mut files = Files::new();
+    let path = files.path("filtered");
+    let ranges = [(9, 10), (0, 0), (5, 8), (5, 6)].map(|(a, b)| AddressRange {
+        from: Ipv4Key(a),
+        to: Ipv4Key(b),
+    });
+    let mut seen = Vec::new();
+    let result = create_immutable_feed_v4_filtered(
+        &path,
+        ValueTag::new(b"feeds").unwrap(),
+        feed(),
+        None,
+        PublicationPolicy::FailIfExists,
+        &mut SliceSource::new(&ranges),
+        &budget(),
+        &CancellationToken::new(),
+        &mut |r| {
+            seen.push((r.from.0, r.to.0));
+            Ok(r.from.0 != 0)
+        },
+    )
+    .unwrap();
+    assert_eq!(seen, [(0, 0), (5, 10)]);
+    assert_eq!(result.report.input_record_count, 4);
+    assert_eq!(result.report.normalized_interval_count, 1);
+    assert_eq!(result.report.addresses, Cardinality129::from_u64(6));
+    assert_valid_filtered(&path);
+    let reader = ImmutableReader::open(&path).unwrap();
+    let mut cursor = reader
+        .feed_range_cursor_v4("source", RangeDirection::Forward)
+        .unwrap();
+    assert_eq!(
+        cursor.next_range().unwrap(),
+        Some(AddressRange {
+            from: Ipv4Key(5),
+            to: Ipv4Key(10)
+        })
+    );
+    assert_eq!(cursor.next_range().unwrap(), None);
+}
+
+#[test]
+fn filtered_union_can_drop_full_space_without_dropping_zero_in_a_subnet() {
+    use iprange_livedb::create_immutable_feed_v4_filtered;
+    for (label, ranges, expected) in [
+        ("full", vec![(0, 0x7fffffff), (0x80000000, u32::MAX)], 0),
+        ("zero", vec![(0, 0)], 0),
+        ("subnet", vec![(0, 255)], 256),
+    ] {
+        let mut files = Files::new();
+        let path = files.path(label);
+        let ranges = ranges
+            .into_iter()
+            .map(|(a, b)| AddressRange {
+                from: Ipv4Key(a),
+                to: Ipv4Key(b),
+            })
+            .collect::<Vec<_>>();
+        let mut seen = 0;
+        let result = create_immutable_feed_v4_filtered(
+            &path,
+            ValueTag::new(b"feeds").unwrap(),
+            feed(),
+            None,
+            PublicationPolicy::FailIfExists,
+            &mut SliceSource::new(&ranges),
+            &budget(),
+            &CancellationToken::new(),
+            &mut |r| {
+                seen += 1;
+                Ok(!(r.from.0 == 0 && (r.to.0 == 0 || r.to.0 == u32::MAX)))
+            },
+        )
+        .unwrap();
+        assert_eq!(seen, 1);
+        assert_eq!(result.report.addresses, Cardinality129::from_u64(expected));
+        assert_valid_filtered(&path);
+        let reader = ImmutableReader::open(&path).unwrap();
+        assert_eq!(reader.info().range_record_count, u64::from(expected != 0));
+        assert!(reader.lookup_feed("source").unwrap().is_some());
+    }
+}
+
+#[test]
+fn filtered_callback_error_and_cancellation_preserve_destination() {
+    use iprange_livedb::create_immutable_feed_v4_filtered;
+    let mut files = Files::new();
+    let path = files.path("filter-error");
+    let ranges = [AddressRange {
+        from: Ipv4Key(1),
+        to: Ipv4Key(2),
+    }];
+    create_immutable_feed_v4(
+        &path,
+        ValueTag::new(b"feeds").unwrap(),
+        feed(),
+        None,
+        PublicationPolicy::FailIfExists,
+        &mut SliceSource::new(&ranges),
+        &budget(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let original = fs::read(&path).unwrap();
+    for cancel in [false, true] {
+        let token = CancellationToken::new();
+        let result = create_immutable_feed_v4_filtered(
+            &path,
+            ValueTag::new(b"feeds").unwrap(),
+            feed(),
+            None,
+            PublicationPolicy::ReplaceExisting,
+            &mut SliceSource::new(&ranges),
+            &budget(),
+            &token,
+            &mut |_| {
+                if cancel {
+                    token.cancel();
+                    Ok(false)
+                } else {
+                    Err(Error::InvalidArgument("test filter error"))
+                }
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(!sidecar(&path).exists());
+    }
+}
+
+#[test]
+fn filtered_ipv6_and_empty_input_keep_the_generic_contract() {
+    use iprange_livedb::create_immutable_feed_v6_filtered;
+    let mut files = Files::new();
+    for keep in [false, true] {
+        let path = files.path("filtered-v6");
+        let mut calls = 0;
+        let ranges = [AddressRange {
+            from: Ipv6Key::MIN,
+            to: Ipv6Key::MAX,
+        }];
+        let result = create_immutable_feed_v6_filtered(
+            &path,
+            ValueTag::new(b"feeds").unwrap(),
+            feed(),
+            None,
+            PublicationPolicy::FailIfExists,
+            &mut SliceSource::new(&ranges),
+            &budget(),
+            &CancellationToken::new(),
+            &mut |_| {
+                calls += 1;
+                Ok(keep)
+            },
+        )
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(
+            result.report.addresses,
+            if keep {
+                Cardinality129::FULL_IPV6_SPACE
+            } else {
+                Cardinality129::ZERO
+            }
+        );
+        assert_eq!(result.report.normalized_interval_count, u64::from(keep));
+        assert_valid_filtered(&path);
+        let reader = ImmutableReader::open(&path).unwrap();
+        assert_eq!(reader.info().range_record_count, u64::from(keep));
+    }
+    let empty: [AddressRange<Ipv6Key>; 0] = [];
+    let path = files.path("empty-filter");
+    let result = create_immutable_feed_v6_filtered(
+        &path,
+        ValueTag::new(b"feeds").unwrap(),
+        feed(),
+        None,
+        PublicationPolicy::FailIfExists,
+        &mut SliceSource::new(&empty),
+        &budget(),
+        &CancellationToken::new(),
+        &mut |_| panic!("empty input must not call filter"),
+    )
+    .unwrap();
+    assert_eq!(result.report.addresses, Cardinality129::ZERO);
+}
+
+fn assert_valid_filtered(path: &Path) {
+    use iprange_livedb::validation::{
+        validate, ValidationBudget, ValidationMode, ValidationSinkControl,
+    };
+    let result = validate(
+        path,
+        ValidationMode::ImmutableCurrent,
+        &ValidationBudget::heap_only(1024 * 1024, 4),
+        &CancellationToken::new(),
+        &mut |_: &iprange_livedb::validation::ValidationFinding| {
+            Ok(ValidationSinkControl::Continue)
+        },
+    )
+    .unwrap();
+    assert!(result.valid);
+}
+
+#[test]
+fn all_filtered_scan_observes_cancellation_without_retained_output() {
+    use iprange_livedb::create_immutable_feed_v4_filtered;
+    let mut files = Files::new();
+    let path = files.path("cancel-filtered");
+    let ranges = (0..5000)
+        .map(|i| AddressRange {
+            from: Ipv4Key(i * 2),
+            to: Ipv4Key(i * 2),
+        })
+        .collect::<Vec<_>>();
+    let token = CancellationToken::new();
+    let mut seen = 0;
+    let result = create_immutable_feed_v4_filtered(
+        &path,
+        ValueTag::new(b"feeds").unwrap(),
+        feed(),
+        None,
+        PublicationPolicy::FailIfExists,
+        &mut SliceSource::new(&ranges),
+        &budget(),
+        &token,
+        &mut |_| {
+            seen += 1;
+            token.cancel();
+            Ok(false)
+        },
+    );
+    assert!(result.is_err());
+    assert!(
+        seen > 0 && seen <= 4096,
+        "visited {seen} ranges after cancellation"
+    );
+    assert!(!path.exists());
+    assert!(!sidecar(&path).exists());
 }

@@ -564,3 +564,14 @@ It does not depend on the database SDK. The CLI and ingester share this
 grammar while retaining their own input loading and error policies. DNS
 diagnostics use a caller-supplied sink; classification warnings retain their
 legacy text.
+
+### Optional normalized immutable feed filter
+
+Rust create_immutable_feed_v4_filtered and v6_filtered accept a fallible
+logical range predicate after normalization and before publication. Each
+maximal normalized range is visited once in ascending order. False omits the
+whole range; errors abort private preparation and preserve any existing
+destination. Callback side effects belong to the caller and are not rolled
+back. Result interval/address counts describe retained output; input record
+count remains the raw range input count. Existing unfiltered APIs retain all
+ranges. This adds no wire format or C ABI behavior.

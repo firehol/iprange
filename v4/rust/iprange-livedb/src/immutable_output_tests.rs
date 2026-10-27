@@ -527,7 +527,7 @@ fn measured_unordered(
     let mut source = SliceSource::new(ranges);
     let ((built, work), allocations) = measure_thread_allocations(|| {
         crate::work::measure(|| {
-            unordered::build::<Ipv4Key, _>(
+            unordered::build::<Ipv4Key, _, _>(
                 file,
                 ValueTag::new(b"feed").unwrap(),
                 FeedName::new("feed").unwrap(),
@@ -535,6 +535,7 @@ fn measured_unordered(
                 &mut source,
                 budget,
                 &CancellationToken::new(),
+                &mut |_| Ok(true),
             )
         })
     });

@@ -428,3 +428,9 @@ acceptance and consumer integration remain separate gates.
 
 Cross-compilation is compilation evidence only. It is not native platform
 proof.
+
+Immutable feed constructors also have `_filtered` variants. Their fallible
+callback receives maximal normalized ranges in ascending order before any
+publication; it returns whether to retain each range. Callback errors preserve
+the old destination, but external callback effects are not rolled back.
+Reports describe retained intervals/addresses and original input record count.

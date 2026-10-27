@@ -81,7 +81,7 @@ pub(crate) fn prepare_budget(input: BudgetInput) -> Result<PreparedBudget> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn build<K, S>(
+pub(crate) fn build<K, S, F>(
     file: File,
     value_tag: ValueTag,
     feed_name: FeedName,
@@ -89,10 +89,12 @@ pub(crate) fn build<K, S>(
     source: &mut S,
     budget: PreparedBudget,
     cancellation: &CancellationToken,
+    keep: &mut F,
 ) -> std::result::Result<Built, BuildFailure>
 where
     K: FeedKey,
     S: RangeSource<AddressRange<K>>,
+    F: FnMut(&AddressRange<K>) -> Result<bool>,
 {
     let spec = match output_spec(K::FAMILY, value_tag) {
         Ok(spec) => spec,
@@ -146,7 +148,7 @@ where
             });
         }
     };
-    let result = build_mapped::<K, S>(
+    let result = build_mapped::<K, S, F>(
         &mut workspace,
         &mut builder,
         spec,
@@ -155,6 +157,7 @@ where
         source,
         heap.remaining(),
         cancellation,
+        keep,
     );
     drop(workspace);
     let report = match result {
@@ -179,7 +182,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_mapped<K, S>(
+fn build_mapped<K, S, F>(
     workspace: &mut Workspace,
     builder: &mut Builder,
     spec: OutputSpec,
@@ -188,13 +191,15 @@ fn build_mapped<K, S>(
     source: &mut S,
     max_heap_bytes: u64,
     cancellation: &CancellationToken,
+    keep: &mut F,
 ) -> Result<OutputStats>
 where
     K: FeedKey,
     S: RangeSource<AddressRange<K>>,
+    F: FnMut(&AddressRange<K>) -> Result<bool>,
 {
     let normalized = normalize::<K, S>(workspace, source, max_heap_bytes, cancellation)?;
-    write_normalized::<K>(
+    write_normalized::<K, F>(
         workspace,
         builder,
         spec,
@@ -203,6 +208,7 @@ where
         max_heap_bytes,
         normalized,
         cancellation,
+        keep,
     )
 }
 
@@ -242,7 +248,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn write_normalized<K: FeedKey>(
+fn write_normalized<K: FeedKey, F>(
     workspace: &mut Workspace,
     builder: &mut Builder,
     spec: OutputSpec,
@@ -251,11 +257,13 @@ fn write_normalized<K: FeedKey>(
     max_heap_bytes: u64,
     normalized: Normalized,
     cancellation: &CancellationToken,
-) -> Result<OutputStats> {
+    keep: &mut F,
+) -> Result<OutputStats>
+where
+    F: FnMut(&AddressRange<K>) -> Result<bool>,
+{
     builder.push_feed(feed_name, 0)?;
-    let membership = (normalized.record_count != 0)
-        .then(|| builder.intern_membership_value(&OneFeed))
-        .transpose()?;
+    let mut membership = None;
     let mut meta = crate::database_file::empty_meta(crate::database_file::EmptySpec {
         address_family: K::FAMILY,
         value_kind: ValueKind::Membership,
@@ -272,18 +280,32 @@ fn write_normalized<K: FeedKey>(
     let mut cursor = Cursor::<K>::new(workspace, &meta, false)?;
     let mut addresses = Cardinality129::ZERO;
     let mut output_ranges = 0u64;
+    let mut visited = 0u64;
     while let Some(range) = cursor.next(workspace)? {
-        if output_ranges & 4095 == 4095 {
+        if visited & 4095 == 4095 {
             cancellation.check()?;
         }
+        visited += 1;
         if range.value != 1 {
             return Err(Error::Corrupt(
                 "immutable feed workspace contains a non-coverage value",
             ));
         }
-        let membership = membership
-            .ok_or_else(|| Error::Corrupt("immutable feed coverage has no membership"))?;
-        K::push(builder, range.from, range.to, membership)?;
+        if !keep(&AddressRange {
+            from: range.from,
+            to: range.to,
+        })? {
+            continue;
+        }
+        let value = match membership {
+            Some(value) => value,
+            None => {
+                let value = builder.intern_membership_value(&OneFeed)?;
+                membership = Some(value);
+                value
+            }
+        };
+        K::push(builder, range.from, range.to, value)?;
         addresses = addresses
             .checked_add(range.from.inclusive_cardinality(range.to)?)
             .map_err(|_| Error::ArithmeticOverflow("immutable feed addresses"))?;
@@ -295,7 +317,7 @@ fn write_normalized<K: FeedKey>(
     }
     Ok(OutputStats {
         input_record_count: normalized.input_record_count,
-        normalized_interval_count: normalized.record_count,
+        normalized_interval_count: output_ranges,
         addresses,
     })
 }
