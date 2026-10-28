@@ -96,3 +96,23 @@ membership-provider-join,1000000,421,98888393,297776786
 algebra-count,1000000,421,131326217,362652434
 algebra-publish-preserve,1000000,421,252072573,604145146
 update-ipsets-workflow,1000000,7,1216998574,2933997148
+
+# Provider construction additions: 2026-10-28, generic optimized x86_64 Linux,
+# Rust 1.97.1, AMD EPYC 7453, bounded to 2 CPUs. One warmup, five samples.
+# Earlier rows retain their original host calibration.
+provider-v4-live-snapshot-ordered,100000,0,266262771,632525542
+provider-v4-immutable-ordered,100000,0,97058609,294117218
+provider-v4-live-snapshot-unordered,100000,0,229563998,559127996
+provider-v4-immutable-unordered,100000,0,164992381,429984762
+country-v4-live-snapshot-ordered,100000,8,692970068,1485940136
+country-v4-immutable-ordered,100000,8,323733711,747467422
+country-v4-live-snapshot-overlap,100000,8,1232184005,2564368010
+country-v4-immutable-overlap,100000,8,919958679,1939917358
+provider-v6-live-snapshot-ordered,100000,0,306112056,712224112
+provider-v6-immutable-ordered,100000,0,118067484,336134968
+provider-v6-live-snapshot-unordered,100000,0,289714920,679429840
+provider-v6-immutable-unordered,100000,0,243438715,586877430
+country-v6-live-snapshot-ordered,100000,8,742633433,1585266866
+country-v6-immutable-ordered,100000,8,302263304,704526608
+country-v6-live-snapshot-overlap,100000,8,1343175882,2786351764
+country-v6-immutable-overlap,100000,8,980085095,2060170190

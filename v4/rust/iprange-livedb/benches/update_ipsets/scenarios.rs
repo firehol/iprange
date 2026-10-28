@@ -12,6 +12,9 @@ use crate::measure::{self, FileSize, Measurement};
 use crate::model::{snapshot_budget, TestDatabase};
 use crate::source::FeedShape;
 
+#[path = "scenarios/immutable_maps.rs"]
+mod immutable_maps;
+
 #[path = "scenarios/direct.rs"]
 mod direct;
 #[path = "scenarios/membership.rs"]
@@ -50,6 +53,56 @@ pub(crate) fn run(name: &str, size: usize, auxiliary: usize) -> Result<ScenarioR
         return Err("size must be positive".to_owned());
     }
     match name {
+        "country-v4-immutable-ordered" => {
+            immutable_maps::membership_v4("country-v4-immutable-ordered", size, false, false)
+        }
+        "country-v4-immutable-overlap" => {
+            immutable_maps::membership_v4("country-v4-immutable-overlap", size, false, true)
+        }
+        "country-v4-live-snapshot-ordered" => {
+            immutable_maps::membership_v4("country-v4-live-snapshot-ordered", size, true, false)
+        }
+        "country-v4-live-snapshot-overlap" => {
+            immutable_maps::membership_v4("country-v4-live-snapshot-overlap", size, true, true)
+        }
+        "country-v6-immutable-ordered" => {
+            immutable_maps::membership_v6("country-v6-immutable-ordered", size, false, false)
+        }
+        "country-v6-immutable-overlap" => {
+            immutable_maps::membership_v6("country-v6-immutable-overlap", size, false, true)
+        }
+        "country-v6-live-snapshot-ordered" => {
+            immutable_maps::membership_v6("country-v6-live-snapshot-ordered", size, true, false)
+        }
+        "country-v6-live-snapshot-overlap" => {
+            immutable_maps::membership_v6("country-v6-live-snapshot-overlap", size, true, true)
+        }
+
+        "provider-v4-immutable-ordered" => {
+            immutable_maps::v4_run("provider-v4-immutable-ordered", size, false, false)
+        }
+        "provider-v4-immutable-unordered" => {
+            immutable_maps::v4_run("provider-v4-immutable-unordered", size, false, true)
+        }
+        "provider-v4-live-snapshot-ordered" => {
+            immutable_maps::v4_run("provider-v4-live-snapshot-ordered", size, true, false)
+        }
+        "provider-v4-live-snapshot-unordered" => {
+            immutable_maps::v4_run("provider-v4-live-snapshot-unordered", size, true, true)
+        }
+        "provider-v6-immutable-ordered" => {
+            immutable_maps::v6_run("provider-v6-immutable-ordered", size, false, false)
+        }
+        "provider-v6-immutable-unordered" => {
+            immutable_maps::v6_run("provider-v6-immutable-unordered", size, false, true)
+        }
+        "provider-v6-live-snapshot-ordered" => {
+            immutable_maps::v6_run("provider-v6-live-snapshot-ordered", size, true, false)
+        }
+        "provider-v6-live-snapshot-unordered" => {
+            immutable_maps::v6_run("provider-v6-live-snapshot-unordered", size, true, true)
+        }
+
         "direct-replace" => direct::replace(size),
         "direct-replace-v6" => direct::replace_v6(size),
         "direct-commit" => direct::commit(size),

@@ -22,6 +22,8 @@ pub(crate) fn run() -> Result<(), String> {
         Some("scale") => run_matrix(scale_cases()),
         Some("local") => crate::report::run_repeated(scale_cases(), 1, 5, false),
         Some("ci") => crate::report::run_repeated(ci_cases(), 1, 3, true),
+        Some("providers") => crate::report::run_repeated(provider_cases(100_000, true), 1, 5, false),
+        Some("providers-ci") => crate::report::run_repeated(provider_cases(100_000, false), 1, 3, true),
         Some("sample") => run_sample(&arguments),
         Some("case") => run_case(&arguments),
         Some("header") => {
@@ -29,7 +31,7 @@ pub(crate) fn run() -> Result<(), String> {
             Ok(())
         }
         Some(other) => Err(format!(
-            "unknown mode {other:?}; expected smoke, scale, local, ci, sample, or case"
+            "unknown mode {other:?}; expected smoke, scale, local, ci, providers, providers-ci, sample, or case"
         )),
     }
 }
@@ -129,7 +131,7 @@ fn optional(value: Option<u64>) -> String {
 }
 
 fn smoke_cases() -> Vec<Case> {
-    vec![
+    let mut cases = vec![
         case("direct-replace", 1_000, 0),
         case("direct-replace", 4_000, 0),
         case("direct-replace-v6", 4_000, 0),
@@ -185,7 +187,9 @@ fn smoke_cases() -> Vec<Case> {
         case("algebra-publish-preserve", 1_000, 2),
         case("algebra-publish-flat", 1_000, 2),
         case("update-ipsets-workflow", 1_000, 7),
-    ]
+    ];
+    cases.extend(provider_cases(1_000, true));
+    cases
 }
 
 fn scale_cases() -> Vec<Case> {
@@ -287,11 +291,12 @@ fn scale_cases() -> Vec<Case> {
     cases.push(case("algebra-count", 1_000_000, 421));
     cases.push(case("algebra-publish-preserve", 1_000_000, 421));
     cases.push(case("update-ipsets-workflow", 1_000_000, 7));
+    cases.extend(provider_cases(100_000, true));
     cases
 }
 
 fn ci_cases() -> Vec<Case> {
-    vec![
+    let mut cases = vec![
         case("direct-replace", 1_000_000, 0),
         case("last-seen-refresh", 1_000_000, 0),
         case("feed-first-ascending", 1_000_000, 0),
@@ -310,7 +315,9 @@ fn ci_cases() -> Vec<Case> {
         case("live-validation", 1_000_000, 0),
         case("live-membership-validation", 1_000_000, 421),
         case("update-ipsets-workflow", 1_000_000, 7),
-    ]
+    ];
+    cases.extend(provider_cases(100_000, false));
+    cases
 }
 
 fn case(name: &str, size: usize, auxiliary: usize) -> Case {
@@ -319,4 +326,28 @@ fn case(name: &str, size: usize, auxiliary: usize) -> Case {
         size,
         auxiliary,
     }
+}
+
+fn provider_cases(size: usize, include_legacy: bool) -> Vec<Case> {
+    let mut cases = Vec::new();
+    for family in ["v4", "v6"] {
+        for (kind, shapes, auxiliary) in [
+            ("provider", ["ordered", "unordered"], 0),
+            ("country", ["ordered", "overlap"], 8),
+        ] {
+            for shape in shapes {
+                for mode in ["live-snapshot", "immutable"] {
+                    if mode == "live-snapshot" && !include_legacy {
+                        continue;
+                    }
+                    cases.push(case(
+                        &format!("{kind}-{family}-{mode}-{shape}"),
+                        size,
+                        auxiliary,
+                    ));
+                }
+            }
+        }
+    }
+    cases
 }

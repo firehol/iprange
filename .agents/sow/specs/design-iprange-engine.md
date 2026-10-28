@@ -575,3 +575,31 @@ destination. Callback side effects belong to the caller and are not rolled
 back. Result interval/address counts describe retained output; input record
 count remains the raw range input count. Existing unfiltered APIs retain all
 ranges. This adds no wire format or C ABI behavior.
+
+### Immutable valued and named membership construction
+
+Rust exposes additive direct-valued and named multi-membership immutable
+constructors for IPv4 and IPv6, tracked by SOW-0040. Public adapters accept
+logical values/names only; `immutable_output` owns private normalization and
+canonical output. No live database, live commit, sidecar, or snapshot pass is
+required. No wire-format or C/Go ABI change accompanies these Rust workflows.
+
+Input order is explicit. OrderedDisjoint validates ascending non-overlap and
+coalesces equal adjacency with one pending record and no normalization workspace.
+Unordered direct inputs resolve overlaps by callback-order last assignment;
+unordered membership inputs union logical labels. This generic contract does not
+choose a provider's prefix-precedence policy. Normalization uses mapped scratch
+in the private output inode and shared range mutation/dictionary owners.
+
+Membership callers provide the complete unique FeedName catalog, including
+active empty feeds, and a finite borrowed per-range label source. Empty sets and
+unknown names fail; duplicate labels in one set are idempotent. Internal IDs and
+bitmaps are never exposed. Mandatory input bitmap heap is reserved before optional
+reference batching. Unordered dictionary collection waits until a complete range transformation finishes;
+zero-delta operand registration ensures unused inputs are reclaimed too. An optional
+budgeted exact translation cache avoids repeated interning during final emission, after
+workspace IDs stop changing; collisions fall back to interning. Only referenced
+combinations enter compact final output. Metadata and mapping publish together
+through the existing immutable publication/cleanup protocol. Build budget/results
+alias existing immutable-feed contracts, including the three-handle minimum,
+exact Cardinality129 accounting and explicit uncertain-publication outcomes.

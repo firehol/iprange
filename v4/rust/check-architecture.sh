@@ -163,6 +163,7 @@ mapfile -t publication_maintenance < <(
 )
 sdk_adapters=(
     "$source_root/immutable_feed.rs"
+    "$source_root/immutable_map.rs"
     "$source_root/history.rs"
     "$source_root/live_writer/history_projection.rs"
     "$source_root/membership_query.rs"

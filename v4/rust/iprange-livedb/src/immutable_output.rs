@@ -19,12 +19,15 @@ use crate::page_checksum;
 use crate::page_header;
 use crate::used_bitmap::{self, Kind};
 
+pub(crate) mod construction;
 mod membership;
+pub(crate) mod named;
 mod ranges;
 mod reference_batch;
 mod setup;
 mod structured;
 pub(crate) mod unordered;
+pub(crate) mod valued;
 
 pub(crate) use membership::MembershipWords;
 
@@ -206,6 +209,10 @@ impl Builder {
             metadata_staged: false,
             failed: false,
         })
+    }
+
+    pub(crate) fn feed_index(&self, name: &FeedName) -> Result<Option<u32>> {
+        Ok(crate::feed_catalog::lookup(&self.mapping, &self.meta, name)?.map(|entry| entry.index))
     }
 
     pub(crate) fn push_feed(&mut self, name: FeedName, index: u32) -> Result<()> {

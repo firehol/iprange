@@ -61,7 +61,7 @@ pub(super) fn find<S: Store>(store: &S, root: u32, id: u32) -> Result<Option<Fou
     Ok((record.id == id).then_some(Found { location, record }))
 }
 
-pub(super) fn read_words<S: Store>(
+pub(crate) fn read_words<S: Store>(
     store: &S,
     id_root: u32,
     id: u32,

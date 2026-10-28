@@ -15,9 +15,16 @@ use crate::used_bitmap::{self, Kind};
 use codec::{
     encode_hash, HashCodec, HashKey, IdCodec, Record, Storage, MAX_WORD_COUNT, REFCOUNT_OFFSET,
 };
-use record::{encode as encode_record, find as find_record, read_record_words, read_words};
+use record::{encode as encode_record, find as find_record, read_record_words};
 
 pub(crate) use algebra::combine;
+pub(crate) use record::read_words;
+pub(crate) fn word_count<S: Store>(store: &S, root: u32, id: u32) -> Result<u32> {
+    Ok(find_record(store, root, id)?
+        .ok_or(Error::Corrupt("membership ID is missing"))?
+        .record
+        .word_count)
+}
 
 const HASH_WORDS: usize = 64;
 

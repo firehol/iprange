@@ -32,6 +32,10 @@ impl Pending {
         }
     }
 
+    pub(crate) fn into_deltas(self) -> impl Iterator<Item = Delta> {
+        self.slots.into_iter().flatten()
+    }
+
     pub(crate) fn is_empty(self) -> bool {
         self.slots.iter().all(Option::is_none)
     }

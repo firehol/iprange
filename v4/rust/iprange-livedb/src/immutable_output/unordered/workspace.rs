@@ -11,17 +11,18 @@ const FREE_MAGIC: u32 = 0x5746_5245;
 const FREE_NEXT: usize = 4;
 const FREE_TXN: usize = 8;
 
-pub(super) struct Workspace {
+pub(crate) struct Workspace {
     mapping: Mapping,
     first: u64,
     limit: u64,
     next: u64,
     free: u32,
     txn: u64,
+    membership_deltas: Option<(u32, crate::membership_delta::Pending)>,
 }
 
 impl Workspace {
-    pub(super) fn new(mapping: Mapping, first: u64, limit: u64, txn: u64) -> Result<Self> {
+    pub(crate) fn new(mapping: Mapping, first: u64, limit: u64, txn: u64) -> Result<Self> {
         if first > limit
             || limit.checked_mul(crate::contract::PAGE_SIZE as u64) != Some(mapping.len())
         {
@@ -36,11 +37,51 @@ impl Workspace {
             next: first,
             free: 0,
             txn,
+            membership_deltas: None,
         })
     }
 
-    pub(super) const fn page_count(&self) -> u64 {
+    pub(crate) const fn page_count(&self) -> u64 {
         self.next
+    }
+
+    pub(crate) fn track_memberships(&mut self) {
+        self.membership_deltas = Some((0, crate::membership_delta::Pending::new()));
+    }
+
+    pub(crate) fn track_delta(&mut self, id: u32, change: i64) -> Result<()> {
+        if let Some((mut root, mut pending)) = self.membership_deltas.take() {
+            let result =
+                crate::membership_delta::track_buffered(self, &mut root, &mut pending, id, change);
+            self.membership_deltas = Some((root, pending));
+            result?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn apply_membership_deltas(
+        &mut self,
+        state: &mut crate::membership_dictionary::State,
+        cancel: &crate::CancellationToken,
+    ) -> Result<()> {
+        if let Some((mut root, mut pending)) = self.membership_deltas.take() {
+            if root == 0 {
+                for delta in pending.into_deltas() {
+                    cancel.check()?;
+                    crate::membership_dictionary::apply_delta(self, state, delta)?;
+                }
+                self.track_memberships();
+                return Ok(());
+            }
+            crate::membership_delta::flush(self, &mut root, &mut pending)?;
+            let mut drain = crate::membership_delta::Drain::new(self, root)?;
+            while let Some(delta) = drain.next(self)? {
+                cancel.check()?;
+                crate::membership_dictionary::apply_delta(self, state, delta)?;
+            }
+            self.track_memberships();
+        }
+        Ok(())
     }
 
     fn require_allocated(&self, page: u32) -> Result<()> {
@@ -166,11 +207,11 @@ impl RetiringStore for Workspace {
 }
 
 impl RangeStore for Workspace {
-    fn range_record_added(&mut self, _value: u32) -> Result<()> {
-        Ok(())
+    fn range_record_added(&mut self, value: u32) -> Result<()> {
+        self.track_delta(value, 1)
     }
 
-    fn range_record_removed(&mut self, _value: u32) -> Result<()> {
-        Ok(())
+    fn range_record_removed(&mut self, value: u32) -> Result<()> {
+        self.track_delta(value, -1)
     }
 }

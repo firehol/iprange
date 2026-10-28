@@ -42,6 +42,7 @@ mod free_bitmap;
 mod heap;
 mod history;
 mod immutable_feed;
+mod immutable_map;
 mod immutable_output;
 pub mod key;
 mod live_cleanup;
@@ -173,3 +174,12 @@ mod necessary_work_tests;
 mod test_alloc;
 #[cfg(test)]
 mod test_support_tests;
+
+pub use immutable_map::{
+    create_immutable_direct_v4, create_immutable_direct_v6, ImmutableBuildBudget,
+    ImmutableBuildOutcome, ImmutableBuildReport, ImmutableBuildResult, ImmutableInputOrder,
+};
+pub use immutable_map::{
+    create_immutable_membership_v4, create_immutable_membership_v6, ImmutableMembershipRange,
+    ImmutableMembershipSource,
+};

@@ -212,27 +212,36 @@ where
         max_open_files: budget.max_open_files,
     })
     .map_err(|cause| Box::new(ImmutableFeedPreparationFailure::early(cause)))?;
+    publish_built(destination, publication_policy, cancellation, |file| {
+        unordered::build::<K, S, F>(
+            file,
+            value_tag,
+            feed_name,
+            metadata_json,
+            source,
+            prepared_budget,
+            cancellation,
+            keep,
+        )
+    })
+}
+
+pub(crate) fn publish_built(
+    destination: &Path,
+    publication_policy: PublicationPolicy,
+    cancellation: &CancellationToken,
+    build: impl FnOnce(File) -> std::result::Result<unordered::Built, unordered::BuildFailure>,
+) -> ImmutableFeedOutcome {
     cancellation
         .check()
         .map_err(|cause| Box::new(ImmutableFeedPreparationFailure::early(cause)))?;
     let (attempt, file) = crate::publication::workflow::create_following(
         destination,
         publication_policy,
-        // The feed publish has no source database, so it follows the
-        // process switch like every other no-source artifact.
         crate::creator_only_requested(),
     )
     .map_err(failure_from_early)?;
-    let built = match unordered::build::<K, S, F>(
-        file,
-        value_tag,
-        feed_name,
-        metadata_json,
-        source,
-        prepared_budget,
-        cancellation,
-        keep,
-    ) {
+    let built = match build(file) {
         Ok(built) => built,
         Err(failure) => return Err(discard_attempt(attempt, failure.file, failure.cause)),
     };

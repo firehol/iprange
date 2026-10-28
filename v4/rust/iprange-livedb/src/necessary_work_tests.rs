@@ -68,8 +68,8 @@ fn create(pair: &TestPair, reader_capacity: u32) {
         direct_tag(),
         reader_capacity,
         &CancellationToken::new(),
-            true,
-        )
+        true,
+    )
     .unwrap();
 }
 
@@ -316,4 +316,42 @@ fn dump_necessary_work() {
     });
     print_rows("live-direct-random-lookup", read_work);
     reader.close().unwrap();
+}
+
+#[test]
+fn ordered_immutable_direct_avoids_normalization_and_live_lifecycle() {
+    use crate::{
+        create_immutable_direct_v4, ImmutableBuildBudget, ImmutableInputOrder, PublicationPolicy,
+        SliceSource,
+    };
+    let file = TestPair::new("ordered-immutable-work");
+    let ranges = (0..1000)
+        .map(|n| DirectRange {
+            from: Ipv4Key(n * 2),
+            to: Ipv4Key(n * 2),
+            value: n,
+        })
+        .collect::<Vec<_>>();
+    let (result, work) = crate::work::measure(|| {
+        create_immutable_direct_v4(
+            &file.main,
+            direct_tag(),
+            None,
+            PublicationPolicy::FailIfExists,
+            &mut SliceSource::new(&ranges),
+            ImmutableInputOrder::OrderedDisjoint,
+            &ImmutableBuildBudget::new(0, 128, 0, 3),
+            &CancellationToken::new(),
+        )
+    });
+    assert_eq!(result.unwrap().report.normalized_interval_count, 1000);
+    assert_eq!(work.input_source_passes, 1);
+    assert_eq!(work.ranges_consumed, 1000);
+    assert_eq!(work.tree_lookups, 0);
+    assert_eq!(work.tree_descents, 0);
+    assert_eq!(work.pages_copied, 0);
+    assert_eq!(work.pages_split, 0);
+    assert_eq!(work.pages_retired, 0);
+    assert_eq!(work.membership_interns, 0);
+    assert!(!file.sidecar().exists());
 }

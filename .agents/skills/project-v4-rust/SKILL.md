@@ -61,6 +61,17 @@ RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --no-deps
 ```
 
+`--all-targets` also executes the harness-free benchmark smoke matrices. Their
+10-million-query cases can exceed a bounded job's deadline in the debug profile.
+For bounded runs, retain both debug feature matrices with `--lib --tests`, the
+all-target source-graph compile gate, and run the benchmark smoke/suite separately
+in the optimized profile. Report the split explicitly; a timeout is not a PASS.
+Do not substitute an entirely release-profile workspace test run: the native C
+panic shim intentionally depends on a `debug_assertions`-only probe. Build the benchmark and adjacent worker together and select the executable from
+Cargo artifact output. Hashed executable names are not freshness evidence: build.rs
+hashes Cargo.toml and every SDK src/*.rs recursively, including unit-test sources;
+a worker rebuilt after any such edit rejects an older benchmark before scanning.
+
 The architecture gate enforces one healthy-reader owner, one healthy-writer
 owner, a separate untrusted validation/recovery boundary, the Rust-owned C
 adapter, one publication namespace owner, and a separate mapped sidecar owner.
@@ -219,9 +230,9 @@ representative subset against the committed baseline. Its roughly 2x limits
 plus absolute noise allowance detect disasters; they do not establish local
 optimality. Component floors classify mapped access, page search/build,
 checksum, digest, and durability costs but are not full-operation targets.
-The current matrix contains 90 local cases and 18 CI cases; when a case is added
-or its identity changes, update the accepted baseline, README evidence, and both
-runners together.
+Case membership is owned by `benches/update_ipsets/driver.rs`; when a case is
+added or its identity changes, update the accepted baseline, README evidence,
+and both runners together.
 
 For a structured-value change, separately measure profile interning, random
 range assignment, commit-only work, live and immutable scalar lookup, lazy

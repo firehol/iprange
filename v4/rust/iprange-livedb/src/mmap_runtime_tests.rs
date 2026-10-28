@@ -40,8 +40,8 @@ fn persistent_storage_uses_mappings_only() {
         ValueTag::FIRST_SEEN,
         4,
         &cancellation,
-            true,
-        )
+        true,
+    )
     .unwrap();
     assert_eq!(created.state, CreationState::Created);
 
@@ -113,6 +113,8 @@ fn persistent_storage_uses_mappings_only() {
         Some(12)
     );
 
+    immutable_maps_probe(&directory, &cancellation);
+
     let mut scratch = Scratch::start(&scratch_directory, scratch_meta(), 16 * 1024, 2, 4).unwrap();
     let slot = scratch.create().unwrap();
     scratch.resize(slot, HEADER_SIZE + 64).unwrap();
@@ -175,4 +177,79 @@ fn scratch_meta() -> MetaV4 {
         structure_hash_root: 0,
         structure_used_root: 0,
     }
+}
+
+fn immutable_maps_probe(directory: &std::path::Path, cancellation: &CancellationToken) {
+    use crate::{
+        DirectRange, FeedName, ImmutableBuildBudget, ImmutableInputOrder, ImmutableMembershipRange,
+        ImmutableMembershipSource, PublicationPolicy, SliceSource,
+    };
+    let budget = ImmutableBuildBudget::new(65536, 128, 128, 3);
+    crate::create_immutable_direct_v4(
+        directory.join("direct-immutable.v4"),
+        ValueTag::FIRST_SEEN,
+        None,
+        PublicationPolicy::FailIfExists,
+        &mut SliceSource::new(&[
+            DirectRange {
+                from: Ipv4Key(5),
+                to: Ipv4Key(8),
+                value: 2,
+            },
+            DirectRange {
+                from: Ipv4Key(1),
+                to: Ipv4Key(6),
+                value: 1,
+            },
+        ]),
+        ImmutableInputOrder::Unordered,
+        &budget,
+        cancellation,
+    )
+    .unwrap();
+    let direct = ImmutableReader::open(directory.join("direct-immutable.v4")).unwrap();
+    assert_eq!(direct.lookup_direct_v4(Ipv4Key(5)).unwrap(), Some(1));
+    assert_eq!(direct.lookup_direct_v4(Ipv4Key(7)).unwrap(), Some(2));
+    struct Named {
+        next: u32,
+        names: [FeedName; 2],
+    }
+    impl ImmutableMembershipSource<Ipv4Key> for Named {
+        fn next_range(&mut self) -> crate::Result<Option<ImmutableMembershipRange<'_, Ipv4Key>>> {
+            self.next += 1;
+            Ok(match self.next {
+                1 => Some(ImmutableMembershipRange {
+                    from: Ipv4Key(1),
+                    to: Ipv4Key(6),
+                    feeds: &self.names[..1],
+                }),
+                2 => Some(ImmutableMembershipRange {
+                    from: Ipv4Key(3),
+                    to: Ipv4Key(8),
+                    feeds: &self.names[1..],
+                }),
+                _ => None,
+            })
+        }
+    }
+    let names = [
+        FeedName::new("first").unwrap(),
+        FeedName::new("second").unwrap(),
+    ];
+    crate::create_immutable_membership_v4(
+        directory.join("named-immutable.v4"),
+        ValueTag::FIRST_SEEN,
+        None,
+        PublicationPolicy::FailIfExists,
+        &names,
+        &mut Named { next: 0, names },
+        ImmutableInputOrder::Unordered,
+        &budget,
+        cancellation,
+    )
+    .unwrap();
+    let named = ImmutableReader::open(directory.join("named-immutable.v4")).unwrap();
+    let membership = named.lookup_membership_v4(Ipv4Key(4)).unwrap().unwrap();
+    assert!(membership.contains_index(0).unwrap());
+    assert!(membership.contains_index(1).unwrap());
 }

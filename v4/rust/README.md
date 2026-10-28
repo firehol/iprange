@@ -434,3 +434,60 @@ callback receives maximal normalized ranges in ascending order before any
 publication; it returns whether to retain each range. Callback errors preserve
 the old destination, but external callback effects are not rolled back.
 Reports describe retained intervals/addresses and original input record count.
+
+### Immutable provider maps
+
+`create_immutable_direct_v4` / `create_immutable_direct_v6` build direct-valued
+immutable files from a `RangeSource<DirectRange<K>>`. Values are opaque `u32`s,
+including zero; provider-specific precedence remains the caller's policy.
+`create_immutable_membership_v4` / `create_immutable_membership_v6` accept a
+catalog of unique `FeedName`s and an `ImmutableMembershipSource<K>` returning
+borrowed named label sets. Empty label sets and unknown names are rejected;
+repeated labels are idempotent, and unused catalog names remain active.
+
+Both accept `ImmutableInputOrder`:
+
+- `OrderedDisjoint`: validate ascending, disjoint intervals and coalesce equal
+  adjacent values. No normalization workspace is allocated, so
+  `max_workspace_pages` may be zero. Overlaps or descending input fail.
+- `Unordered`: normalize in bounded mapped scratch inside the private output
+  inode. Direct assignments use callback-order last-assignment precedence;
+  memberships union labels on overlaps. The normalized ranges are then emitted
+  into compact output, and scratch is unmapped before truncation.
+
+These paths avoid constructing, committing, and snapshotting an intermediate
+live database. Membership IDs and dictionary storage stay internal to the SDK.
+Metadata is embedded in the same output before publication. The
+`ImmutableBuildBudget`, `ImmutableBuildOutcome`, `ImmutableBuildResult`, and
+`ImmutableBuildReport` aliases retain the immutable-feed resource, exact-count,
+publication uncertainty, and cleanup contracts. Both modes retain the existing
+three-open-files minimum. Output and workspace limits count pages; heap limits
+include SDK-retained input scratch and optional reference batching. Caller-owned
+source/catalog memory is excluded. Cancellation or preparation failure leaves
+an existing destination unchanged; inspect the publication result for failures
+that occur after namespace publication begins.
+
+The `update_ipsets` benchmark adds `providers` (one warm-up, five samples for
+16 direct/country construction comparisons) and `providers-ci` (three samples
+for the eight new constructors against saved disaster thresholds). These cases
+also participate in smoke/local/CI matrices. The 2026-10-28 additions use Rust
+1.97.1 on x86_64 Linux/AMD EPYC 7453, bounded to two CPUs; older baseline rows
+retain their original host calibration. Each case uses 100,000 inputs, no
+metadata, identical fail-if-exists publication, and independent output checks.
+Country cases use eight labels; overlaps emit 199,999 normalized intervals.
+
+| Shape | Live + snapshot median ms | New median ms | Old/new |
+|---|---:|---:|---:|
+| v4 provider ordered | 266.263 | 97.059 | 2.74x |
+| v4 provider unordered | 229.564 | 164.992 | 1.39x |
+| v4 country ordered | 692.970 | 323.734 | 2.14x |
+| v4 country overlap | 1232.184 | 919.959 | 1.34x |
+| v6 provider ordered | 306.112 | 118.067 | 2.59x |
+| v6 provider unordered | 289.715 | 243.439 | 1.19x |
+| v6 country ordered | 742.633 | 302.263 | 2.46x |
+| v6 country overlap | 1343.176 | 980.085 | 1.37x |
+
+These synthetic measurements demonstrate removal of avoidable construction work,
+not universal optimality. Unordered inputs still require normalization and a
+final range pass. The optional membership translation cache adds at most 8 KiB
+of heap; RSS is process-wide, and not every shape uses less peak memory.
